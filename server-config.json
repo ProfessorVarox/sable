@@ -1,0 +1,33 @@
+{
+  "defaultHomeserver": 0,
+  "homeserverList": ["matrix.daniel-schmitt.de"],
+  "allowCustomHomeservers": true,
+  "elementCallUrl": null,
+
+  "disableAccountSwitcher": false,
+  "hideUsernamePasswordFields": false,
+
+  "pushNotificationDetails": {
+    "pushNotifyUrl": "https://sygnal.sable.moe/_matrix/push/v1/notify",
+    "vapidPublicKey": "BCnS4SbHjeOaqVFW4wjt5xDt_pYIL62qMzKePfYF9fl9PQU14RieIaObh7nLR_9dQf4sykZa-CTrcjkgMIE1mcg",
+    "webPushAppID": "moe.sable.app.sygnal"
+  },
+
+  "slidingSync": {
+    "enabled": true
+  },
+
+  "featuredCommunities": {
+    "openAsDefault": false,
+    "spaces": [
+    ],
+    "rooms": [
+    ],
+    "servers": ["matrix.daniel-schmitt.de"]
+  },
+
+  "hashRouter": {
+    "enabled": true,
+    "basename": "/"
+  }
+}
