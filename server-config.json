@@ -23,7 +23,7 @@
     ],
     "rooms": [
     ],
-    "servers": ["matrix.daniel-schmitt.de"]
+    "servers": ["daniel-schmitt.de"]
   },
 
   "hashRouter": {
