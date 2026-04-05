@@ -28,6 +28,10 @@ export interface Settings {
   useSystemTheme: boolean;
   lightThemeId?: string;
   darkThemeId?: string;
+  useSystemArboriumTheme: boolean;
+  arboriumThemeId?: string;
+  arboriumLightTheme?: string;
+  arboriumDarkTheme?: string;
   saturationLevel?: number;
   uniformIcons: boolean;
   isMarkdown: boolean;
@@ -69,6 +73,7 @@ export interface Settings {
   developerTools: boolean;
   enableMSC4268CMD: boolean;
   settingsSyncEnabled: boolean;
+  settingsLinkBaseUrlOverride?: string;
 
   // Cosmetics!
   jumboEmojiSize: JumboEmojiSize;
@@ -106,13 +111,11 @@ export interface Settings {
   alwaysShowCallButton: boolean;
   faviconForMentionsOnly: boolean;
   highlightMentions: boolean;
-  /**
-   * whether to enable pk compat
-   */
   pkCompat: boolean;
   pmpProxying: boolean;
   mentionInReplies: boolean;
   showPersonaSetting: boolean;
+  closeFoldersByDefault: boolean;
 
   // furry stuff
   renderAnimals: boolean;
@@ -123,6 +126,10 @@ const defaultSettings: Settings = {
   useSystemTheme: true,
   lightThemeId: undefined,
   darkThemeId: undefined,
+  useSystemArboriumTheme: true,
+  arboriumThemeId: 'dracula',
+  arboriumLightTheme: 'github-light',
+  arboriumDarkTheme: 'dracula',
   saturationLevel: 100,
   uniformIcons: false,
   isMarkdown: true,
@@ -167,6 +174,7 @@ const defaultSettings: Settings = {
 
   developerTools: false,
   settingsSyncEnabled: false,
+  settingsLinkBaseUrlOverride: undefined,
 
   // Cosmetics!
   jumboEmojiSize: 'normal',
@@ -206,6 +214,7 @@ const defaultSettings: Settings = {
   pmpProxying: false,
   mentionInReplies: true,
   showPersonaSetting: false,
+  closeFoldersByDefault: false,
 
   // furry stuff
   renderAnimals: true,
