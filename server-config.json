@@ -1,6 +1,6 @@
 {
   "defaultHomeserver": 0,
-  "homeserverList": ["matrix.daniel-schmitt.de"],
+  "homeserverList": ["matrix.daniel-schmitt.de", "matrix.org", "nope.chat"],
   "allowCustomHomeservers": true,
   "elementCallUrl": null,
 
@@ -12,6 +12,8 @@
     "vapidPublicKey": "BCnS4SbHjeOaqVFW4wjt5xDt_pYIL62qMzKePfYF9fl9PQU14RieIaObh7nLR_9dQf4sykZa-CTrcjkgMIE1mcg",
     "webPushAppID": "moe.sable.app.sygnal"
   },
+  
+  "settingsLinkBaseUrl": "https://chat.daniel-schmitt.de",
 
   "slidingSync": {
     "enabled": true
@@ -23,7 +25,7 @@
     ],
     "rooms": [
     ],
-    "servers": ["daniel-schmitt.de"]
+    "servers": ["daniel-schmitt.de", "matrix.org"]
   },
 
   "hashRouter": {
