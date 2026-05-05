@@ -59,20 +59,21 @@ import { IgnoredUserAlert, MutualRoomsChip, OptionsChip, ServerChip, ShareChip }
 import { UserHero, UserHeroName } from './UserHero';
 import { KnownMembership } from '$types/matrix-sdk';
 import * as css from './styles.css';
+import * as prefix from '$unstable/prefixes';
 
 const KNOWN_KEYS = new Set([
-  'moe.sable.app.bio',
-  'chat.commet.profile_bio',
-  'chat.commet.profile_banner',
-  'chat.commet.profile_status',
-  'io.fsky.nyx.pronouns',
-  'us.cloke.msc4175.tz',
-  'm.tz',
-  'moe.sable.app.name_color',
+  prefix.MATRIX_SABLE_UNSTABLE_PROFILE_BIOGRAPHY_PROPERTY_NAME,
+  prefix.MATRIX_COMMET_UNSTABLE_PROFILE_BIO_PROPERTY_NAME,
+  prefix.MATRIX_UNSTABLE_PROFILE_BANNER_PROPERTY_NAME,
+  prefix.MATRIX_COMMET_UNSTABLE_PROFILE_STATUS_PROPERTY_NAME,
+  prefix.MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME,
+  prefix.MATRIX_UNSTABLE_PROFILE_TIMEZONE_PROPERTY_NAME,
+  prefix.MATRIX_STABLE_PROFILE_TIMEZONE_PROPERTY_NAME,
+  prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME,
   'avatar_url',
   'displayname',
-  'kitty.meow.has_cats',
-  'kitty.meow.is_cat',
+  prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_IS_CAT_PROPERTY_NAME,
+  prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_HAS_CAT_PROPERTY_NAME,
 ]);
 
 type UserExtendedSectionProps = {
@@ -142,8 +143,8 @@ function UserExtendedSection({
 
   const bioContent = useMemo(() => {
     let rawBio =
-      profile.extended?.['moe.sable.app.bio'] ||
-      profile.extended?.['chat.commet.profile_bio'] ||
+      profile.extended?.[prefix.MATRIX_SABLE_UNSTABLE_PROFILE_BIOGRAPHY_PROPERTY_NAME] ||
+      profile.extended?.[prefix.MATRIX_COMMET_UNSTABLE_PROFILE_BIO_PROPERTY_NAME] ||
       profile.bio;
 
     if (!rawBio) return null;
@@ -631,42 +632,42 @@ export function UserRoomProfile({ userId, initialProfile }: Readonly<UserRoomPro
               />
             )}
           </Box>
-        </Box>
-        {ignored && <IgnoredUserAlert />}
-        {member && membership === bannedMembership && (
-          <UserBanAlert
-            userId={userId}
-            reason={member.events.member?.getContent().reason}
-            canUnban={canUnban}
-            bannedBy={member.events.member?.getSender()}
-            ts={member.events.member?.getTs()}
-          />
-        )}
-        {member &&
-          membership === leftMembership &&
-          member.events.member &&
-          member.events.member.getSender() !== userId && (
-            <UserKickAlert
+          {ignored && <IgnoredUserAlert />}
+          {member && membership === bannedMembership && (
+            <UserBanAlert
+              userId={userId}
               reason={member.events.member?.getContent().reason}
-              kickedBy={member.events.member?.getSender()}
+              canUnban={canUnban}
+              bannedBy={member.events.member?.getSender()}
               ts={member.events.member?.getTs()}
             />
           )}
-        {member && membership === invitedMembership && (
-          <UserInviteAlert
+          {member &&
+            membership === leftMembership &&
+            member.events.member &&
+            member.events.member.getSender() !== userId && (
+              <UserKickAlert
+                reason={member.events.member?.getContent().reason}
+                kickedBy={member.events.member?.getSender()}
+                ts={member.events.member?.getTs()}
+              />
+            )}
+          {member && membership === invitedMembership && (
+            <UserInviteAlert
+              userId={userId}
+              reason={member.events.member?.getContent().reason}
+              canKick={canKickUser}
+              invitedBy={member.events.member?.getSender()}
+              ts={member.events.member?.getTs()}
+            />
+          )}
+          <UserModeration
             userId={userId}
-            reason={member.events.member?.getContent().reason}
-            canKick={canKickUser}
-            invitedBy={member.events.member?.getSender()}
-            ts={member.events.member?.getTs()}
+            canInvite={canInvite && membership === leftMembership}
+            canKick={canKickUser && membership === joinedMembership}
+            canBan={canBanUser && membership !== bannedMembership}
           />
-        )}
-        <UserModeration
-          userId={userId}
-          canInvite={canInvite && membership === leftMembership}
-          canKick={canKickUser && membership === joinedMembership}
-          canBan={canBanUser && membership !== bannedMembership}
-        />
+        </Box>
       </Box>
     </Box>
   );

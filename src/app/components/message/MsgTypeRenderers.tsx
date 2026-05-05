@@ -16,10 +16,7 @@ import type {
   IVideoContent,
   IVideoInfo,
 } from '$types/matrix/common';
-import {
-  MATRIX_SPOILER_PROPERTY_NAME,
-  MATRIX_SPOILER_REASON_PROPERTY_NAME,
-} from '$types/matrix/common';
+import * as prefix from '$unstable/prefixes';
 import { FALLBACK_MIMETYPE, getBlobSafeMimeType } from '$utils/mimeTypes';
 import { parseGeoUri, scaleYDimension } from '$utils/common';
 import { useSetting } from '$state/hooks/settings';
@@ -37,6 +34,7 @@ import {
 import { MessageTextBody } from './layout';
 import { unwrapForwardedContent } from './modals/MessageForward';
 import { LINKINPUTREGEX } from '$components/editor';
+import { MATRIX_TO_BASE } from '$plugins/matrix-to';
 
 export interface BundleContent extends IPreviewUrlResponse {
   matched_url: string;
@@ -118,7 +116,7 @@ const getUrlsFromContent = (
     const safeHtml = customBody
       .replace(/<pre[^>]*>.*?<\/pre>/gs, '')
       .replace(/<code[^>]*>.*?<\/code>/gs, '');
-    const safeText = safeHtml.replace(/<[^>]*>/g, '');
+    const safeText = safeHtml.replace(/<[^a][^>]*>/g, '');
     const safeUrlsMatch = safeText.match(LINKINPUTREGEX);
     let safeUrls = safeUrlsMatch ? [...new Set(safeUrlsMatch)] : [];
     safeUrls = safeUrls.map(
@@ -129,10 +127,12 @@ const getUrlsFromContent = (
         url
     );
     const safeUrlsSet = new Set(safeUrls);
-    urls = urls.filter((url) => safeUrlsSet.has(url));
+    urls = urls.filter((url) => safeUrlsSet.has(url) && !url.startsWith(MATRIX_TO_BASE));
   }
 
-  let bundleContent = content['com.beeper.linkpreviews'] as BundleContent[];
+  let bundleContent = content[
+    prefix.MATRIX_UNSTABLE_EMBEDDED_LINK_PREVIEW_PROPERTY_NAME
+  ] as BundleContent[];
   try {
     bundleContent = bundleContent?.filter((bundle) => !!urls?.includes(bundle.matched_url));
     if (renderUrlsPreview && bundleContent)
@@ -169,7 +169,7 @@ export function MText({
   );
 
   const isForwarded = useMemo(() => {
-    const forwardMeta = content['moe.sable.message.forward'];
+    const forwardMeta = content[prefix.MATRIX_SABLE_UNSTABLE_MESSAGE_FORWARD_META_PROPERTY_NAME];
     return typeof forwardMeta === 'object';
   }, [content]);
 
@@ -204,7 +204,13 @@ export function MText({
 
   const { urls, bundleContent } = getUrlsFromContent(content, renderUrlsPreview);
 
-  if ((content['com.beeper.per_message_profile'] as PerMessageProfileBeeperFormat)?.has_fallback) {
+  if (
+    (
+      content[
+        prefix.MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME
+      ] as PerMessageProfileBeeperFormat
+    )?.has_fallback
+  ) {
     // unwrap per-message profile fallback if present
     return (
       <>
@@ -427,8 +433,8 @@ export function MImage({ content, renderImageContent, outlined }: MImageProps) {
           mimeType: imgInfo?.mimetype,
           url: mxcUrl,
           encInfo: content.file,
-          markedAsSpoiler: content[MATRIX_SPOILER_PROPERTY_NAME],
-          spoilerReason: content[MATRIX_SPOILER_REASON_PROPERTY_NAME],
+          markedAsSpoiler: content[prefix.MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME],
+          spoilerReason: content[prefix.MATRIX_UNSTABLE_SPOILER_REASON_PROPERTY_NAME],
         })}
       </AttachmentBox>
     </Attachment>
@@ -499,8 +505,8 @@ export function MVideo({ content, renderAsFile, renderVideoContent, outlined }: 
           mimeType: safeMimeType,
           url: mxcUrl,
           encInfo: content.file,
-          markedAsSpoiler: content[MATRIX_SPOILER_PROPERTY_NAME],
-          spoilerReason: content[MATRIX_SPOILER_REASON_PROPERTY_NAME],
+          markedAsSpoiler: content[prefix.MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME],
+          spoilerReason: content[prefix.MATRIX_UNSTABLE_SPOILER_REASON_PROPERTY_NAME],
         })}
       </AttachmentBox>
     </Attachment>
