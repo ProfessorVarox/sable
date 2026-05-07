@@ -58,9 +58,12 @@ import {
   ANYWHERE_AUTOCOMPLETE_PREFIXES,
   BEGINNING_AUTOCOMPLETE_PREFIXES,
   getLinks,
+  MarkdownFormattingToolbarBottom,
+  MarkdownFormattingToolbarToggle,
   replaceWithElement,
   BlockType,
 } from '$components/editor';
+import { plainToEditorInput } from '$components/editor/input';
 import { EmojiBoard, EmojiBoardTab } from '$components/emoji-board';
 import { UseStateProvider } from '$components/UseStateProvider';
 import type { TUploadContent } from '$utils/matrix';
@@ -775,7 +778,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
 
       // check if its a pk command
       if (pkCompatEnable && PKitCommandMessageHandler.isPKCommand(plainText)) {
-        pluralkitCmdMessageHandler.handleMessage(plainText);
+        await pluralkitCmdMessageHandler.handleMessage(plainText);
         resetEditor(editor); // clear the editor
         return; // don't do anything besides handling the command
       }
@@ -810,6 +813,37 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       }
 
       if (plainText === '') return;
+
+      // PluralKit-style proxy wrappers (per-message profile proxies) must be stripped
+      // *before* building `content`, otherwise we end up sending the wrapper verbatim.
+      let proxiedPerMessageProfile:
+        | Awaited<ReturnType<(typeof pluralkitProxyMessageHandler)['getPmpBasedOnMessage']>>
+        | undefined;
+      if (pmpProxyingEnable) {
+        proxiedPerMessageProfile =
+          await pluralkitProxyMessageHandler.getPmpBasedOnMessage(plainText);
+        if (proxiedPerMessageProfile) {
+          const stripped = pluralkitProxyMessageHandler.stripProxyFromMessage(plainText);
+          if (stripped !== undefined) {
+            // Re-run the normal outgoing pipeline on the stripped content so the message
+            // goes through the same transforms/parsers as any other message.
+            serializedChildren = plainToEditorInput(stripped);
+
+            outgoingMessageTransforms.forEach((transform) => {
+              if (!transform.shouldApply(serializedChildren, outgoingTransformContext)) return;
+              serializedChildren = transform.apply(serializedChildren, outgoingTransformContext);
+            });
+
+            plainText = toPlainText(serializedChildren, true, nicknameReplacement).trim();
+            customHtml = trimCustomHtml(
+              toMatrixCustomHTML(serializedChildren, {
+                stripNickname: true,
+                nickNameReplacement: nicknameReplacement,
+              })
+            );
+          }
+        }
+      }
 
       const body = plainText;
       const formattedBody = customHtml;
@@ -846,13 +880,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
        * This allows the server to apply the correct profile-based transformations (e.g. font size adjustments) when processing the message,
        * and also allows clients to display an accurate preview of how the message will look with the profile applied while it's being composed.
        */
-      const perMessageProfile =
-        pmpProxyingEnable && pluralkitProxyMessageHandler.isAProxiedMessage(plainText)
-          ? await pluralkitProxyMessageHandler.getPmpBasedOnMessage(plainText)
-          : await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
-
-      if (pmpProxyingEnable && pluralkitProxyMessageHandler.isAProxiedMessage(plainText))
-        plainText = pluralkitProxyMessageHandler.stripProxyFromMessage(plainText) ?? plainText;
+      let perMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      if (pmpProxyingEnable) {
+        if (proxiedPerMessageProfile) perMessageProfile = proxiedPerMessageProfile;
+      }
       if (perMessageProfile) {
         content[prefix.MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME] =
           convertPerMessageProfileToBeeperFormat(
@@ -1505,6 +1536,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                 )}
               </IconButton>
 
+              <MarkdownFormattingToolbarToggle variant="SurfaceVariant" />
+
               <UseStateProvider initial={undefined}>
                 {(emojiBoardTab: EmojiBoardTab | undefined, setEmojiBoardTab) => (
                   <PopOut
@@ -1677,6 +1710,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
               </Box>
             </>
           }
+          bottom={<MarkdownFormattingToolbarBottom />}
         />
         {showSchedulePicker && (
           <SchedulePickerDialog

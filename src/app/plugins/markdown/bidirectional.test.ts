@@ -29,6 +29,14 @@ describe('bidirectional round-trip', () => {
     expect(result).toContain('*italic text*');
   });
 
+  it('round-trips underline', () => {
+    const markdown = '__underlined__';
+    const html = markdownToHtml(markdown);
+    const injected = injectDataMd(html);
+    const result = htmlToMarkdown(injected);
+    expect(result).toContain('__underlined__');
+  });
+
   it('round-trips inline code', () => {
     const markdown = '`inline code`';
     const html = markdownToHtml(markdown);
@@ -44,6 +52,24 @@ describe('bidirectional round-trip', () => {
     const result = htmlToMarkdown(injected);
     expect(result).toContain('```rust');
     expect(result).toContain('fn main()');
+  });
+
+  it('round-trips markdown-like characters inside code blocks without spurious escapes', () => {
+    const markdown = '```\n*literal* \\*typed\\*\n```';
+    const html = markdownToHtml(markdown);
+    const injected = injectDataMd(html);
+    const result = htmlToMarkdown(injected);
+    expect(result).toContain('*literal*');
+    expect(result).toContain('\\*typed\\*');
+    expect(result).not.toContain('\\*literal\\*');
+  });
+
+  it('round-trips inline code containing asterisks', () => {
+    const markdown = 'Text `*x*` more';
+    const html = markdownToHtml(markdown);
+    const injected = injectDataMd(html);
+    const result = htmlToMarkdown(injected);
+    expect(result).toContain('`*x*`');
   });
 
   it('round-trips blockquotes', () => {
