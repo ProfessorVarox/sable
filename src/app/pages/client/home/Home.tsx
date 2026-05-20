@@ -63,7 +63,6 @@ import { UseStateProvider } from '$components/UseStateProvider';
 import { JoinAddressPrompt } from '$components/join-address-prompt';
 import { useHomeRooms } from './useHomeRooms';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
-import { mobileOrTablet } from '$utils/user-agent';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
 
 type HomeMenuProps = {
@@ -213,16 +212,20 @@ export function Home() {
 
   const [roomSidebarWidth, setRoomSidebarWidth] = useSetting(settingsAtom, 'roomSidebarWidth');
   const [curWidth, setCurWidth] = useState(roomSidebarWidth);
-
-  const [showRoomIcon] = useSetting(settingsAtom, 'showRoomIcon');
-  const showIcons = () => {
-    if (showRoomIcon === ShowRoomIcon.Always) return true;
-    if (showRoomIcon === ShowRoomIcon.Never) return false;
-    return curWidth < 96;
-  };
   useEffect(() => {
     setCurWidth(roomSidebarWidth);
   }, [roomSidebarWidth]);
+
+  const [showRoomIconGeneral] = useSetting(settingsAtom, 'showRoomIcon');
+  const [showRoomIconArray] = useSetting(settingsAtom, 'perRoomShowRoomIcon');
+  const showRoomIcon =
+    showRoomIconArray.find((item) => item.roomId === 'Home')?.display ?? showRoomIconGeneral;
+  const showIcons = () => {
+    if (showRoomIcon === ShowRoomIcon.Always) return true;
+    if (showRoomIcon === ShowRoomIcon.Never) return false;
+    return curWidth < 144;
+  };
+
   const [joinCallOnSingleClick] = useSetting(settingsAtom, 'joinCallOnSingleClick');
 
   const selectedRoomId = useSelectedRoom();
@@ -259,7 +262,7 @@ export function Home() {
   );
 
   const screenSize = useScreenSizeContext();
-  const isMobile = mobileOrTablet() || screenSize === ScreenSize.Mobile;
+  const isMobile = screenSize === ScreenSize.Mobile;
   const hideText = curWidth <= 80 && !isMobile;
 
   return (
@@ -423,6 +426,7 @@ export function Home() {
                                   width: '100%',
                                   aspectRatio: 1,
                                   display: 'flex',
+                                  flexDirection: 'column',
                                 }
                               : {}
                           }
@@ -449,7 +453,7 @@ export function Home() {
           </PageNavContent>
         )}
       </PageNav>
-      {!mobileOrTablet() && (
+      {!isMobile && (
         <SidebarResizer
           setCurWidth={setCurWidth}
           sidebarWidth={roomSidebarWidth}
