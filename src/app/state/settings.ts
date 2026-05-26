@@ -68,11 +68,12 @@ export function isPixelatedViewerRendering(mode: PixelatedImageRenderingMode): b
 
 export function shouldApplyUserHeroCards(
   mode: RenderUserCardsMode,
-  brightness: string | undefined
+  brightness?: string,
+  color?: string
 ): boolean {
+  if (!color || (brightness !== 'light' && brightness !== 'dark')) return false;
   if (mode === 'none') return false;
   if (mode === 'both') return true;
-  if (brightness !== 'light' && brightness !== 'dark') return false;
   return brightness === mode;
 }
 
@@ -136,6 +137,8 @@ export interface Settings {
   privacyBlurEmotes: boolean;
   showPronouns: boolean;
   parsePronouns: boolean;
+  pronounPillMaxCount: number;
+  pronounPillMaxLength: number;
   renderGlobalNameColors: boolean;
   renderUserCards: RenderUserCardsMode;
   filterPronounsBasedOnLanguage?: boolean;
@@ -273,6 +276,8 @@ export const defaultSettings: Settings = {
   privacyBlurEmotes: false,
   showPronouns: true,
   parsePronouns: true,
+  pronounPillMaxCount: 3,
+  pronounPillMaxLength: 16,
   renderGlobalNameColors: true,
   renderUserCards: 'both',
   renderRoomColors: true,
@@ -514,6 +519,14 @@ function sanitizeSettingsKey(key: keyof Settings, val: unknown): unknown {
         : undefined;
     case 'jumboEmojiSize':
       return typeof val === 'string' && JUMBO_EMOJI_VALUES.has(val as JumboEmojiSize)
+        ? val
+        : undefined;
+    case 'pronounPillMaxCount':
+      return typeof val === 'number' && Number.isInteger(val) && val >= 1 && val <= 10
+        ? val
+        : undefined;
+    case 'pronounPillMaxLength':
+      return typeof val === 'number' && Number.isInteger(val) && val >= 1 && val <= 64
         ? val
         : undefined;
     case 'themeRemoteManualKind':
