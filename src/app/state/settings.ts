@@ -106,6 +106,12 @@ export interface Settings {
   hideNickAvatarEvents: boolean;
   showHiddenEvents: boolean;
   showTombstoneEvents: boolean;
+  hiddenEventEdits: boolean;
+  hiddenEventRedactionTimeline: boolean;
+  hiddenEventReactions: boolean;
+  hiddenEventReactionTombstone: boolean;
+  hiddenEventReactionRedactionTimeline: boolean;
+  hiddenEventOther: boolean;
   legacyUsernameColor: boolean;
 
   mediaAutoLoad: boolean;
@@ -123,6 +129,7 @@ export interface Settings {
   useInAppNotifications: boolean;
   useSystemNotifications: boolean;
   isNotificationSounds: boolean;
+  backgroundNotificationSounds: boolean;
   showMessageContentInNotifications: boolean;
   showMessageContentInEncryptedNotifications: boolean;
   clearNotificationsOnRead: boolean;
@@ -135,6 +142,10 @@ export interface Settings {
   settingsSyncEnabled: boolean;
 
   // Cosmetics!
+  iconCompactSizePx: number;
+  iconInlineSizePx: number;
+  iconToolbarSizePx: number;
+  iconEmptySizePx: number;
   jumboEmojiSize: JumboEmojiSize;
   privacyBlur: boolean;
   privacyBlurAvatars: boolean;
@@ -186,6 +197,7 @@ export interface Settings {
   closeFoldersByDefault: boolean;
   perRoomShowRoomIcon: PerRoomShowRoomIcon[];
   showRoomIcon: ShowRoomIcon;
+  roomIconOverlay: boolean;
   showRoomBanners: boolean;
   roomSidebarWidth: number;
   roomBannerHeight: number;
@@ -254,7 +266,13 @@ export const defaultSettings: Settings = {
   showInteractiveMap: true,
   showEncInteractiveMap: false,
   showHiddenEvents: false,
-  showTombstoneEvents: false,
+  showTombstoneEvents: true,
+  hiddenEventEdits: true,
+  hiddenEventRedactionTimeline: true,
+  hiddenEventReactions: true,
+  hiddenEventReactionTombstone: true,
+  hiddenEventReactionRedactionTimeline: true,
+  hiddenEventOther: true,
   legacyUsernameColor: false,
 
   enableMSC4268CMD: false,
@@ -266,6 +284,7 @@ export const defaultSettings: Settings = {
   useInAppNotifications: mobileOrTablet(),
   useSystemNotifications: !mobileOrTablet(),
   isNotificationSounds: true,
+  backgroundNotificationSounds: true,
   showMessageContentInNotifications: false,
   showMessageContentInEncryptedNotifications: false,
   clearNotificationsOnRead: false,
@@ -277,6 +296,10 @@ export const defaultSettings: Settings = {
   settingsSyncEnabled: false,
 
   // Cosmetics!
+  iconCompactSizePx: 16,
+  iconInlineSizePx: 20,
+  iconToolbarSizePx: 24,
+  iconEmptySizePx: 32,
   jumboEmojiSize: 'normal',
   privacyBlur: false,
   privacyBlurAvatars: false,
@@ -326,6 +349,7 @@ export const defaultSettings: Settings = {
   closeFoldersByDefault: false,
   perRoomShowRoomIcon: [],
   showRoomIcon: ShowRoomIcon.Smart,
+  roomIconOverlay: true,
   showRoomBanners: true,
   roomSidebarWidth: 256,
   roomBannerHeight: 190,
@@ -432,6 +456,10 @@ const JUMBO_EMOJI_VALUES = new Set<JumboEmojiSize>([
   'extraLarge',
 ]);
 
+function sanitizeIconSizePx(val: unknown): number | undefined {
+  return typeof val === 'number' && Number.isInteger(val) && val >= 0 ? val : undefined;
+}
+
 function sanitizeStringArray(val: unknown): string[] | undefined {
   if (!Array.isArray(val)) return undefined;
   const out = val.filter((x): x is string => typeof x === 'string');
@@ -521,6 +549,11 @@ function sanitizeSettingsKey(key: keyof Settings, val: unknown): unknown {
         : undefined;
     case 'pixelatedImageRendering':
       return val === 'always' || val === 'smart' || val === 'never' ? val : undefined;
+    case 'iconCompactSizePx':
+    case 'iconInlineSizePx':
+    case 'iconToolbarSizePx':
+    case 'iconEmptySizePx':
+      return sanitizeIconSizePx(val);
     case 'jumboEmojiSize':
       return typeof val === 'string' && JUMBO_EMOJI_VALUES.has(val as JumboEmojiSize)
         ? val

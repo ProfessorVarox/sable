@@ -21,9 +21,7 @@ import {
   color,
   config,
   Dialog,
-  Icon,
   IconButton,
-  Icons,
   Menu,
   MenuItem,
   Overlay,
@@ -129,7 +127,27 @@ import {
   convertPerMessageProfileToBeeperFormat,
   getCurrentlyUsedPerMessageProfileForRoom,
 } from '$hooks/usePerMessageProfile';
-import { Microphone, Stop, MapPinPlusIcon } from '@phosphor-icons/react';
+import {
+  Bell,
+  BellSlash,
+  CaretDown,
+  chipIcon,
+  Clock,
+  composerIcon,
+  dropzoneIcon,
+  File as FileIcon,
+  ListBullets,
+  MapPinPlusIcon,
+  menuIcon,
+  Microphone,
+  PaperPlaneTilt,
+  getPhosphorIconSize,
+  PlusCircle,
+  Smiley,
+  Sticker,
+  Stop,
+  X,
+} from '$components/icons/phosphor';
 import { getSupportedAudioExtension } from '$plugins/voice-recorder-kit/supportedCodec';
 import { ErrorCode } from '../../cs-errorcode';
 import { sanitizeText } from '$utils/sanitize';
@@ -321,6 +339,19 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [autocompleteQuery, setAutocompleteQuery] =
       useState<AutocompleteQuery<AutocompletePrefix>>();
     const [isQuickTextReact, setQuickTextReact] = useState(false);
+
+    const replyDraftBase = useMemo(
+      () =>
+        threadRootId
+          ? {
+              userId: mx.getUserId() ?? '',
+              eventId: threadRootId,
+              body: '',
+              relation: { rel_type: RelationType.Thread, event_id: threadRootId },
+            }
+          : undefined,
+      [mx, threadRootId]
+    );
 
     const sendTypingStatus = useTypingStatusUpdater(mx, roomId, { disabled: !!threadRootId });
 
@@ -579,16 +610,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       if (contents.length > 0) {
         const replyContent =
           plainText?.length === 0 ? getReplyContent(replyDraft, room) : undefined;
-        if (replyContent) contents[0]!['m.relates_to'] = replyContent;
-        if (threadRootId) {
-          setReplyDraft({
-            userId: mx.getUserId() ?? '',
-            eventId: threadRootId,
-            body: '',
-            relation: { rel_type: RelationType.Thread, event_id: threadRootId },
-          });
-        } else {
-          setReplyDraft(undefined);
+        if (replyContent) {
+          contents[0]!['m.relates_to'] = replyContent;
+          setReplyDraft(replyDraftBase);
         }
       }
 
@@ -960,17 +984,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         resetEditorHistory(editor);
         setInputKey((prev) => prev + 1);
         imagePacksUsedRef.current.clear();
-        if (threadRootId) {
-          // Re-seed the thread reply draft so the next message also goes to the thread.
-          setReplyDraft({
-            userId: mx.getUserId() ?? '',
-            eventId: threadRootId,
-            body: '',
-            relation: { rel_type: RelationType.Thread, event_id: threadRootId },
-          });
-        } else {
-          setReplyDraft(undefined);
-        }
+        setReplyDraft(replyDraftBase);
         sendTypingStatus(false);
       };
       if (scheduledTime) {
@@ -1097,6 +1111,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       setEditingScheduledDelayId,
       setScheduledTime,
       setServerMaxDelayMs,
+      replyDraftBase,
     ]);
 
     const handleKeyDown: KeyboardEventHandler = useCallback(
@@ -1273,16 +1288,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
 
       if (replyDraft) {
         content['m.relates_to'] = getReplyContent(replyDraft, room);
-        if (threadRootId) {
-          setReplyDraft({
-            userId: mx.getUserId() ?? '',
-            eventId: threadRootId,
-            body: '',
-            relation: { rel_type: RelationType.Thread, event_id: threadRootId },
-          });
-        } else {
-          setReplyDraft(undefined);
-        }
+        setReplyDraft(replyDraftBase);
       }
       mx.sendEvent(roomId, EventType.Sticker, content);
     };
@@ -1337,7 +1343,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                 gap="500"
                 style={{ padding: toRem(60) }}
               >
-                <Icon size="600" src={Icons.File} />
+                {dropzoneIcon(FileIcon)}
                 <Text size="H4" align="Center">
                   {`Drop Files in "${room?.name || 'Room'}"`}
                 </Text>
@@ -1434,10 +1440,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       radii="300"
                       title="schedule message send"
                     >
-                      <Icon src={Icons.Cross} size="50" />
+                      {chipIcon(X)}
                     </IconButton>
                     <Box direction="Row" gap="200" alignItems="Center">
-                      <Icon size="100" src={Icons.Clock} />
+                      {menuIcon(Clock)}
                       <Text size="T300">
                         Scheduled for {timeDayMonthYear(scheduledTime.getTime())} at{' '}
                         {timeHourMinute(scheduledTime.getTime(), hour24Clock)}
@@ -1490,7 +1496,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       aria-label="Cancel reply"
                       title="Cancel reply"
                     >
-                      <Icon src={Icons.Cross} size="50" />
+                      {chipIcon(X)}
                     </IconButton>
                     <Box
                       direction="Row"
@@ -1524,8 +1530,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                         }
                         onClick={() => setSilentReply(!silentReply)}
                       >
-                        {!silentReply && <Icon src={Icons.BellPing} />}
-                        {silentReply && <Icon src={Icons.BellMute} />}
+                        {!silentReply && composerIcon(Bell)}
+                        {silentReply && composerIcon(BellSlash)}
                       </IconButton>
                     </Box>
                   </Box>
@@ -1558,7 +1564,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                             setAddMenuAnchor(undefined);
                             setShowPollPicker(true);
                           }}
-                          before={<Icon size="100" src={Icons.UnorderList} />}
+                          before={menuIcon(ListBullets)}
                         >
                           <Text size="B300">Create Poll</Text>
                         </MenuItem>
@@ -1569,7 +1575,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                             setAddMenuAnchor(undefined);
                             setShowLocationPicker(true);
                           }}
-                          before={<MapPinPlusIcon size="20" />}
+                          before={menuIcon(MapPinPlusIcon)}
                         >
                           <Text size="B300">Add Location</Text>
                         </MenuItem>
@@ -1580,7 +1586,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                             pickFile('*');
                             setAddMenuAnchor(undefined);
                           }}
-                          before={<Icon size="100" src={Icons.PlusCircle} />}
+                          before={menuIcon(PlusCircle)}
                         >
                           <Text size="B300">Add File</Text>
                         </MenuItem>
@@ -1601,7 +1607,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                 title={editorOldAddFile ? 'Upload File' : 'Add'}
                 aria-label={editorOldAddFile ? 'Upload and attach a File' : 'Add new Item'}
               >
-                <Icon src={Icons.PlusCircle} />
+                {composerIcon(PlusCircle)}
               </IconButton>
             </>
           }
@@ -1652,9 +1658,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                 }}
               >
                 {showAudioRecorder ? (
-                  <Stop size={20} weight="fill" style={{ color: color.Critical.Main }} />
+                  <Stop
+                    size={getPhosphorIconSize('toolbar')}
+                    weight="fill"
+                    style={{ color: color.Critical.Main }}
+                  />
                 ) : (
-                  <Microphone size={20} />
+                  composerIcon(Microphone)
                 )}
               </IconButton>
 
@@ -1703,10 +1713,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                         title="open sticker picker"
                         aria-label="Open sticker picker"
                       >
-                        <Icon
-                          src={Icons.Sticker}
-                          filled={emojiBoardTab === EmojiBoardTab.Sticker}
-                        />
+                        {composerIcon(Sticker, {
+                          weight: emojiBoardTab === EmojiBoardTab.Sticker ? 'fill' : 'regular',
+                        })}
                       </IconButton>
                     )}
                     <IconButton
@@ -1721,12 +1730,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       title="open emoji picker"
                       aria-label="Open emoji picker"
                     >
-                      <Icon
-                        src={Icons.Smile}
-                        filled={
-                          hideStickerBtn ? !!emojiBoardTab : emojiBoardTab === EmojiBoardTab.Emoji
-                        }
-                      />
+                      {composerIcon(Smiley, {
+                        weight: hideStickerBtn
+                          ? emojiBoardTab
+                            ? 'fill'
+                            : 'regular'
+                          : emojiBoardTab === EmojiBoardTab.Emoji
+                            ? 'fill'
+                            : 'regular',
+                      })}
                     </IconButton>
                   </PopOut>
                 )}
@@ -1754,7 +1766,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                             setScheduleMenuAnchor(undefined);
                             submit();
                           }}
-                          before={<Icon size="100" src={Icons.Send} />}
+                          before={menuIcon(PaperPlaneTilt)}
                         >
                           <Text size="B300">Send Now</Text>
                         </MenuItem>
@@ -1765,7 +1777,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                             setScheduleMenuAnchor(undefined);
                             setShowSchedulePicker(true);
                           }}
-                          before={<Icon size="100" src={Icons.Clock} />}
+                          before={menuIcon(Clock)}
                         >
                           <Text size="B300">Schedule Send</Text>
                         </MenuItem>
@@ -1812,7 +1824,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   radii="0"
                   className={delayedEventsSupported ? css.SplitSendButton : undefined}
                 >
-                  <Icon src={scheduledTime ? Icons.Clock : Icons.Send} />
+                  {scheduledTime ? composerIcon(Clock) : composerIcon(PaperPlaneTilt)}
                 </IconButton>
                 {delayedEventsSupported && !mobileOrTablet() && (
                   <IconButton
@@ -1826,7 +1838,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     radii="0"
                     className={css.SplitChevronButton}
                   >
-                    <Icon size="50" src={Icons.ChevronBottom} />
+                    {chipIcon(CaretDown)}
                   </IconButton>
                 )}
               </Box>
@@ -1852,7 +1864,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
             mx={mx}
             room={room}
             replyDraft={replyDraft}
-            clearReplyDraft={() => setReplyDraft(undefined)}
+            clearReplyDraft={() => setReplyDraft(replyDraftBase)}
           />
         )}
         {showLocationPicker && (
@@ -1861,7 +1873,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
             mx={mx}
             room={room}
             replyDraft={replyDraft}
-            clearReplyDraft={() => setReplyDraft(undefined)}
+            clearReplyDraft={() => setReplyDraft(replyDraftBase)}
           />
         )}
       </div>

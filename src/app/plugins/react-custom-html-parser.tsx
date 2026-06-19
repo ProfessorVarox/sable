@@ -5,10 +5,19 @@ import type { HTMLReactParserOptions } from 'html-react-parser';
 import { attributesToProps, domToReact, Element, Text as DOMText } from 'html-react-parser';
 import type { MatrixClient } from '$types/matrix-sdk';
 import classNames from 'classnames';
-import { Box, Chip, config, Header, Icon, IconButton, Icons, Scroll, Text, toRem } from 'folds';
+import { Box, Chip, config, Header, IconButton, Scroll, Text, toRem } from 'folds';
+import {
+  CaretDown,
+  CaretUp,
+  ChatCircle,
+  Check,
+  GearSix,
+  sizedIcon,
+} from '$components/icons/phosphor';
 import type { IntermediateRepresentation, OptFn, Opts as LinkifyOpts } from 'linkifyjs';
 import Linkify from 'linkify-react';
 import type { ChildNode } from 'domhandler';
+import emojiRegex from 'emoji-regex';
 
 import * as css from '$styles/CustomHtml.css';
 import {
@@ -19,7 +28,7 @@ import {
 } from '$utils/matrix';
 import { getMemberDisplayName } from '$utils/room';
 import type { Nicknames } from '$state/nicknames';
-import { EMOJI_PATTERN, sanitizeForRegex, URL_NEG_LB } from '$utils/regex';
+import { sanitizeForRegex, URL_NEG_LB } from '$utils/regex';
 import { findAndReplace } from '$utils/findAndReplace';
 import { onEnterOrSpace } from '$utils/keyboard';
 import { copyToClipboard } from '$utils/dom';
@@ -35,9 +44,10 @@ import {
   parseMatrixToUser,
   testMatrixTo,
 } from './matrix-to';
+import { isRedundantMatrixUriAnchorText, parseMatrixUri, testMatrixUri } from './matrix-uri';
 import { getHexcodeForEmoji, getShortcodeFor } from './emoji';
 
-const EMOJI_REG_G = new RegExp(`${URL_NEG_LB}(${EMOJI_PATTERN})`, 'g');
+const EMOJI_REG_G = new RegExp(`${URL_NEG_LB}(${emojiRegex().source})`, 'g');
 
 const shouldLinkifyDomText = (domNode: DOMText): boolean =>
   !(domNode.parent && 'name' in domNode.parent && domNode.parent.name === 'code') &&
@@ -49,7 +59,10 @@ export const LINKIFY_OPTS: LinkifyOpts = {
     rel: 'noreferrer noopener',
   },
   validate: {
-    url: (value) => /^(https|http|ftp|mailto|magnet)?:/.test(value),
+    url: (value) => {
+      if (/^matrix:/i.test(value)) return testMatrixUri(value);
+      return /^(https|http|ftp|mailto|magnet)?:/.test(value);
+    },
   },
   ignoreTags: ['span'],
 };
@@ -156,7 +169,10 @@ const matrixPermalinkDisplayLabel = (
 ): ReactNode => {
   if (customChildren === undefined || customChildren === null) return fallback;
   if (typeof customChildren === 'string') {
-    return isRedundantMatrixToAnchorText(href, customChildren) ? fallback : customChildren;
+    const redundant =
+      isRedundantMatrixToAnchorText(href, customChildren) ||
+      isRedundantMatrixUriAnchorText(href, customChildren);
+    return redundant ? fallback : customChildren;
   }
   return customChildren;
 };
@@ -168,7 +184,10 @@ export const renderMatrixMention = (
   customProps: ComponentPropsWithoutRef<'a'>,
   nicknames?: Nicknames
 ) => {
-  const userId = parseMatrixToUser(href);
+  const matrixUri = parseMatrixUri(href);
+
+  const userId =
+    parseMatrixToUser(href) ?? (matrixUri?.kind === 'user' ? matrixUri.userId : undefined);
   if (userId) {
     const currentRoom = mx.getRoom(currentRoomId);
 
@@ -187,7 +206,8 @@ export const renderMatrixMention = (
     );
   }
 
-  const matrixToRoom = parseMatrixToRoom(href);
+  const matrixToRoom =
+    parseMatrixToRoom(href) ?? (matrixUri?.kind === 'room' ? matrixUri.room : undefined);
   if (matrixToRoom) {
     const { roomIdOrAlias, viaServers } = matrixToRoom;
     const mentionRoom = mx.getRoom(
@@ -212,7 +232,8 @@ export const renderMatrixMention = (
     );
   }
 
-  const matrixToRoomEvent = parseMatrixToRoomEvent(href);
+  const matrixToRoomEvent =
+    parseMatrixToRoomEvent(href) ?? (matrixUri?.kind === 'event' ? matrixUri.event : undefined);
   if (matrixToRoomEvent) {
     const { roomIdOrAlias, eventId, viaServers } = matrixToRoomEvent;
     const mentionRoom = mx.getRoom(
@@ -248,7 +269,7 @@ export const renderMatrixMention = (
         data-mention-via={viaServers?.join(',')}
       >
         <span aria-hidden="true" className={css.MentionIcon}>
-          <Icon size="50" src={Icons.Message} />
+          {sizedIcon(ChatCircle, '50')}
         </span>
         {label}
       </a>
@@ -277,7 +298,7 @@ const renderSettingsLink = ({
     data-settings-link-focus={focus}
   >
     <span aria-hidden="true" className={css.MentionIcon}>
-      <Icon size="50" src={Icons.Setting} />
+      {sizedIcon(GearSix, '50')}
     </span>
     {getSettingsLinkChipLabel(section, focus)}
   </a>
@@ -296,7 +317,11 @@ export const factoryRenderLinkifyWithMention = (
     const encodedHref = attributes.href;
     const decodedHref = encodedHref && safeDecodeUrl(encodedHref);
 
-    if (tagName === 'a' && decodedHref && testMatrixTo(decodedHref)) {
+    if (
+      tagName === 'a' &&
+      decodedHref &&
+      (testMatrixTo(decodedHref) || testMatrixUri(decodedHref))
+    ) {
       const mention = mentionRender(decodedHref);
       if (mention) return mention;
     }
@@ -363,27 +388,26 @@ export const highlightText = (
     );
   });
 
+const extractTextFromNodes = (n: ChildNode[]): string => {
+  let text = '';
+  n.forEach((node) => {
+    if ((node.type as unknown as string) === 'text') {
+      text += (node as unknown as Text).data;
+    } else if (node instanceof Element && node.children) {
+      text += extractTextFromNodes(node.children);
+    }
+  });
+  return text;
+};
+
 /**
  * Recursively extracts and concatenates all text content from an array of ChildNode objects.
  *
  * @param {ChildNode[]} nodes - An array of ChildNode objects to extract text from.
  * @returns {string} The concatenated plain text content of all descendant text nodes.
  */
-const extractTextFromChildren = (nodes: ChildNode[]): string => {
-  const worker = (n: ChildNode[]): string => {
-    let text = '';
-    n.forEach((node) => {
-      if ((node.type as unknown as string) === 'text') {
-        text += (node as unknown as Text).data;
-      } else if (node instanceof Element && node.children) {
-        text += worker(node.children);
-      }
-    });
-    return text;
-  };
-
-  return worker(nodes).replace(/\n$/, '');
-};
+const extractTextFromChildren = (nodes: ChildNode[]): string =>
+  extractTextFromNodes(nodes).replace(/\n$/, '');
 
 const getLanguageFromClassName = (className?: string): string | undefined => {
   if (!className) return undefined;
@@ -452,7 +476,7 @@ export function CodeBlock({
             fill="None"
             radii="Pill"
             onClick={handleCopy}
-            before={copied && <Icon size="50" src={Icons.Check} />}
+            before={copied && sizedIcon(Check, '50')}
           >
             <Text size="B300">{copied ? 'Copied' : 'Copy'}</Text>
           </Chip>
@@ -465,7 +489,7 @@ export function CodeBlock({
               onClick={toggleExpand}
               aria-label={expanded ? 'Collapse' : 'Expand'}
             >
-              <Icon size="50" src={expanded ? Icons.ChevronTop : Icons.ChevronBottom} />
+              {sizedIcon(expanded ? CaretUp : CaretDown, '50')}
             </IconButton>
           )}
         </Box>
@@ -727,7 +751,7 @@ export const getReactCustomHtmlParser = (
             ? undefined
             : children.map((c) => (c instanceof DOMText ? c.data : '')).join();
 
-          if (decodedHref && testMatrixTo(decodedHref)) {
+          if (decodedHref && (testMatrixTo(decodedHref) || testMatrixUri(decodedHref))) {
             const mention = renderMatrixMention(
               mx,
               roomId,
@@ -796,7 +820,7 @@ export const getReactCustomHtmlParser = (
 
         if (name === 'img') {
           // Guard: img without a src survives sanitisation (fix for crash #1731)
-          // but we can't convert it — skip rendering rather than passing
+          // but we can't convert it  Eskip rendering rather than passing
           // undefined into mxcUrlToHttp where it would throw.
           if (!props.src) return null;
 
