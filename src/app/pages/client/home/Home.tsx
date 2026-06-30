@@ -15,7 +15,7 @@ import {
   toRem,
 } from 'folds';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import FocusTrap from 'focus-trap-react';
 import { factoryRoomIdByActivity, factoryRoomIdByAtoZ } from '$utils/sort';
 import {
@@ -30,7 +30,9 @@ import {
 } from '$components/nav';
 import {
   encodeSearchParamValueArray,
+  getExploreFeaturedPath,
   getExplorePath,
+  getExploreServerPath,
   getHomeCreatePath,
   getHomeRoomPath,
   getHomeSearchPath,
@@ -69,12 +71,16 @@ import {
   MagnifyingGlass,
   menuIcon,
   Plus,
+  UsersThree,
 } from '$components/icons/phosphor';
 import { UseStateProvider } from '$components/UseStateProvider';
 import { JoinAddressPrompt } from '$components/join-address-prompt';
 import { useHomeRooms } from './useHomeRooms';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
+import { useClientConfig } from '$hooks/useClientConfig';
+import { getMxIdServer } from '$utils/mxIdHelper';
+import { isResizingSidebarAtom } from '$state/isResizingSidebar';
 
 type HomeMenuProps = {
   requestClose: () => void;
@@ -231,6 +237,7 @@ const DEFAULT_CATEGORY_ID = makeNavCategoryId('home', 'room');
 export function Home() {
   const mx = useMatrixClient();
   useNavToActivePathMapper('home');
+  const clientConfig = useClientConfig();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isShowingAllRoomsInHome] = useSetting(settingsAtom, 'isShowingAllRoomsInHome');
   const rooms = useHomeRooms(isShowingAllRoomsInHome);
@@ -238,6 +245,7 @@ export function Home() {
   const roomToUnread = useAtomValue(roomToUnreadAtom);
   const navigate = useNavigate();
 
+  const setIsResizingSidebar = useSetAtom(isResizingSidebarAtom);
   const [roomSidebarWidth, setRoomSidebarWidth] = useSetting(settingsAtom, 'roomSidebarWidth');
   const [curWidth, setCurWidth] = useState(roomSidebarWidth);
   useEffect(() => {
@@ -288,6 +296,25 @@ export function Home() {
   const handleCategoryClick = useCategoryHandler(setClosedCategories, (categoryId) =>
     closedCategories.has(categoryId)
   );
+
+  const handleExploreClick = () => {
+    if (screenSize === ScreenSize.Mobile) {
+      navigate(getExplorePath());
+      return;
+    }
+
+    if (clientConfig.featuredCommunities?.openAsDefault) {
+      navigate(getExploreFeaturedPath());
+      return;
+    }
+    const userId = mx.getUserId();
+    const userServer = userId ? getMxIdServer(userId) : undefined;
+    if (userServer) {
+      navigate(getExploreServerPath(userServer));
+      return;
+    }
+    navigate(getExplorePath());
+  };
 
   const screenSize = useScreenSizeContext();
   const isMobile = screenSize === ScreenSize.Mobile;
@@ -387,6 +414,36 @@ export function Home() {
                     </>
                   )}
                 </UseStateProvider>
+                <NavItem variant="Background" radii="400">
+                  <NavButton onClick={handleExploreClick}>
+                    <NavItemContent>
+                      <Box
+                        as="span"
+                        grow="Yes"
+                        alignItems="Center"
+                        justifyContent="Start"
+                        gap="200"
+                      >
+                        <Avatar
+                          size={hideText ? undefined : '200'}
+                          radii="400"
+                          style={hideText ? { width: '100%' } : undefined}
+                        >
+                          {menuIcon(UsersThree, {
+                            weight: 'regular',
+                          })}
+                        </Avatar>
+                        {!hideText && (
+                          <Box as="span" grow="Yes">
+                            <Text as="span" size="Inherit" truncate>
+                              Explore Spaces
+                            </Text>
+                          </Box>
+                        )}
+                      </Box>
+                    </NavItemContent>
+                  </NavButton>
+                </NavItem>
                 <NavItem variant="Background" radii="400" aria-selected={searchSelected}>
                   <NavLink to={getHomeSearchPath()}>
                     <NavItemContent>
@@ -493,6 +550,7 @@ export function Home() {
           outstep={190}
           minValue={50}
           maxValue={500}
+          setAnnouncement={setIsResizingSidebar}
         />
       )}
     </Box>

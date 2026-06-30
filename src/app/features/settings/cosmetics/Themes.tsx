@@ -28,7 +28,8 @@ import {
 } from '$plugins/arborium';
 import { ThemeKind, useActiveTheme } from '$hooks/useTheme';
 import { useSetting } from '$state/hooks/settings';
-import type { PixelatedImageRenderingMode, ShowRoomIcon } from '$state/settings';
+import type { PixelatedImageRenderingMode } from '$state/settings';
+import { ShowRoomIcon } from '$state/settings';
 import { settingsAtom } from '$state/settings';
 import { SequenceCardStyle } from '$features/settings/styles.css';
 import { ThemeAppearanceSection } from './ThemeAppearanceSection';
@@ -229,6 +230,7 @@ function ThemeVisualPreferences() {
   const [autoplayGifs, setAutoplayGifs] = useSetting(settingsAtom, 'autoplayGifs');
   const [autoplayStickers, setAutoplayStickers] = useSetting(settingsAtom, 'autoplayStickers');
   const [autoplayEmojis, setAutoplayEmojis] = useSetting(settingsAtom, 'autoplayEmojis');
+  const [oldSidebar, setOldSidebar] = useSetting(settingsAtom, 'oldSidebar');
   const [pixelatedImageRendering, setPixelatedImageRendering] = useSetting(
     settingsAtom,
     'pixelatedImageRendering'
@@ -334,6 +336,14 @@ function ThemeVisualPreferences() {
           focusId="autoplay-gifs"
           description="Automatically play animated image uploads and links."
           after={<Switch variant="Primary" value={autoplayGifs} onChange={setAutoplayGifs} />}
+        />
+      </SequenceCard>
+      <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+        <SettingTile
+          title="Go back to old sidebar"
+          focusId="old-sidebar"
+          description="Reset the sidebar to its old style"
+          after={<Switch variant="Primary" value={oldSidebar} onChange={setOldSidebar} />}
         />
       </SequenceCard>
       <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
@@ -809,6 +819,7 @@ export function Appearance({
   const [twitterEmoji, setTwitterEmoji] = useSetting(settingsAtom, 'twitterEmoji');
   const [customDMCards, setCustomDMCards] = useSetting(settingsAtom, 'customDMCards');
   const [showEasterEggs, setShowEasterEggs] = useSetting(settingsAtom, 'showEasterEggs');
+  const [showRoomIcon] = useSetting(settingsAtom, 'showRoomIcon');
   const [themeBrowserOpen, setThemeBrowserOpen] = useState(false);
   const [closeFoldersByDefault, setCloseFoldersByDefault] = useSetting(
     settingsAtom,
@@ -893,20 +904,37 @@ export function Appearance({
 
             <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
               <SettingTile
-                title="Show Room Icons In Sidebars"
-                focusId="show-room-icons"
-                description="When do you want to show the specific room icons in the sidebar as opposed to the default room icons?"
-                after={<SelectShowRoomIcon />}
-              />
-            </SequenceCard>
-            <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
-              <SettingTile
                 title="Overlay Room Privacy Icons"
                 focusId="room-icon-overlay"
                 description="When enabled, public and private rooms show a globe or lock badge over the room hash icon in the sidebar. When disabled, show the globe or lock icon alone."
                 after={
                   <Switch variant="Primary" value={roomIconOverlay} onChange={setRoomIconOverlay} />
                 }
+              />
+            </SequenceCard>
+
+            <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+              <SettingTile
+                title="Show Room Icons In Sidebars"
+                focusId="show-room-icons"
+                description={
+                  <>
+                    <Text size="T200">
+                      When do you want to show the specific room icons in the sidebar?
+                    </Text>
+                    {(showRoomIcon === ShowRoomIcon.Always &&
+                      'Always show icons, and fallback to initials') ||
+                      (showRoomIcon === ShowRoomIcon.Strict &&
+                        'Show icons when available, but fallback to hashes') ||
+                      (showRoomIcon === ShowRoomIcon.Smart &&
+                        'Show icons only when sidebar is minimized, else icons.') ||
+                      (showRoomIcon === ShowRoomIcon.Never &&
+                        'Never show icons, always only the hashes.') ||
+                      ''}
+                    <span style={{ opacity: '50%' }}>{' (current)'}</span>
+                  </>
+                }
+                after={<SelectShowRoomIcon />}
               />
             </SequenceCard>
             {/*THIS SHOULD BE MOVED TO A NEW SETTINGS MENU INSIDE OF THE HOME SETTINGS AS SOON AS THERE IS A REASON TO CREATE A HOME MENU SETTINGS PANEL

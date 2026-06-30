@@ -26,6 +26,7 @@ export enum CaptionPosition {
 
 export enum ShowRoomIcon {
   Always = 'always',
+  Strict = 'strict',
   Smart = 'smart',
   Never = 'never',
 }
@@ -122,6 +123,7 @@ export interface Settings {
   clientUrlPreview: boolean;
   encClientUrlPreview: boolean;
   clientPreviewYoutube: boolean;
+  enableGifPicker: boolean;
   showInteractiveMap: boolean;
   showEncInteractiveMap: boolean;
 
@@ -180,6 +182,7 @@ export interface Settings {
   autoplayGifs: boolean;
   autoplayStickers: boolean;
   autoplayEmojis: boolean;
+  oldSidebar: boolean;
   pixelatedImageRendering: PixelatedImageRenderingMode;
   incomingInlineImagesDefaultHeight: number;
   incomingInlineImagesMaxHeight: number;
@@ -263,6 +266,7 @@ export const defaultSettings: Settings = {
   clientUrlPreview: false,
   encClientUrlPreview: false,
   clientPreviewYoutube: false,
+  enableGifPicker: true,
   showInteractiveMap: true,
   showEncInteractiveMap: false,
   showHiddenEvents: false,
@@ -332,6 +336,7 @@ export const defaultSettings: Settings = {
   autoplayGifs: true,
   autoplayStickers: true,
   autoplayEmojis: true,
+  oldSidebar: false,
   pixelatedImageRendering: 'smart',
   incomingInlineImagesDefaultHeight: 32,
   incomingInlineImagesMaxHeight: 64,
@@ -348,7 +353,7 @@ export const defaultSettings: Settings = {
   showPersonaSetting: false,
   closeFoldersByDefault: false,
   perRoomShowRoomIcon: [],
-  showRoomIcon: ShowRoomIcon.Smart,
+  showRoomIcon: ShowRoomIcon.Strict,
   roomIconOverlay: true,
   showRoomBanners: true,
   roomSidebarWidth: 256,

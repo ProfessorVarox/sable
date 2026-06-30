@@ -6,6 +6,7 @@ import type { MemberPowerTag } from '$types/matrix/room';
 import type { RoomAbbreviationsContent } from '$utils/abbreviations';
 import type { PronounSet } from '$utils/pronouns';
 import type * as prefix from '$unstable/prefixes';
+import type { GifData } from '$components/emoji-board';
 
 type PowerLevelTagsEventContent = Record<number, MemberPowerTag>;
 
@@ -50,12 +51,14 @@ declare module 'matrix-js-sdk/lib/@types/event' {
 
   interface AccountDataEvents {
     [prefix.MATRIX_CINNY_UNSTABLE_ACCOUNT_SPACES_PROPERTY_NAME]: InCinnySpacesContent;
-    [prefix.MATRIX_ELEMENT_UNSTABLE_ACCOUNT_RECENT_EMOJIS_PROPERTY_NAME]: IRecentEmojiContent;
+    [prefix.MATRIX_ACCOUNT_RECENT_EMOJIS_PROPERTY_NAME]: IRecentEmojiContent;
+    [prefix.MATRIX_LEGACY_ELEMENT_UNSTABLE_ACCOUNT_RECENT_EMOJIS_PROPERTY_NAME]: IRecentEmojiContent;
     [prefix.MATRIX_UNSTABLE_ACCOUNT_USER_EMOTES_PROPERTY_NAME]: PackContent;
     [prefix.MATRIX_UNSTABLE_ACCOUNT_EMOTE_ROOMS_PROPERTY_NAME]: EmoteRoomsContent;
     [prefix.MATRIX_SABLE_UNSTABLE_ACCOUNT_NICKNAMES_PROPERTY_NAME]: Record<string, string>;
     [prefix.MATRIX_SABLE_UNSTABLE_ACCOUNT_SETTINGS_PROPERTY_NAME]: Record<string, unknown>;
     [prefix.MATRIX_SABLE_UNSTABLE_DISMISSED_INVITES]: { roomIds: string[] };
     [prefix.MATRIX_SABLE_UNSTABLE_ACCOUNT_ADDED_SERVERS_PROPERTY_NAME]: AddedServersContent;
+    [prefix.MATRIX_SABLE_UNSTABLE_FAVORITE_GIFS]: { gifs: Omit<GifData, 'id'>[] };
   }
 }
