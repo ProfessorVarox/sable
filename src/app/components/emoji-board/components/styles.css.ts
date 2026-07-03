@@ -228,3 +228,11 @@ export const GifImg = style({
   objectFit: 'cover',
   borderRadius: config.radii.R400,
 });
+
+export const TextLink = style({
+  color: 'var(--tc-link)',
+  cursor: 'pointer',
+  ':hover': {
+    textDecoration: 'underline',
+  },
+});
