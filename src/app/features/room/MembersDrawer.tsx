@@ -233,8 +233,6 @@ const SEARCH_OPTIONS: UseAsyncSearchOptions = {
 };
 
 const mxIdToName = (mxId: string) => getMxIdLocalPart(mxId) ?? mxId;
-const getRoomMemberStr: SearchItemStrGetter<RoomMember> = (m, query) =>
-  getMemberSearchStr(m, query, mxIdToName);
 
 type MembersDrawerProps = {
   room: Room;
@@ -242,6 +240,7 @@ type MembersDrawerProps = {
 };
 export function MembersDrawer({ room, members }: MembersDrawerProps) {
   const mx = useMatrixClient();
+  const nicknames = useAtomValue(nicknamesAtom);
   const useAuthentication = useMediaAuthentication();
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -271,6 +270,11 @@ export function MembersDrawer({ room, members }: MembersDrawerProps) {
     () =>
       members.filter(membershipFilter.filterFn).toSorted(memberSort.sortFn).sort(memberPowerSort),
     [members, membershipFilter, memberSort, memberPowerSort]
+  );
+
+  const getRoomMemberStr = useCallback<SearchItemStrGetter<RoomMember>>(
+    (m, query) => getMemberSearchStr(m, query, mxIdToName, nicknames),
+    [nicknames]
   );
 
   const [result, search, resetSearch] = useAsyncSearch(

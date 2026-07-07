@@ -225,7 +225,7 @@ function renderNotificationStickerImageContent(
       {...props}
       autoPlay={mediaAutoLoad}
       renderImage={NotificationLazyImage}
-      renderViewer={ImageViewer}
+      renderViewer={(p) => <ImageViewer {...p} />}
     />
   );
 }

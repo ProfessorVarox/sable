@@ -235,12 +235,18 @@ function StateEventView({ content, eventJSONStr, onEditContent }: StateEventView
 export type StateEventInfo = {
   type: string;
   stateKey: string;
+  rawEvent?: object;
 };
 export type StateEventEditorProps = StateEventInfo & {
   requestClose: () => void;
 };
 
-export function StateEventEditor({ type, stateKey, requestClose }: StateEventEditorProps) {
+export function StateEventEditor({
+  type,
+  stateKey,
+  rawEvent,
+  requestClose,
+}: StateEventEditorProps) {
   const mx = useMatrixClient();
   const room = useRoom();
   const stateEvent = useStateEvent(room, type as keyof StateEvents, stateKey);
@@ -252,9 +258,16 @@ export function StateEventEditor({ type, stateKey, requestClose }: StateEventEdi
   const canEdit = permissions.stateEvent(type, mx.getSafeUserId());
 
   const eventJSONStr = useMemo(() => {
-    if (!stateEvent) return '';
-    return JSON.stringify(stateEvent.event, null, EDITOR_INTENT_SPACE_COUNT);
-  }, [stateEvent]);
+    if (stateEvent) {
+      return JSON.stringify(stateEvent.event, null, EDITOR_INTENT_SPACE_COUNT);
+    }
+    if (rawEvent) {
+      return JSON.stringify(rawEvent, null, EDITOR_INTENT_SPACE_COUNT);
+    }
+    return '';
+  }, [stateEvent, rawEvent]);
+
+  const content = stateEvent?.getContent() ?? (rawEvent as { content?: object })?.content ?? {};
 
   const handleCloseEdit = useCallback(() => {
     setEditContent(undefined);
@@ -286,7 +299,7 @@ export function StateEventEditor({ type, stateKey, requestClose }: StateEventEdi
           />
         ) : (
           <StateEventView
-            content={stateEvent?.getContent() ?? {}}
+            content={content}
             onEditContent={canEdit ? setEditContent : undefined}
             eventJSONStr={eventJSONStr}
           />

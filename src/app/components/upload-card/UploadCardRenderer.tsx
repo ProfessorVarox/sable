@@ -1,17 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Box,
-  Chip,
-  IconButton,
-  Scroll,
-  Text,
-  Tooltip,
-  TooltipProvider,
-  color,
-  config,
-  toRem,
-} from 'folds';
+import { Box, Chip, IconButton, Text, Tooltip, TooltipProvider, color, config, toRem } from 'folds';
 import {
   Check,
   EyeSlash,
@@ -68,7 +57,7 @@ function PreviewImage({ fileItem }: Readonly<PreviewImageProps>) {
       style={{
         objectFit: 'contain',
         width: '100%',
-        height: toRem(152),
+        height: toRem(128),
         filter: metadata.markedAsSpoiler ? 'blur(44px)' : undefined,
       }}
       alt={originalFile.name}
@@ -90,7 +79,7 @@ function PreviewVideo({ fileItem }: Readonly<PreviewVideoProps>) {
       style={{
         objectFit: 'contain',
         width: '100%',
-        height: toRem(152),
+        height: toRem(128),
         filter: metadata.markedAsSpoiler ? 'blur(44px)' : undefined,
       }}
       src={fileUrl}
@@ -377,6 +366,7 @@ type UploadCardRendererProps = {
   onRemove: (file: TUploadContent) => void;
   onComplete?: (upload: UploadSuccess) => void;
   roomId: string;
+  hideCaption?: boolean;
 };
 export function UploadCardRenderer({
   isEncrypted,
@@ -386,6 +376,7 @@ export function UploadCardRenderer({
   onRemove,
   onComplete,
   roomId,
+  hideCaption,
 }: Readonly<UploadCardRendererProps>) {
   const mx = useMatrixClient();
   const mediaConfig = useMediaConfig();
@@ -452,6 +443,8 @@ export function UploadCardRenderer({
   return (
     <UploadCard
       radii="300"
+      compact
+      style={{ maxWidth: toRem(400), flexShrink: 0 }}
       before={sizedIcon(getFileTypeIconComponent(file.type))}
       after={
         <>
@@ -467,7 +460,7 @@ export function UploadCardRenderer({
               <Text size="B300">Retry</Text>
             </Chip>
           )}
-          {!isDescribed && (
+          {!isDescribed && !hideCaption && (
             <IconButton
               onClick={() => {
                 setIsDescribed(true);
@@ -480,7 +473,7 @@ export function UploadCardRenderer({
               {sizedIcon(PencilSimple, '50')}
             </IconButton>
           )}
-          {isDescribed && (
+          {isDescribed && !hideCaption && (
             <TooltipProvider
               delay={400}
               position="Top"
@@ -542,7 +535,7 @@ export function UploadCardRenderer({
             </UploadCardError>
           )}
 
-          {isDescribed && (
+          {isDescribed && !hideCaption && (
             <DescriptionEditor
               value={fileItem.formatted_body || fileItem.body}
               onSave={(plainText, htmlContent) => {
@@ -552,31 +545,17 @@ export function UploadCardRenderer({
               onCancel={() => setIsDescribed(false)}
             />
           )}
-          {!isDescribed && fileItem.body && fileItem.body.length > 0 && (
-            <Scroll
-              direction="Vertical"
-              variant="SurfaceVariant"
-              visibility="Always"
-              size="300"
-              style={{
-                backgroundColor: 'var(--sable-bg-container)',
-                borderRadius: config.radii.R400,
-                maxHeight: '180px',
-                marginTop: config.space.S0,
-                overflowY: 'auto',
-              }}
-            >
-              <Box style={{ padding: config.space.S200, wordBreak: 'break-word' }}>
-                <Text size="T200" priority="400" as="div">
-                  <RenderBody
-                    body={fileItem.body}
-                    customBody={fileItem.formatted_body}
-                    htmlReactParserOptions={htmlReactParserOptions}
-                    linkifyOpts={linkifyOpts}
-                  />
-                </Text>
-              </Box>
-            </Scroll>
+          {!isDescribed && !hideCaption && fileItem.body && fileItem.body.length > 0 && (
+            <Box style={{ padding: config.space.S200, wordBreak: 'break-word' }}>
+              <Text size="T200" priority="400" as="div">
+                <RenderBody
+                  body={fileItem.body}
+                  customBody={fileItem.formatted_body}
+                  htmlReactParserOptions={htmlReactParserOptions}
+                  linkifyOpts={linkifyOpts}
+                />
+              </Text>
+            </Box>
           )}
         </>
       }

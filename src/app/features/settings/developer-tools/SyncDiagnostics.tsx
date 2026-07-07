@@ -114,16 +114,6 @@ const formatListCoverage = (knownCount: number, rangeEnd: number): string => {
   return `${loadedCount}/${knownCount}`;
 };
 
-const formatSyncReason = (reason: string): string => {
-  if (reason === 'sliding_active') return 'Sliding Sync active';
-  if (reason === 'sliding_disabled_server') return 'Server-side sliding sync disabled';
-  if (reason === 'session_opt_out') return 'Session opt-in is off';
-  if (reason === 'missing_proxy') return 'Sliding proxy URL missing';
-  if (reason === 'cold_cache_bootstrap') return 'Cold-cache bootstrap (classic for this run)';
-  if (reason === 'probe_failed_fallback') return 'Sliding probe failed, using fallback';
-  return reason;
-};
-
 export function SyncDiagnostics() {
   const mx = useMatrixClient();
   const [, setTick] = useState(0);
@@ -148,20 +138,8 @@ export function SyncDiagnostics() {
         gap="100"
       >
         <Box direction="Column" gap="100" style={{ padding: '12px' }}>
-          <Text size="T300">
-            Transport: {diagnostics.transport}
-            {diagnostics.fallbackFromSliding ? ' (fallback)' : ''}
-          </Text>
+          <Text size="T300">Transport: {diagnostics.transport}</Text>
           <Text size="T300">State: {diagnostics.syncState ?? 'null'}</Text>
-          <Text size="T300">
-            Sliding configured: {diagnostics.slidingConfigured ? 'yes' : 'no'}
-          </Text>
-          <Text size="T300">
-            Sliding server-enabled: {diagnostics.slidingEnabledOnServer ? 'yes' : 'no'}
-          </Text>
-          <Text size="T300">Sliding session opt-in: {diagnostics.sessionOptIn ? 'yes' : 'no'}</Text>
-          <Text size="T300">Sliding requested: {diagnostics.slidingRequested ? 'yes' : 'no'}</Text>
-          <Text size="T300">Sync reason: {formatSyncReason(diagnostics.reason)}</Text>
           <Text size="T300">
             Room counts: {roomDiagnostics.totalRooms} total, {roomDiagnostics.joinedRooms} joined,{' '}
             {roomDiagnostics.inviteRooms} invites

@@ -595,11 +595,20 @@ export const getMemberDisplayName = (
 export const getMemberSearchStr = (
   member: RoomMember,
   query: string,
-  mxIdToName: (mxId: string) => string
-): string[] => [
-  member.rawDisplayName === member.userId ? mxIdToName(member.userId) : member.rawDisplayName,
-  query.startsWith('@') || query.indexOf(':') > -1 ? member.userId : mxIdToName(member.userId),
-];
+  mxIdToName: (mxId: string) => string,
+  nicknames?: Record<string, string>
+): string[] => {
+  const nickname = nicknames?.[member.userId];
+  const displayName =
+    member.rawDisplayName === member.userId ? mxIdToName(member.userId) : member.rawDisplayName;
+  const idStr =
+    query.startsWith('@') || query.indexOf(':') > -1 ? member.userId : mxIdToName(member.userId);
+
+  const strings: string[] = [];
+  if (nickname) strings.push(nickname);
+  strings.push(displayName, idStr);
+  return strings;
+};
 
 export const getMemberAvatarMxc = (room: Room, userId: string): string | undefined => {
   const member = room.getMember(userId);

@@ -137,6 +137,17 @@ export const ImageContent = as<'div', ImageContentProps>(
       favoritedContent.gifs.find((v) => v.url == url) != undefined
     );
 
+    const isGif =
+      info?.mimetype === 'image/gif' ||
+      info?.mimetype === 'image/apng' ||
+      info?.mimetype === 'image/webp' ||
+      body.toLowerCase().endsWith('.gif') ||
+      body.toLowerCase().endsWith('.apng') ||
+      body.toLowerCase().endsWith('.webp') ||
+      url.toLowerCase().endsWith('.gif') ||
+      url.toLowerCase().endsWith('.apng') ||
+      url.toLowerCase().endsWith('.webp');
+
     const [srcState, loadSrc] = useAsyncCallback(
       useCallback(async () => {
         if (url.startsWith('http')) return url;
@@ -409,7 +420,7 @@ export const ImageContent = as<'div', ImageContentProps>(
                 >
                   {menuIcon(blurred ? Eye : EyeSlash)}
                 </MenuItem>
-                {info?.mimetype == 'image/gif' && (
+                {isGif && (
                   <MenuItem
                     size="300"
                     radii="0"

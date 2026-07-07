@@ -764,7 +764,7 @@ export function EmojiBoard({
         initialFocus: false,
         onDeactivate: requestClose,
 
-        allowOutsideClick: (e) => {
+        allowOutsideClick: (e: MouseEvent | TouchEvent) => {
           e.preventDefault();
           requestClose();
           return false;

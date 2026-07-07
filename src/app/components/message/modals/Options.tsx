@@ -564,7 +564,7 @@ export function OptionMenu({
           initialFocus: false,
           onDeactivate: closeMenu,
           onPostDeactivate: handlePostDeactivate,
-          allowOutsideClick: (e) => {
+          allowOutsideClick: (e: MouseEvent | TouchEvent) => {
             e.preventDefault();
             closeMenu();
             return false;

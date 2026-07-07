@@ -96,6 +96,9 @@ const stripIncomingStyle = (
   return props;
 };
 
+const attrString = (value: unknown): string | undefined =>
+  typeof value === 'string' ? value : undefined;
+
 const ensureNoopenerRel = (rel: unknown): string => {
   if (typeof rel !== 'string') return 'noopener';
 
@@ -855,18 +858,21 @@ export const getReactCustomHtmlParser = (
           // Guard: img without a src survives sanitisation (fix for crash #1731)
           // but we can't convert it  Eskip rendering rather than passing
           // undefined into mxcUrlToHttp where it would throw.
-          if (!props.src) return null;
+          const src = attrString(props.src);
+          if (!src) return null;
 
-          const htmlSrc = mxcUrlToHttp(mx, props.src, params.useAuthentication) ?? undefined;
-          const fallbackLabel = props.alt || props.title || '[media]';
-          const failedToResolveMxc = props.src.startsWith('mxc://') && !htmlSrc;
+          const alt = attrString(props.alt);
+          const title = attrString(props.title);
+          const htmlSrc = mxcUrlToHttp(mx, src, params.useAuthentication) ?? undefined;
+          const fallbackLabel = alt || title || '[media]';
+          const failedToResolveMxc = src.startsWith('mxc://') && !htmlSrc;
 
           // Non-mxc images were already converted to <a> links by the sanitiser,
           // but handle the edge case defensively here too.
-          if (htmlSrc && !props.src.startsWith('mxc://')) {
+          if (htmlSrc && !src.startsWith('mxc://')) {
             return (
               <a href={htmlSrc} target="_blank" rel="noreferrer noopener">
-                {props.alt || props.title || htmlSrc}
+                {alt || title || htmlSrc}
               </a>
             );
           }
@@ -875,7 +881,7 @@ export const getReactCustomHtmlParser = (
             // When the mxc URL can't be resolved (e.g. federation unavailable),
             // fall back to rendering the shortcode text so the message stays readable.
             if (!htmlSrc) {
-              const label = props.alt || props.title || '';
+              const label = alt || title || '';
               return (
                 <span title={label} className={css.EmoticonBase}>
                   {label ? `:${label}:` : ''}

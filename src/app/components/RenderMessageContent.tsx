@@ -25,6 +25,7 @@ import {
   MNotice,
   MText,
   MVideo,
+  MGallery,
   ReadPdfFile,
   ReadTextFile,
   RenderBody,
@@ -49,7 +50,8 @@ import { ClientSideHoverFreeze } from './ClientSideHoverFreeze';
 import { CuteEventType, MCuteEvent } from './message/MCuteEvent';
 import { PollEvent } from './message/PollEvent';
 import { M_TEXT } from 'matrix-js-sdk';
-import type { IImageInfo } from '$types/matrix/common';
+import type { IImageInfo, IGalleryContent } from '$types/matrix/common';
+import { GALLERY_MSGTYPE } from '$types/matrix/common';
 
 type RenderMessageContentProps = {
   displayName: string;
@@ -61,6 +63,7 @@ type RenderMessageContentProps = {
   bundledPreview?: boolean;
   urlPreview?: boolean;
   clientUrlPreview?: boolean;
+  isGallery?: boolean;
   showMaps?: boolean;
   highlightRegex?: RegExp;
   htmlReactParserOptions: HTMLReactParserOptions;
@@ -94,6 +97,7 @@ function RenderMessageContentInternal({
   edited,
   getContent,
   mediaAutoLoad,
+  isGallery,
   bundledPreview,
   urlPreview,
   clientUrlPreview,
@@ -213,8 +217,9 @@ function RenderMessageContentInternal({
     if (captionPosition === CaptionPosition.Hidden || hideCaption) return null;
     if (
       hasCaption &&
-      (content as { filename?: string }).filename &&
-      (content as { filename?: string }).filename !== content.body
+      (((content as { filename?: string }).filename &&
+        (content as { filename?: string }).filename !== content.body) ||
+        msgType === GALLERY_MSGTYPE)
     ) {
       if (captionPosition !== CaptionPosition.Inline)
         return (
@@ -254,16 +259,19 @@ function RenderMessageContentInternal({
     return null;
   };
 
-  function renderCaptionedAttachment(attachment: JSX.Element): JSX.Element {
+  function renderCaptionedAttachment(attachment: JSX.Element, isInGallery?: boolean): JSX.Element {
     return (
       <div
         style={{
           display: 'flex',
           flexDirection: attachmentDirection,
+          height: '100%',
+          width: '100%',
+          position: 'relative',
         }}
       >
-        <div>{attachment}</div>
-        {renderCaption()}
+        {attachment}
+        {!isInGallery && renderCaption()}
       </div>
     );
   }
@@ -368,6 +376,7 @@ function RenderMessageContentInternal({
     return renderCaptionedAttachment(
       <MImage
         content={content as Record<string, never> & { msgtype: MsgType.Image }}
+        fitParent={isGallery}
         renderImageContent={(imageProps) => (
           <ImageContent
             {...imageProps}
@@ -386,7 +395,8 @@ function RenderMessageContentInternal({
           />
         )}
         outlined={outlineAttachment}
-      />
+      />,
+      isGallery
     );
   }
 
@@ -416,7 +426,8 @@ function RenderMessageContentInternal({
           />
         )}
         outlined={outlineAttachment}
-      />
+      />,
+      isGallery
     );
   }
 
@@ -429,6 +440,7 @@ function RenderMessageContentInternal({
           <AudioContent {...audioProps} renderMediaControl={(p) => <MediaControl {...p} />} />
         )}
         outlined={outlineAttachment}
+        fitParent={isGallery}
       />
     );
   }
@@ -436,6 +448,30 @@ function RenderMessageContentInternal({
   if (msgType === (MsgType.File as string)) return renderFile();
   if (msgType === (MsgType.Location as string))
     return <MLocation showMaps={showMaps} content={content} />;
+
+  if (msgType === GALLERY_MSGTYPE) {
+    return renderCaptionedAttachment(
+      <MGallery
+        content={content as IGalleryContent}
+        renderItem={(itemContent) => (
+          <RenderMessageContentInternal
+            displayName={displayName}
+            msgType={itemContent.msgtype as string}
+            ts={ts}
+            getContent={() => itemContent}
+            mediaAutoLoad={mediaAutoLoad}
+            urlPreview={urlPreview}
+            highlightRegex={highlightRegex}
+            htmlReactParserOptions={htmlReactParserOptions}
+            linkifyOpts={linkifyOpts}
+            outlineAttachment={outlineAttachment}
+            isGallery={true}
+          />
+        )}
+      />
+    );
+  }
+
   if (msgType === 'm.bad.encrypted') return <MBadEncrypted />;
 
   // cute events

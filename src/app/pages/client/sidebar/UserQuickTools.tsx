@@ -2,6 +2,7 @@ import { Box, config, toRem } from 'folds';
 import { InboxTab } from './InboxTab';
 import { SearchTab } from './SearchTab';
 import { SettingsTab } from './SettingsTab';
+import { UnverifiedTab } from './UnverifiedTab';
 import { useAtom } from 'jotai';
 import { isResizingSidebarAtom } from '$state/isResizingSidebar';
 import * as css from './UserQuickTools.css';
@@ -46,6 +47,7 @@ export function UserQuickTools({
             >
               {!isCollapsed && (
                 <>
+                  <UnverifiedTab isBottom />
                   <InboxTab isBottom />
                   <SearchTab isBottom />
                   <SettingsTab isBottom />

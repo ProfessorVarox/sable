@@ -1,7 +1,6 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useCallback, useEffect, useMemo } from 'react';
 import type { Editor } from 'slate';
-import { ReactEditor } from 'slate-react';
 import { Avatar, MenuItem, Text } from 'folds';
 import { Hash, sizedIcon } from '$components/icons/phosphor';
 import type { MatrixClient } from '$types/matrix-sdk';
@@ -121,7 +120,6 @@ export function RoomMentionAutocomplete({
     );
     replaceWithElement(editor, query.range, mentionEl);
     moveCursor(editor, true);
-    ReactEditor.focus(editor);
     requestClose();
   };
 

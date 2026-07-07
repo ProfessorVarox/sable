@@ -85,7 +85,7 @@ function renderSearchStickerImageContent(
       {...props}
       autoPlay={mediaAutoLoad}
       renderImage={LazyImage}
-      renderViewer={ImageViewer}
+      renderViewer={(p) => <ImageViewer {...p} />}
     />
   );
 }

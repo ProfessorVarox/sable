@@ -42,6 +42,8 @@ import { useFlattenPowerTagMembers, useGetMemberPowerTag } from '$hooks/useMembe
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { getMouseEventCords } from '$utils/dom';
 import { getMxIdServer } from '$utils/mxIdHelper';
+import { useAtomValue } from 'jotai';
+import { nicknamesAtom } from '$state/nicknames';
 
 const SEARCH_OPTIONS: UseAsyncSearchOptions = {
   limit: 1000,
@@ -54,14 +56,13 @@ const SEARCH_OPTIONS: UseAsyncSearchOptions = {
 };
 
 const mxIdToName = (mxId: string) => getMxIdLocalPart(mxId) ?? mxId;
-const getRoomMemberStr: SearchItemStrGetter<RoomMember> = (m, query) =>
-  getMemberSearchStr(m, query, mxIdToName);
 
 type MembersProps = {
   requestClose: () => void;
 };
 export function Members({ requestClose }: MembersProps) {
   const mx = useMatrixClient();
+  const nicknames = useAtomValue(nicknamesAtom);
   const useAuthentication = useMediaAuthentication();
   const room = useRoom();
   const members = useRoomMembers(mx, room.roomId);
@@ -92,6 +93,11 @@ export function Members({ requestClose }: MembersProps) {
         .toSorted(memberSort.sortFn)
         .sort(memberPowerSort),
     [members, membershipFilter, memberSort, memberPowerSort]
+  );
+
+  const getRoomMemberStr = useCallback<SearchItemStrGetter<RoomMember>>(
+    (m, query) => getMemberSearchStr(m, query, mxIdToName, nicknames),
+    [nicknames]
   );
 
   const [result, search, resetSearch] = useAsyncSearch(

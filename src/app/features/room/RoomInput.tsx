@@ -60,6 +60,7 @@ import {
   getLinks,
   MarkdownFormattingToolbarBottom,
   MarkdownFormattingToolbarToggle,
+  focusEditor,
   replaceWithElement,
   BlockType,
 } from '$components/editor';
@@ -170,6 +171,8 @@ import {
   getImageMsgContent,
   getVideoMsgContent,
   getGifMsgContent,
+  buildGalleryContent,
+  getGalleryItemContent,
 } from './msgContent';
 import { outgoingMessageTransforms } from './outgoingMessageTransforms';
 import { getKlipyMxcUrl } from '$utils/klipy';
@@ -437,6 +440,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [sendError, setSendError] = useState<string | undefined>();
     const isEncrypted = room.hasEncryptionStateEvent();
     const [emojiBoardTab, setEmojiBoardTab] = useState<EmojiBoardTab | undefined>(undefined);
+    const [enableMediaGalleries] = useSetting(settingsAtom, 'enableMediaGalleries');
+    const [sendIndividualAttachmentAsCaption] = useSetting(
+      settingsAtom,
+      'sendIndividualAttachmentAsCaption'
+    );
 
     useElementSizeObserver(
       useCallback(() => fileDropContainerRef.current, [fileDropContainerRef]),
@@ -676,22 +684,68 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       }
     };
 
-    const handleSendUpload = async (uploads: UploadSuccess[]) => {
-      const contentsPromises = uploads.map(async (upload) => {
-        const fileItem = selectedFiles.find((f) => f.file === upload.file);
-        if (!fileItem) throw new Error('Broken upload');
+    const uploadToContent = async (upload: UploadSuccess) => {
+      const fileItem = selectedFiles.find((f) => f.file === upload.file);
+      if (!fileItem) throw new Error('Broken upload');
 
-        if (fileItem.file.type.startsWith('image')) {
-          return getImageMsgContent(mx, fileItem, upload.mxc);
+      if (fileItem.file.type.startsWith('image')) {
+        return getImageMsgContent(mx, fileItem, upload.mxc);
+      }
+      if (fileItem.file.type.startsWith('video')) {
+        return getVideoMsgContent(mx, fileItem, upload.mxc);
+      }
+      if (fileItem.file.type.startsWith('audio')) {
+        return getAudioMsgContent(fileItem, upload.mxc);
+      }
+      return getFileMsgContent(fileItem, upload.mxc);
+    };
+
+    const handleSendUpload = async (uploads: UploadSuccess[]) => {
+      const plainText = toPlainText(editor.children).trim();
+      const caption = plainText.length > 0 ? plainText : undefined;
+      let customHtml = trimCustomHtml(
+        toMatrixCustomHTML(editor.children, {
+          stripNickname: true,
+          room,
+        })
+      );
+      const formattedCaption =
+        caption && !customHtmlEqualsPlainText(customHtml, plainText) ? customHtml : undefined;
+
+      if (uploads.length == 1 && sendIndividualAttachmentAsCaption) {
+        const upload = uploads[0];
+        if (!upload) throw new Error('Broken upload');
+        let content = await uploadToContent(upload);
+        handleCancelUpload(uploads);
+
+        content.body = caption;
+        content.formatted_body = undefined;
+
+        if (formattedCaption) {
+          content.format = 'org.matrix.custom.html';
+          content.formatted_body = formattedCaption;
         }
-        if (fileItem.file.type.startsWith('video')) {
-          return getVideoMsgContent(mx, fileItem, upload.mxc);
-        }
-        if (fileItem.file.type.startsWith('audio')) {
-          return getAudioMsgContent(fileItem, upload.mxc);
-        }
-        return getFileMsgContent(fileItem, upload.mxc);
-      });
+
+        await handleSendContents([content]);
+        return;
+      }
+      if (uploads.length >= 2 && enableMediaGalleries) {
+        const itemsPromises = uploads.map(async (upload) => {
+          const fileItem = selectedFiles.find((f) => f.file === upload.file);
+          if (!fileItem) throw new Error('Broken upload');
+          return getGalleryItemContent(mx, fileItem, upload.mxc);
+        });
+        handleCancelUpload(uploads);
+        const items = fulfilledPromiseSettledResult(await Promise.allSettled(itemsPromises));
+
+        if (items.length === 0) return;
+
+        const galleryContent = buildGalleryContent(items, caption, formattedCaption);
+
+        await handleSendContents([galleryContent]);
+        return;
+      }
+      const contentsPromises = uploads.map(uploadToContent);
       handleCancelUpload(uploads);
       const contents = fulfilledPromiseSettledResult(await Promise.allSettled(contentsPromises));
 
@@ -699,8 +753,12 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     };
 
     const handleCloseAutocomplete = useCallback(() => {
-      setAutocompleteQuery(undefined);
-      ReactEditor.focus(editor);
+      setAutocompleteQuery((prev) => {
+        if (prev !== undefined) {
+          focusEditor(editor);
+        }
+        return undefined;
+      });
     }, [editor]);
 
     const handleQuickReact = useCallback(
@@ -735,6 +793,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
 
     const submit = useCallback(async () => {
       uploadBoardHandlers.current?.handleSend();
+      if (
+        (selectedFiles.length >= 2 && enableMediaGalleries) ||
+        (selectedFiles.length == 1 && sendIndividualAttachmentAsCaption)
+      ) {
+        resetEditor(editor);
+        resetEditorHistory(editor);
+        sendTypingStatus(false);
+        return;
+      }
 
       const commandName = getBeginCommand(editor);
       /**
@@ -1124,6 +1191,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       setScheduledTime,
       setServerMaxDelayMs,
       replyDraftBase,
+      selectedFiles,
+      enableMediaGalleries,
+      sendIndividualAttachmentAsCaption,
     ]);
 
     const handleKeyDown: KeyboardEventHandler = useCallback(
@@ -1323,40 +1393,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
 
     return (
       <div ref={ref}>
-        {selectedFiles.length > 0 && (
-          <UploadBoard
-            header={
-              <UploadBoardHeader
-                open={uploadBoard}
-                onToggle={() => setUploadBoard(!uploadBoard)}
-                uploadFamilyObserverAtom={uploadFamilyObserverAtom}
-                onSend={handleSendUpload}
-                imperativeHandlerRef={uploadBoardHandlers}
-                onCancel={handleCancelUpload}
-              />
-            }
-          >
-            {uploadBoard && (
-              <Scroll size="300" hideTrack visibility="Hover">
-                <UploadBoardContent>
-                  {Array.from(selectedFiles)
-                    .toReversed()
-                    .map((fileItem) => (
-                      <UploadCardRenderer
-                        key={getUploadItemKey(fileItem)}
-                        isEncrypted={!!fileItem.encInfo}
-                        fileItem={fileItem}
-                        setMetadata={handleFileMetadata}
-                        onRemove={handleRemoveUpload}
-                        setDesc={setDesc}
-                        roomId={roomId}
-                      />
-                    ))}
-                </UploadBoardContent>
-              </Scroll>
-            )}
-          </UploadBoard>
-        )}
         <Overlay
           open={dropZoneVisible}
           backdrop={<OverlayBackdrop />}
@@ -1448,6 +1484,43 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           forceMultilineLayout={showAudioRecorder}
           top={
             <>
+              {selectedFiles.length > 0 && (
+                <UploadBoard
+                  header={
+                    <UploadBoardHeader
+                      open={uploadBoard}
+                      onToggle={() => setUploadBoard(!uploadBoard)}
+                      uploadFamilyObserverAtom={uploadFamilyObserverAtom}
+                      onSend={handleSendUpload}
+                      imperativeHandlerRef={uploadBoardHandlers}
+                      onCancel={handleCancelUpload}
+                    />
+                  }
+                >
+                  {uploadBoard && (
+                    <Scroll direction="Horizontal" size="300" hideTrack visibility="Hover">
+                      <UploadBoardContent>
+                        {Array.from(selectedFiles)
+                          .toReversed()
+                          .map((fileItem) => (
+                            <UploadCardRenderer
+                              key={getUploadItemKey(fileItem)}
+                              isEncrypted={!!fileItem.encInfo}
+                              fileItem={fileItem}
+                              setMetadata={handleFileMetadata}
+                              onRemove={handleRemoveUpload}
+                              setDesc={setDesc}
+                              roomId={roomId}
+                              hideCaption={
+                                selectedFiles.length == 1 && sendIndividualAttachmentAsCaption
+                              }
+                            />
+                          ))}
+                      </UploadBoardContent>
+                    </Scroll>
+                  )}
+                </UploadBoard>
+              )}
               {scheduledTime && (
                 <div>
                   <Box

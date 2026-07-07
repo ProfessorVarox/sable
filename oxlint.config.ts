@@ -33,6 +33,9 @@ export default defineConfig({
     'typescript/no-unsafe-type-assertion': 'off',
     'typescript/no-floating-promises': 'off',
     'typescript/no-unnecessary-type-arguments': 'off',
+    // Maybe reconsider this in the future, but it causes a lot of cascading issues
+    // because of types we use that don't exist in the matrix-js-sdk
+    'typescript/no-unnecessary-type-assertion': 'off',
     'oxc/no-map-spread': 'off',
     'promise/always-return': 'off',
     'no-underscore-dangle': [
