@@ -362,7 +362,7 @@ export const defaultSettings: Settings = {
   saveStickerEmojiBandwidth: false,
   subspaceHierarchyLimit: 3,
   alwaysShowCallButton: false,
-  joinCallOnSingleClick: true,
+  joinCallOnSingleClick: false,
   incomingCallSoundEnabled: true,
   incomingVoiceRoomCallSoundEnabled: false,
   outgoingRingbackEnabled: true,

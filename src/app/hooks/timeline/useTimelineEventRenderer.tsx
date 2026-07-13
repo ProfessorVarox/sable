@@ -12,7 +12,7 @@ import type {
 } from '$types/matrix-sdk';
 import type { IImageContent } from '$types/matrix/common';
 import { NotificationCountType, RoomEvent, ThreadEvent, EventType } from '$types/matrix-sdk';
-import type { SessionMembershipData } from '$types/matrix-sdk';
+
 import type { HTMLReactParserOptions } from 'html-react-parser';
 import type { Opts as LinkifyOpts } from 'linkifyjs';
 import { Box, Chip, Avatar, Text, config, toRem } from 'folds';
@@ -1553,7 +1553,7 @@ export function useTimelineEventRenderer({
         const senderId = mEvent.getSender() ?? '';
         const senderName = getMemberDisplayName(room, senderId) || getMxIdLocalPart(senderId);
 
-        const content = mEvent.getContent() as SessionMembershipData;
+        const content = mEvent.getContent() as Record<string, unknown>;
         const prevContent = mEvent.getPrevContent();
 
         const callJoined = content.application;
