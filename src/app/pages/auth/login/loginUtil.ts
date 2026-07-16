@@ -1,7 +1,7 @@
 import to from 'await-to-js';
 import type { LoginRequest, LoginResponse } from '$types/matrix-sdk';
 import { createClient, MatrixError } from '$types/matrix-sdk';
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSetAtom } from 'jotai';
 import * as Sentry from '@sentry/react';
@@ -12,6 +12,7 @@ import {
   getAfterLoginRedirectPath,
 } from '$pages/afterLoginRedirectPath';
 import { getHomePath } from '$pages/pathUtils';
+import type { Session } from '$state/sessions';
 import { activeSessionIdAtom, sessionsAtom } from '$state/sessions';
 import { createLogger } from '$utils/debug';
 import { createDebugLogger } from '$utils/debugLogger';
@@ -145,10 +146,31 @@ export const login = async (
   );
 };
 
-export const useLoginComplete = (data?: CustomLoginResponse) => {
+/**
+ * Commits a session to the store, makes it active, and navigates into the app. Shared by the
+ * password/token login path and the OIDC callback.
+ */
+export const useCommitLoginSession = () => {
   const navigate = useNavigate();
   const setSessions = useSetAtom(sessionsAtom);
   const setActiveSessionId = useSetAtom(activeSessionIdAtom);
+
+  return useCallback(
+    (session: Session) => {
+      setSessions({ type: 'PUT', session });
+      setActiveSessionId(session.userId);
+      const afterLoginRedirectUrl = getAfterLoginRedirectPath();
+      deleteAfterLoginRedirectPath();
+      const destination = afterLoginRedirectUrl ?? getHomePath();
+      log.log('commitLoginSession: navigating to', destination);
+      navigate(destination, { replace: true });
+    },
+    [navigate, setSessions, setActiveSessionId]
+  );
+};
+
+export const useLoginComplete = (data?: CustomLoginResponse) => {
+  const commitSession = useCommitLoginSession();
 
   useEffect(() => {
     if (data) {
@@ -157,19 +179,12 @@ export const useLoginComplete = (data?: CustomLoginResponse) => {
         userId: loginRes.user_id,
         baseUrl: loginBaseUrl,
       });
-      const newSession = {
+      commitSession({
         baseUrl: loginBaseUrl,
         userId: loginRes.user_id,
         deviceId: loginRes.device_id,
         accessToken: loginRes.access_token,
-      };
-      setSessions({ type: 'PUT', session: newSession });
-      setActiveSessionId(loginRes.user_id);
-      const afterLoginRedirectUrl = getAfterLoginRedirectPath();
-      deleteAfterLoginRedirectPath();
-      const destination = afterLoginRedirectUrl ?? getHomePath();
-      log.log('useLoginComplete: navigating to', destination);
-      navigate(destination, { replace: true });
+      });
     }
-  }, [data, navigate, setSessions, setActiveSessionId]);
+  }, [data, commitSession]);
 };

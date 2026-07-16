@@ -44,6 +44,7 @@ import { UseStateProvider } from '$components/UseStateProvider';
 import { FocusTrap } from 'focus-trap-react';
 import { LogoutDialog } from '$components/LogoutDialog';
 import { stopPropagation } from '$utils/keyboard';
+import { getMxIdServer } from '$utils/mxIdHelper';
 
 export function ProfileMobile() {
   const mx = useMatrixClient();
@@ -52,6 +53,7 @@ export function ProfileMobile() {
   const [oldSidebar] = useSetting(settingsAtom, 'oldSidebar');
 
   const userId = mx.getUserId() ?? '';
+  const server = getMxIdServer(userId);
   const profile = useUserProfile(userId);
   const presence = useUserPresence(userId);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -167,7 +169,7 @@ export function ProfileMobile() {
             />
 
             <Box style={{ padding: `0 ${config.space.S400}` }}>
-              <GlobalUserHeroName displayName={displayName} userId={userId} />
+              <GlobalUserHeroName displayName={displayName} userId={userId} server={server} />
             </Box>
           </Box>
 

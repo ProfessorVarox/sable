@@ -2,9 +2,10 @@ import { useMemo } from 'react';
 import { Box, Text, color } from 'folds';
 import { Link, useSearchParams } from 'react-router-dom';
 import { SSOAction } from '$types/matrix-sdk';
-import { useAuthFlows } from '$hooks/useAuthFlows';
+import { RegisterFlowStatus, useAuthFlows } from '$hooks/useAuthFlows';
 import { useAuthServer } from '$hooks/useAuthServer';
-import { useParsedLoginFlows } from '$hooks/useParsedLoginFlows';
+import { useAutoDiscoveryInfo } from '$hooks/useAutoDiscoveryInfo';
+import { isOauthAwarePreferred, useParsedLoginFlows } from '$hooks/useParsedLoginFlows';
 import { getLoginPath, getRegisterPath, withSearchParam } from '$pages/pathUtils';
 import { usePathWithOrigin } from '$hooks/usePathWithOrigin';
 import type { LoginPathSearchParams } from '$pages/paths';
@@ -13,15 +14,18 @@ import { SSOLogin } from '$pages/auth/SSOLogin';
 import { OrDivider } from '$pages/auth/OrDivider';
 import { PasswordLoginForm } from './PasswordLoginForm';
 import { TokenLogin } from './TokenLogin';
+import { OidcLoginButton, OidcCallback } from './OidcLogin';
 
-const getLoginTokenSearchParam = () => {
-  // when using hasRouter query params in existing route
-  // gets ignored by react-router, so we need to read it ourself
-  // we only need to read loginToken as it's the only param that
-  // is provided by external entity. example: SSO login
-  const parmas = new URLSearchParams(window.location.search);
-  const loginToken = parmas.get('loginToken');
-  return loginToken ?? undefined;
+// react-router ignores the real query string in hashRouter mode, so read callback params direct.
+const getExternalSearchParams = () => {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    loginToken: params.get('loginToken') ?? undefined,
+    code: params.get('code') ?? undefined,
+    state: params.get('state') ?? undefined,
+    error: params.get('error') ?? undefined,
+    errorDescription: params.get('error_description') ?? undefined,
+  };
 };
 
 const useLoginSearchParams = (searchParams: URLSearchParams): LoginPathSearchParams =>
@@ -38,17 +42,21 @@ export function Login() {
   const server = useAuthServer();
   const { hashRouter } = useClientConfig();
   const { hideUsernamePasswordFields } = useClientConfig();
-  const { loginFlows } = useAuthFlows();
+  const { loginFlows, registerFlows, authMetadata } = useAuthFlows();
+  const discovery = useAutoDiscoveryInfo();
+  const baseUrl = discovery['m.homeserver'].base_url;
   const [searchParams] = useSearchParams();
   const loginSearchParams = useLoginSearchParams(searchParams);
   const ssoRedirectUrl = usePathWithOrigin(getLoginPath(server));
-  const loginTokenForHashRouter = getLoginTokenSearchParam();
+  const oidcRedirectUri = usePathWithOrigin(getLoginPath(server), { ignoreHashRouter: true });
+  const external = getExternalSearchParams();
   const absoluteLoginPath = usePathWithOrigin(getLoginPath(server));
 
-  if (hashRouter?.enabled && loginTokenForHashRouter) {
+  if (hashRouter?.enabled && (external.loginToken || (external.code && external.state))) {
     window.location.replace(
       withSearchParam(absoluteLoginPath, {
-        loginToken: loginTokenForHashRouter,
+        ...(external.loginToken ? { loginToken: external.loginToken } : {}),
+        ...(external.code && external.state ? { code: external.code, state: external.state } : {}),
       })
     );
   }
@@ -61,6 +69,25 @@ export function Login() {
     ? withSearchParam(getRegisterPath(server), { addAccount: '1' })
     : getRegisterPath(server);
 
+  const registrationUnavailable =
+    registerFlows.status === RegisterFlowStatus.RegistrationDisabled && !parsedFlows.sso;
+
+  const oidcCode = searchParams.get('code') ?? undefined;
+  const oidcState = searchParams.get('state') ?? undefined;
+  const oidcNotice = external.error
+    ? (external.errorDescription ?? `Sign-in was not completed (${external.error}).`)
+    : undefined;
+
+  const showOidc = authMetadata !== undefined;
+  const hidePassword =
+    hideUsernamePasswordFields || (showOidc && isOauthAwarePreferred(parsedFlows.sso));
+  const showPassword = !hidePassword && parsedFlows.password !== undefined;
+  const showLegacySso = !showOidc && parsedFlows.sso !== undefined;
+
+  if (showOidc && oidcCode && oidcState) {
+    return <OidcCallback code={oidcCode} state={oidcState} />;
+  }
+
   return (
     <Box direction="Column" gap="500">
       <Text size="H2" priority="400">
@@ -69,28 +96,40 @@ export function Login() {
       {parsedFlows.token && loginSearchParams.loginToken && (
         <TokenLogin token={loginSearchParams.loginToken} />
       )}
-      {!hideUsernamePasswordFields && parsedFlows.password && (
+      {showPassword && (
         <>
           <PasswordLoginForm
             defaultUsername={loginSearchParams.username}
             defaultEmail={loginSearchParams.email}
           />
           <span data-spacing-node />
-          {parsedFlows.sso && <OrDivider />}
+          {(showLegacySso || showOidc) && <OrDivider />}
         </>
       )}
-      {parsedFlows.sso && (
+      {showOidc && (
         <>
-          <SSOLogin
-            providers={parsedFlows.sso.identity_providers}
-            redirectUrl={ssoRedirectUrl}
-            action={SSOAction.LOGIN}
-            saveScreenSpace={parsedFlows.password !== undefined}
+          <OidcLoginButton
+            authMetadata={authMetadata}
+            homeserverUrl={baseUrl}
+            redirectUri={oidcRedirectUri}
+            label={`Continue with ${server}`}
+            notice={oidcNotice}
           />
           <span data-spacing-node />
         </>
       )}
-      {!parsedFlows.password && !parsedFlows.sso && (
+      {showLegacySso && (
+        <>
+          <SSOLogin
+            providers={parsedFlows.sso!.identity_providers}
+            redirectUrl={ssoRedirectUrl}
+            action={SSOAction.LOGIN}
+            saveScreenSpace={showPassword}
+          />
+          <span data-spacing-node />
+        </>
+      )}
+      {!showPassword && !showLegacySso && !showOidc && (
         <>
           <Text style={{ color: color.Critical.Main }}>
             {`This client does not support login on "${server}" homeserver. Password and SSO based login method not found.`}
@@ -98,9 +137,11 @@ export function Login() {
           <span data-spacing-node />
         </>
       )}
-      <Text align="Center">
-        Do not have an account? <Link to={registerUrl}>Register</Link>
-      </Text>
+      {!registrationUnavailable && (
+        <Text align="Center">
+          Do not have an account? <Link to={registerUrl}>Register</Link>
+        </Text>
+      )}
     </Box>
   );
 }

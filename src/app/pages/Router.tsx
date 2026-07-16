@@ -126,10 +126,14 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
       />
       <Route
         loader={({ request }) => {
-          // Allow reaching the login page with ?addAccount=1 even when already logged in
+          // Allow reaching the login page even when already logged in:
+          // - ?addAccount=1 to add another account (multi-account)
+          // - ?loginToken=... (delegated / SSO login token)
+          // - ?code=...&state=... (OIDC authorization-code callback, e.g. adding a second account)
           const url = new URL(request.url);
           if (url.searchParams.get('addAccount') === '1') return null;
           if (url.searchParams.has('loginToken')) return null;
+          if (url.searchParams.has('code') && url.searchParams.has('state')) return null;
           if (hasStoredSession()) return redirect(getHomePath());
           return null;
         }}

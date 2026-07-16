@@ -119,6 +119,14 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+const controllerRefreshed = localStorage.getItem('controllerRefreshed') === 'true';
+
+if (!navigator.serviceWorker.controller && !controllerRefreshed) {
+  localStorage.setItem('controllerRefreshed', 'true');
+  window.location.reload();
+}
+if (navigator.serviceWorker.controller) localStorage.setItem('controllerRefreshed', 'false');
+
 const injectIOSMetaTags = () => {
   const metaTags = [
     { name: 'theme-color', content: '#0C0B0F' },

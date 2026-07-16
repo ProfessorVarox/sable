@@ -43,6 +43,7 @@ import {
 } from '$utils/notificationStyle';
 import * as Sentry from '@sentry/react';
 import { startClient, stopClient } from '$client/initMatrix';
+import { SessionOidcTokenRefresher } from '$client/oidcTokenRefresher';
 import { useClientConfig } from '$hooks/useClientConfig';
 import { mobileOrTablet } from '$utils/user-agent';
 
@@ -71,13 +72,20 @@ const startBackgroundClient = async (
     dbName: storeName.sync,
   });
 
+  const tokenRefresher =
+    session.oidc && session.refreshToken ? new SessionOidcTokenRefresher(session) : undefined;
+
   const mx = createClient({
     baseUrl: session.baseUrl,
     accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
     userId: session.userId,
     deviceId: session.deviceId,
     store: indexedDBStore,
     timelineSupport: false,
+    tokenRefreshFunction: tokenRefresher
+      ? (refreshToken) => tokenRefresher.doRefreshAccessToken(refreshToken)
+      : undefined,
   });
 
   const startOpts = {

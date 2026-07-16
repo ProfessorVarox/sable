@@ -1393,11 +1393,9 @@ export function Sync() {
   const handleSetSlidingSync = (value: boolean) => {
     if (!activeSession) return;
     setSessions({
-      type: 'PUT',
-      session: {
-        ...activeSession,
-        slidingSyncOptIn: value,
-      },
+      type: 'UPDATE',
+      userId: activeSession.userId,
+      patch: { slidingSyncOptIn: value },
     });
     window.location.reload();
   };

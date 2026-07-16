@@ -31,6 +31,7 @@ import { stopPropagation } from '$utils/keyboard';
 import { decryptFile, downloadEncryptedMedia, downloadMedia, mxcUrlToHttp } from '$utils/matrix';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { ModalWide } from '$styles/Modal.css';
+import { getDownloadFilename } from '$utils/download';
 
 const renderErrorButton = (retry: () => void, text: string) => (
   <TooltipProvider
@@ -257,7 +258,7 @@ export function DownloadFile({ body, mimeType, url, info, encInfo }: DownloadFil
         : await downloadMedia(mediaUrl);
 
       const fileURL = URL.createObjectURL(fileContent);
-      FileSaver.saveAs(fileURL, body);
+      FileSaver.saveAs(fileURL, getDownloadFilename(body));
       return fileURL;
     }, [mx, url, useAuthentication, mimeType, encInfo, body])
   );
@@ -272,7 +273,7 @@ export function DownloadFile({ body, mimeType, url, info, encInfo }: DownloadFil
       size="400"
       onClick={() =>
         downloadState.status === AsyncStatus.Success
-          ? FileSaver.saveAs(downloadState.data, body)
+          ? FileSaver.saveAs(downloadState.data, getDownloadFilename(body))
           : download()
       }
       disabled={downloadState.status === AsyncStatus.Loading}

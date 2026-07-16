@@ -230,6 +230,7 @@ export interface Settings {
 
   // furry stuff
   renderAnimals: boolean;
+  animalKind: string | undefined;
 
   // theme catalog
   themeCatalogOnboardingDone: boolean;
@@ -392,6 +393,7 @@ export const defaultSettings: Settings = {
   sendIndividualAttachmentAsCaption: true,
   // furry stuff
   renderAnimals: true,
+  animalKind: undefined,
 
   // theme catalog
   themeCatalogOnboardingDone: false,

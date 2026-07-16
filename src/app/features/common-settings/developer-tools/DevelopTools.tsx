@@ -55,7 +55,6 @@ export function DeveloperTools({ requestClose }: DeveloperToolsProps) {
       const stateEvents = await mx.roomState(room.roomId);
       const stateMap = new Map();
       for (const event of stateEvents) {
-        if (event.type === 'm.room.member') continue;
         let kToE = stateMap.get(event.type);
         if (!kToE) {
           kToE = new Map();

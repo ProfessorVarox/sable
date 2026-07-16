@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { atom } from 'jotai';
+import type { IdTokenClaims } from '$types/matrix-sdk';
 import { createLogger } from '$utils/debug';
 import {
   atomWithLocalStorage,
@@ -8,6 +9,12 @@ import {
 } from './utils/atomWithLocalStorage';
 
 const log = createLogger('sessions');
+
+export type OidcSessionInfo = {
+  issuer: string;
+  clientId: string;
+  idTokenClaims?: IdTokenClaims;
+};
 
 export type Session = {
   baseUrl: string;
@@ -18,6 +25,7 @@ export type Session = {
   refreshToken?: string;
   fallbackSdkStores?: boolean;
   slidingSyncOptIn?: boolean;
+  oidc?: OidcSessionInfo;
 };
 
 export type Sessions = Session[];
@@ -117,6 +125,12 @@ export type SessionsAction =
       session: Session;
     }
   | {
+      // Merge a field change into an existing session without clobbering rotated tokens.
+      type: 'UPDATE';
+      userId: string;
+      patch: Partial<Session>;
+    }
+  | {
       type: 'DELETE';
       session: Session;
     };
@@ -139,6 +153,14 @@ export const sessionsAtom = atom<Sessions, [SessionsAction], void>(
       set(baseSessionsAtom, sessions);
       return;
     }
+    if (action.type === 'UPDATE') {
+      const sessions = [...get(baseSessionsAtom)];
+      const sessionIndex = sessions.findIndex((session) => session.userId === action.userId);
+      if (sessionIndex === -1) return;
+      sessions.splice(sessionIndex, 1, { ...sessions[sessionIndex]!, ...action.patch });
+      set(baseSessionsAtom, sessions);
+      return;
+    }
     if (action.type === 'DELETE') {
       log.log('DELETE session', action.session.userId);
       const sessions = get(baseSessionsAtom).filter(
@@ -148,6 +170,30 @@ export const sessionsAtom = atom<Sessions, [SessionsAction], void>(
     }
   }
 );
+
+// Runs outside React (token refresher), so it writes localStorage directly; the synthetic storage
+// event makes the mounted atom re-read so its in-memory copy cannot later clobber the new tokens.
+export const updateSessionTokens = (
+  userId: string,
+  tokens: { accessToken: string; refreshToken?: string; expiresInMs?: number }
+): void => {
+  const sessions = getLocalStorageItem<Sessions>(MATRIX_SESSIONS_KEY, []);
+  const index = sessions.findIndex((session) => session.userId === userId);
+  if (index === -1) return;
+  sessions[index] = {
+    ...sessions[index]!,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken ?? sessions[index]!.refreshToken,
+    expiresInMs: tokens.expiresInMs ?? sessions[index]!.expiresInMs,
+  };
+  setLocalStorageItem(MATRIX_SESSIONS_KEY, sessions);
+  window.dispatchEvent(new StorageEvent('storage', { key: MATRIX_SESSIONS_KEY }));
+};
+
+export const getStoredSessionRefreshToken = (userId: string): string | undefined =>
+  getLocalStorageItem<Sessions>(MATRIX_SESSIONS_KEY, []).find(
+    (session) => session.userId === userId
+  )?.refreshToken;
 
 export const ACTIVE_SESSION_KEY = 'matrixActiveSession';
 const baseActiveSessionAtom = atomWithLocalStorage<string | undefined>(

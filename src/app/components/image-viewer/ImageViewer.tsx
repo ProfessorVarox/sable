@@ -37,16 +37,18 @@ import { CheckerboardIcon, CopyIcon, DownloadIcon } from '@phosphor-icons/react'
 import FocusTrap from 'focus-trap-react';
 import { stopPropagation } from '$utils/keyboard';
 import { copyImageToClipboard } from '$utils/dom';
+import { getDownloadFilename } from '$utils/download';
 
 export type ImageViewerProps = {
   alt: string;
+  filename?: string;
   src: string;
   requestClose: () => void;
   info?: IImageInfo;
 };
 
 export const ImageViewer = as<'div', ImageViewerProps>(
-  ({ className, alt, src, requestClose, info, ...props }, ref) => {
+  ({ className, alt, filename, src, requestClose, info, ...props }, ref) => {
     const zoomInputRef = useRef<HTMLInputElement>(null);
     const [pixelatedImageRendering] = useSetting(settingsAtom, 'pixelatedImageRendering');
 
@@ -98,7 +100,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
 
     const handleDownload = async () => {
       const fileContent = await downloadMedia(src);
-      FileSaver.saveAs(fileContent, alt);
+      FileSaver.saveAs(fileContent, getDownloadFilename(filename, alt, 'image'));
     };
 
     const [menuAnchor, setMenuAnchor] = useState<RectCords>();

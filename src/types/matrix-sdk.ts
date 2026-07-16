@@ -44,7 +44,14 @@ export * from 'matrix-js-sdk/lib/@types/read_receipts';
 export * from 'matrix-js-sdk/lib/@types/membership';
 export * from 'matrix-js-sdk/lib/@types/registration';
 
-export * from 'matrix-js-sdk/lib/oidc/validate';
+export * from 'matrix-js-sdk/lib/oidc';
+
+// oidc-client-ts is a transitive dep (not resolvable here), so derive its type from the SDK.
+import type { completeAuthorizationCodeGrant } from 'matrix-js-sdk/lib/oidc';
+
+export type IdTokenClaims = Awaited<
+  ReturnType<typeof completeAuthorizationCodeGrant>
+>['idTokenClaims'];
 export { VerificationMethod } from 'matrix-js-sdk/lib/types';
 export * from 'matrix-js-sdk/lib/pushprocessor';
 export * from 'matrix-js-sdk/lib/common-crypto/CryptoBackend';

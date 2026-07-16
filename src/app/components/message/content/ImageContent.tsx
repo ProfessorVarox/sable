@@ -70,6 +70,7 @@ function thumbnailDimsForMaxEdge(
 type RenderViewerProps = {
   src: string;
   alt: string;
+  filename?: string;
   requestClose: () => void;
   info?: IImageInfo;
 };
@@ -84,6 +85,7 @@ type RenderImageProps = {
 };
 export type ImageContentProps = {
   body?: string;
+  filename?: string;
   mimeType?: string;
   url: string;
   info?: IImageInfo;
@@ -104,6 +106,7 @@ export const ImageContent = as<'div', ImageContentProps>(
       className,
       style,
       body,
+      filename,
       mimeType,
       url,
       info,
@@ -270,6 +273,7 @@ export const ImageContent = as<'div', ImageContentProps>(
                   {renderViewer({
                     src: viewerFullSrc ?? srcState.data,
                     alt: body ?? '',
+                    filename,
                     requestClose: () => setViewer(false),
                     info: info,
                   })}

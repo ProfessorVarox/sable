@@ -65,6 +65,7 @@ import {
   UserIcon,
 } from '@phosphor-icons/react';
 import * as css from './UserMenuTab.css';
+import { getMxIdServer } from '$utils/mxIdHelper';
 
 const log = createLogger('AccountSwitcherTab');
 
@@ -643,6 +644,7 @@ export function UserMenuTab({ isBottom, isMobile }: { isBottom?: boolean; isMobi
   const navigate = useNavigate();
 
   const userId = mx.getUserId() ?? '';
+  const server = getMxIdServer(userId);
   const profile = useUserProfile(userId);
   const presence = useUserPresence(userId);
   const currentPresence = presence?.presence ?? Presence.Online;
@@ -761,7 +763,7 @@ export function UserMenuTab({ isBottom, isMobile }: { isBottom?: boolean; isMobi
                     allowEditing={true}
                   />
                   <Box style={{ padding: `0 ${config.space.S400} 0` }}>
-                    <GlobalUserHeroName displayName={displayName} userId={userId} />
+                    <GlobalUserHeroName displayName={displayName} userId={userId} server={server} />
                   </Box>
                 </Box>
 

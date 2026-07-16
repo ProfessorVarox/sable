@@ -318,28 +318,34 @@ function UserHeroNameInner({
         )}
       </Box>
       <Box alignItems="Center" gap="100" wrap="Wrap">
-        <Text size="T200" className={classNames(BreakWord, LineClamp3)} title={username}>
-          <Chip
-            onClick={() => {
-              if (username && server) {
-                copyToClipboard(`@${username}:${server}`);
-                isSuccess.current = true;
-              } else isSuccess.current = false;
-              setCopied();
-            }}
-            style={{ backgroundColor: 'transparent', padding: '0' }}
-            onPointerEnter={() => setIsHovered(true)}
-            onPointerLeave={() => setIsHovered(false)}
-            before={`@${username}`}
-            after={
-              copied || isHovered ? (
-                profileIcon(copied ? (isSuccess ? Check : CrossIcon) : CopyIcon)
-              ) : (
-                <></>
-              )
-            }
-          />
-        </Text>
+        <Chip
+          onClick={(evt) => {
+            evt.stopPropagation();
+            if (username && server) {
+              copyToClipboard(`@${username}:${server}`);
+              isSuccess.current = true;
+            } else isSuccess.current = false;
+            setCopied();
+          }}
+          style={{ backgroundColor: 'transparent', color: 'inherit', padding: '0' }}
+          onPointerEnter={() => setIsHovered(true)}
+          onPointerLeave={() => setIsHovered(false)}
+          before={
+            <Text
+              size="T200"
+              className={classNames(BreakWord, LineClamp3)}
+              title={username}
+              truncate
+            >{`@${username}`}</Text>
+          }
+          after={
+            copied || isHovered ? (
+              profileIcon(copied ? (isSuccess ? Check : CrossIcon) : CopyIcon)
+            ) : (
+              <></>
+            )
+          }
+        />
       </Box>
     </Box>
   );

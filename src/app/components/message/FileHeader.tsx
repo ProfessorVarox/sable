@@ -9,6 +9,7 @@ import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { decryptFile, downloadEncryptedMedia, downloadMedia, mxcUrlToHttp } from '$utils/matrix';
+import { getDownloadFilename } from '$utils/download';
 
 const badgeStyles = { maxWidth: toRem(100) };
 
@@ -31,7 +32,7 @@ export function FileDownloadButton({ filename, url, mimeType, encInfo }: FileDow
         : await downloadMedia(mediaUrl);
 
       const fileURL = URL.createObjectURL(fileContent);
-      FileSaver.saveAs(fileURL, filename);
+      FileSaver.saveAs(fileURL, getDownloadFilename(filename));
       return fileURL;
     }, [mx, url, useAuthentication, mimeType, encInfo, filename])
   );

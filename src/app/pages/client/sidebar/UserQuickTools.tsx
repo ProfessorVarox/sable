@@ -55,6 +55,8 @@ export function UserQuickTools({
               <>
                 <UserMenuTab isBottom />
                 <Box
+                  shrink="No"
+                  grow="No"
                   style={{
                     gap: config.space.S300,
                   }}

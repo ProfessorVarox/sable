@@ -37,6 +37,7 @@ import { unwrapForwardedContent } from './modals/MessageForward';
 import { LINKINPUTREGEX } from '$components/editor';
 import { MATRIX_TO_BASE } from '$plugins/matrix-to';
 import { copyToClipboard } from '$utils/dom';
+import { getAttachmentFilename } from '$utils/download';
 import { MapContainer, Marker, TileLayer } from 'react-leaflet';
 import type { LatLngExpression } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -447,6 +448,7 @@ export function MImage({ content, renderImageContent, outlined, fitParent }: MIm
   // this garbage is for portrait images, we cap the width so the card doesn't exceed the bounds of the image
   const displayWidth = imgH > imgW ? Math.round(MAX_SIZE * (imgW / imgH)) : MAX_SIZE;
   const height = scaleYDimension(imgInfo?.w || 400, displayWidth, imgInfo?.h || 400);
+  const filename = getAttachmentFilename(content.filename, content.body, 'Image');
 
   return (
     <Attachment
@@ -468,6 +470,7 @@ export function MImage({ content, renderImageContent, outlined, fitParent }: MIm
       >
         {renderImageContent({
           body: content.body || content.filename || 'Image',
+          filename,
           info: imgInfo,
           mimeType: imgInfo?.mimetype,
           url: mxcUrl,
@@ -511,7 +514,7 @@ export function MVideo({ content, renderAsFile, renderVideoContent, outlined }: 
   const displayWidth = Math.min(videoInfo.w || 400, 400);
   const height = Math.min(scaleYDimension(videoInfo.w || 400, 400, videoInfo.h || 400), 400);
 
-  const filename = content.filename ?? content.body ?? 'Video';
+  const filename = getAttachmentFilename(content.filename, content.body, 'Video');
 
   return (
     <Attachment
@@ -611,7 +614,7 @@ export function MAudio({
     return <BrokenContent body={content.body ?? content.filename} />;
   }
 
-  const filename = content.filename ?? content.body ?? 'Audio';
+  const filename = getAttachmentFilename(content.filename, content.body, 'Audio');
   const durationMs = getAudioDurationMs(content, audioInfo);
   const resolvedInfo =
     durationMs !== undefined ? { ...audioInfo, duration: durationMs } : audioInfo;
@@ -669,18 +672,17 @@ export function MFile({ content, renderFileContent, outlined }: MFileProps) {
     return <BrokenContent body={content.body ?? content.filename} />;
   }
 
+  const filename = getAttachmentFilename(content.filename, content.body, 'File');
+
   return (
     <Attachment outlined={outlined} style={{ width: toRem(400), height: 'auto' }}>
       <AttachmentHeader>
-        <FileHeader
-          body={content.filename ?? content.body ?? 'Unnamed File'}
-          mimeType={fileInfo?.mimetype ?? FALLBACK_MIMETYPE}
-        />
+        <FileHeader body={filename} mimeType={fileInfo?.mimetype ?? FALLBACK_MIMETYPE} />
       </AttachmentHeader>
       <AttachmentBox>
         <AttachmentContent>
           {renderFileContent({
-            body: content.body ?? content.filename ?? 'File',
+            body: filename,
             info: fileInfo ?? {},
             mimeType: fileInfo?.mimetype ?? FALLBACK_MIMETYPE,
             url: mxcUrl,
