@@ -2,16 +2,19 @@ import type { MatrixClient } from '$types/matrix-sdk';
 
 export type SortFunc<T> = (a: T, b: T) => number;
 
+const getRoomActivity = (mx: MatrixClient, roomId: string): number => {
+  const room = mx.getRoom(roomId);
+  if (!room) return Number.MIN_SAFE_INTEGER;
+  const timelineTimestamp = room.getLastActiveTimestamp();
+  return timelineTimestamp === Number.MIN_SAFE_INTEGER
+    ? (room.getBumpStamp() ?? Number.MIN_SAFE_INTEGER)
+    : timelineTimestamp;
+};
+
 export const factoryRoomIdByActivity =
   (mx: MatrixClient): SortFunc<string> =>
   (a, b) => {
-    const room1 = mx.getRoom(a);
-    const room2 = mx.getRoom(b);
-
-    return (
-      (room2?.getLastActiveTimestamp() ?? Number.MIN_SAFE_INTEGER) -
-      (room1?.getLastActiveTimestamp() ?? Number.MIN_SAFE_INTEGER)
-    );
+    return getRoomActivity(mx, b) - getRoomActivity(mx, a);
   };
 
 export const factoryRoomIdByAtoZ =

@@ -175,7 +175,7 @@ import {
   getGalleryItemContent,
 } from './msgContent';
 import { outgoingMessageTransforms } from './outgoingMessageTransforms';
-import { getKlipyMxcUrl } from '$utils/klipy';
+import { getSendableKlipyMxcUrl } from '$utils/klipy';
 import { CommandAutocomplete } from './CommandAutocomplete';
 import type {
   AudioMessageRecorderHandle,
@@ -1384,9 +1384,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     };
 
     const handleGifSelect = async (gif: GifData, spoiler?: boolean) => {
-      const url = getKlipyMxcUrl(gif.url, clientConfig.gifs?.proxyUrl);
+      const url = getSendableKlipyMxcUrl(gif.url, clientConfig.gifs?.proxyUrl);
+      if (!url) return;
 
       const content = await getGifMsgContent(mx, gif, url, spoiler);
+      if (!content) return;
 
       await handleSendContents([content]);
     };

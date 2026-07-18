@@ -355,6 +355,7 @@ export function useProcessedTimeline({
 
   return useMemo(() => {
     let prevEvent: MatrixEvent | undefined;
+    let prevIteratedEventId: string | undefined;
     let isPrevRendered = false;
     let newDivider = false;
     let dayDivider = false;
@@ -372,6 +373,13 @@ export function useProcessedTimeline({
 
       const mEventId = mEvent.getId();
       if (!mEventId) return acc;
+
+      // Track every iterated event, not just rendered ones: the read receipt
+      // may point at an event that never renders (reaction, edit, thread reply).
+      if (!newDivider && readUptoEventId) {
+        newDivider = prevIteratedEventId === readUptoEventId;
+      }
+      prevIteratedEventId = mEventId;
 
       const eventSender = mEvent.getSender() ?? null;
 
@@ -465,11 +473,6 @@ export function useProcessedTimeline({
         )
       )
         return acc;
-
-      if (!newDivider && readUptoEventId) {
-        const prevId = prevEvent ? prevEvent.getId() : undefined;
-        newDivider = prevId === readUptoEventId;
-      }
 
       if (!dayDivider) {
         dayDivider = prevEvent ? !inSameDay(prevEvent.getTs(), mEvent.getTs()) : false;

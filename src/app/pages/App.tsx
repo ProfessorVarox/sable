@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useRef } from 'react';
+import { lazy, Suspense, useCallback, useMemo, useRef } from 'react';
 import { Provider as JotaiProvider } from 'jotai';
 import { createStore } from 'jotai/vanilla';
 import { OverlayContainerProvider, PopOutContainerProvider, TooltipContainerProvider } from 'folds';
@@ -14,7 +14,6 @@ import type { ScreenSize } from '$hooks/useScreenSize';
 import { ScreenSizeProvider, useScreenSize } from '$hooks/useScreenSize';
 import { useCompositionEndTracking } from '$hooks/useComposingCheck';
 import { ErrorPage } from '$components/DefaultErrorPage';
-import { ConfigConfigError, ConfigConfigLoading } from './ConfigConfig';
 import { FeatureCheck } from './FeatureCheck';
 import { createRouter } from './Router';
 import { isReactQueryDevtoolsEnabled } from './reactQueryDevtoolsGate';
@@ -36,23 +35,22 @@ function BootstrappedAppShell({ clientConfig, screenSize }: BootstrappedAppShell
   const jotaiStoreRef = useRef<ReturnType<typeof createStore>>();
   if (!jotaiStoreRef.current) {
     jotaiStoreRef.current = createStore();
+    bootstrapSettingsStore(jotaiStoreRef.current, clientConfig.settingsDefaults);
   }
-  bootstrapSettingsStore(jotaiStoreRef.current, clientConfig.settingsDefaults);
+  const router = useMemo(() => createRouter(clientConfig, screenSize), [clientConfig, screenSize]);
   const reactQueryDevtoolsEnabled = isReactQueryDevtoolsEnabled();
 
   return (
-    <ClientConfigProvider value={clientConfig}>
-      <QueryClientProvider client={queryClient}>
-        <JotaiProvider store={jotaiStoreRef.current}>
-          <RouterProvider router={createRouter(clientConfig, screenSize)} />
-        </JotaiProvider>
-        {reactQueryDevtoolsEnabled && (
-          <Suspense fallback={null}>
-            <ReactQueryDevtools initialIsOpen={false} />
-          </Suspense>
-        )}
-      </QueryClientProvider>
-    </ClientConfigProvider>
+    <QueryClientProvider client={queryClient}>
+      <JotaiProvider store={jotaiStoreRef.current}>
+        <RouterProvider router={router} />
+      </JotaiProvider>
+      {reactQueryDevtoolsEnabled && (
+        <Suspense fallback={null}>
+          <ReactQueryDevtools initialIsOpen={false} />
+        </Suspense>
+      )}
+    </QueryClientProvider>
   );
 }
 
@@ -65,28 +63,20 @@ function renderSentryErrorFallback({ error, eventId }: { error: unknown; eventId
   );
 }
 
-function appConfigFallback() {
-  return <ConfigConfigLoading />;
-}
-
-function appConfigError(err: unknown, retry: () => void, ignore: () => void) {
-  return <ConfigConfigError error={err} retry={retry} ignore={ignore} />;
-}
-
-function AppConfigLoaded({ clientConfig, screenSize }: BootstrappedAppShellProps) {
-  setMatrixToBase(clientConfig.matrixToBaseUrl);
-  return <BootstrappedAppShell clientConfig={clientConfig} screenSize={screenSize} />;
-}
-
 function App() {
   const screenSize = useScreenSize();
   useCompositionEndTracking();
   const portalContainer = document.getElementById('portalContainer') ?? undefined;
 
-  const renderAppConfig = useCallback(
-    (clientConfig: ClientConfig) => (
-      <AppConfigLoaded clientConfig={clientConfig} screenSize={screenSize} />
-    ),
+  const renderConfiguredApp = useCallback(
+    (clientConfig: ClientConfig) => {
+      setMatrixToBase(clientConfig.matrixToBaseUrl);
+      return (
+        <ClientConfigProvider value={clientConfig}>
+          <BootstrappedAppShell clientConfig={clientConfig} screenSize={screenSize} />
+        </ClientConfigProvider>
+      );
+    },
     [screenSize]
   );
 
@@ -97,9 +87,7 @@ function App() {
           <OverlayContainerProvider value={portalContainer}>
             <ScreenSizeProvider value={screenSize}>
               <FeatureCheck>
-                <ClientConfigLoader fallback={appConfigFallback} error={appConfigError}>
-                  {renderAppConfig}
-                </ClientConfigLoader>
+                <ClientConfigLoader>{renderConfiguredApp}</ClientConfigLoader>
               </FeatureCheck>
             </ScreenSizeProvider>
           </OverlayContainerProvider>

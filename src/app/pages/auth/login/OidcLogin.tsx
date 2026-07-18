@@ -83,8 +83,9 @@ export function OidcLoginButton({
 type OidcCallbackProps = {
   code: string;
   state: string;
+  slidingSyncOptIn: boolean;
 };
-export function OidcCallback({ code, state }: OidcCallbackProps) {
+export function OidcCallback({ code, state, slidingSyncOptIn }: OidcCallbackProps) {
   const commitSession = useCommitLoginSession();
   const server = useAuthServer();
   const navigate = useNavigate();
@@ -99,9 +100,9 @@ export function OidcCallback({ code, state }: OidcCallbackProps) {
 
   useEffect(() => {
     if (loginState.status === AsyncStatus.Success) {
-      commitSession(loginState.data.session);
+      commitSession(loginState.data.session, slidingSyncOptIn);
     }
-  }, [loginState, commitSession]);
+  }, [loginState, slidingSyncOptIn, commitSession]);
 
   return (
     <>

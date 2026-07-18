@@ -116,6 +116,10 @@ export function BrokenContent({ body }: BrokenContentProps) {
   );
 }
 
+function getIncomingMediaMxcUrl(url: unknown): string | undefined {
+  return typeof url === 'string' && url.startsWith('mxc://') ? url : undefined;
+}
+
 type RenderBodyProps = {
   body: string;
   customBody?: string;
@@ -437,8 +441,8 @@ type MImageProps = {
 };
 export function MImage({ content, renderImageContent, outlined, fitParent }: MImageProps) {
   const imgInfo = content?.info;
-  const mxcUrl = content.file?.url ?? content.url;
-  if (typeof mxcUrl !== 'string') {
+  const mxcUrl = getIncomingMediaMxcUrl(content.file?.url ?? content.url);
+  if (!mxcUrl) {
     return <BrokenContent body={content.body ?? content.filename} />;
   }
   const MAX_SIZE = 400;
@@ -501,15 +505,13 @@ type MVideoProps = {
 };
 export function MVideo({ content, renderAsFile, renderVideoContent, outlined }: MVideoProps) {
   const videoInfo = content?.info;
-  const mxcUrl = content.file?.url ?? content.url;
+  const mxcUrl = getIncomingMediaMxcUrl(content.file?.url ?? content.url);
   const safeMimeType = getBlobSafeMimeType(videoInfo?.mimetype ?? '');
 
-  if (!videoInfo || !safeMimeType.startsWith('video') || typeof mxcUrl !== 'string') {
-    if (mxcUrl) {
-      return renderAsFile();
-    }
+  if (!mxcUrl) {
     return <BrokenContent body={content.body ?? content.filename} />;
   }
+  if (!videoInfo || !safeMimeType.startsWith('video')) return renderAsFile();
 
   const displayWidth = Math.min(videoInfo.w || 400, 400);
   const height = Math.min(scaleYDimension(videoInfo.w || 400, 400, videoInfo.h || 400), 400);
@@ -604,15 +606,13 @@ export function MAudio({
   fitParent,
 }: MAudioProps) {
   const audioInfo = content?.info;
-  const mxcUrl = content.file?.url ?? content.url;
+  const mxcUrl = getIncomingMediaMxcUrl(content.file?.url ?? content.url);
   const safeMimeType = getBlobSafeMimeType(audioInfo?.mimetype ?? '');
 
-  if (!audioInfo || !safeMimeType.startsWith('audio') || typeof mxcUrl !== 'string') {
-    if (mxcUrl) {
-      return renderAsFile();
-    }
+  if (!mxcUrl) {
     return <BrokenContent body={content.body ?? content.filename} />;
   }
+  if (!audioInfo || !safeMimeType.startsWith('audio')) return renderAsFile();
 
   const filename = getAttachmentFilename(content.filename, content.body, 'Audio');
   const durationMs = getAudioDurationMs(content, audioInfo);
@@ -652,7 +652,7 @@ export function MAudio({
 }
 
 type RenderFileContentProps = {
-  body: string;
+  fileName: string;
   info: IFileInfo & IThumbnailContent;
   mimeType: string;
   url: string;
@@ -666,9 +666,9 @@ type MFileProps = {
 };
 export function MFile({ content, renderFileContent, outlined }: MFileProps) {
   const fileInfo = content?.info;
-  const mxcUrl = content.file?.url ?? content.url;
+  const mxcUrl = getIncomingMediaMxcUrl(content.file?.url ?? content.url);
 
-  if (typeof mxcUrl !== 'string') {
+  if (!mxcUrl) {
     return <BrokenContent body={content.body ?? content.filename} />;
   }
 
@@ -682,7 +682,7 @@ export function MFile({ content, renderFileContent, outlined }: MFileProps) {
       <AttachmentBox>
         <AttachmentContent>
           {renderFileContent({
-            body: filename,
+            fileName: filename,
             info: fileInfo ?? {},
             mimeType: fileInfo?.mimetype ?? FALLBACK_MIMETYPE,
             url: mxcUrl,
@@ -778,8 +778,8 @@ type MStickerProps = {
 };
 export function MSticker({ content, renderImageContent }: MStickerProps) {
   const imgInfo = content?.info;
-  const mxcUrl = content.file?.url ?? content.url;
-  if (typeof mxcUrl !== 'string') {
+  const mxcUrl = getIncomingMediaMxcUrl(content.file?.url ?? content.url);
+  if (!mxcUrl) {
     return <MessageBrokenContent body={content.body} />;
   }
   const height = scaleYDimension(imgInfo?.w || 152, 152, imgInfo?.h || 152);

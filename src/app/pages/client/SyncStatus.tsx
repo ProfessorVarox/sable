@@ -1,6 +1,6 @@
 import type { MatrixClient } from '$types/matrix-sdk';
 import { SyncState } from '$types/matrix-sdk';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Box, config, Line, Text } from 'folds';
 import * as Sentry from '@sentry/react';
 import { useSyncState } from '$hooks/useSyncState';
@@ -9,25 +9,46 @@ import { ContainerColor } from '$styles/ContainerColor.css';
 type StateData = {
   current: SyncState | null;
   previous: SyncState | null | undefined;
+  showConnecting: boolean;
 };
+
+export const shouldShowConnecting = (
+  hasConnected: boolean,
+  current: SyncState | null,
+  previous: SyncState | null | undefined
+): boolean =>
+  hasConnected &&
+  (current === SyncState.Prepared ||
+    current === SyncState.Syncing ||
+    current === SyncState.Catchup) &&
+  previous !== SyncState.Syncing;
 
 type SyncStatusProps = {
   mx: MatrixClient;
 };
 export function SyncStatus({ mx }: SyncStatusProps) {
+  const hasConnectedRef = useRef(false);
   const [stateData, setStateData] = useState<StateData>({
     current: null,
     previous: undefined,
+    showConnecting: false,
   });
 
   useSyncState(
     mx,
     useCallback((current, previous) => {
+      const showConnecting = shouldShowConnecting(hasConnectedRef.current, current, previous);
+      if (current === SyncState.Syncing) hasConnectedRef.current = true;
+
       setStateData((s) => {
-        if (s.current === current && s.previous === previous) {
+        if (
+          s.current === current &&
+          s.previous === previous &&
+          s.showConnecting === showConnecting
+        ) {
           return s;
         }
-        return { current, previous };
+        return { current, previous, showConnecting };
       });
 
       if (current === SyncState.Reconnecting || current === SyncState.Error) {
@@ -44,12 +65,7 @@ export function SyncStatus({ mx }: SyncStatusProps) {
     }, [])
   );
 
-  if (
-    (stateData.current === SyncState.Prepared ||
-      stateData.current === SyncState.Syncing ||
-      stateData.current === SyncState.Catchup) &&
-    stateData.previous !== SyncState.Syncing
-  ) {
+  if (stateData.showConnecting) {
     return (
       <Box direction="Column" shrink="No">
         <Box

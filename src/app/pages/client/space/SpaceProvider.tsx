@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
+import { Spinner } from 'folds';
 import { useParams } from 'react-router-dom';
 import { useAtomValue } from 'jotai';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { allRoomsAtom } from '$state/room-list/roomList';
-import { useSelectedSpace } from '$hooks/router/useSelectedSpace';
+import { useResolvedSelectedSpace } from '$hooks/router/useResolvedRoomId';
 import { SpaceProvider } from '$hooks/useSpace';
 import { JoinBeforeNavigate } from '$features/join-before-navigate';
 import { useSearchParamsViaServers } from '$hooks/router/useSearchParamsViaServers';
@@ -19,8 +20,10 @@ export function RouteSpaceProvider({ children }: RouteSpaceProviderProps) {
   const spaceIdOrAlias = encodedSpaceIdOrAlias && decodeURIComponent(encodedSpaceIdOrAlias);
   const viaServers = useSearchParamsViaServers();
 
-  const selectedSpaceId = useSelectedSpace();
+  const { roomId: selectedSpaceId, resolving } = useResolvedSelectedSpace();
   const space = mx.getRoom(selectedSpaceId);
+
+  if (resolving) return <Spinner variant="Secondary" size="600" />;
 
   if (!space || !allRooms.includes(space.roomId)) {
     return <JoinBeforeNavigate roomIdOrAlias={spaceIdOrAlias ?? ''} viaServers={viaServers} />;

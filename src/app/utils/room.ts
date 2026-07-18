@@ -27,6 +27,7 @@ import {
 
 import type { IRoomCreateContent, RoomToParents, UnreadInfo } from '$types/matrix/room';
 import { NotificationType } from '$types/matrix/room';
+import { getMxIdLocalPart } from '$utils/matrix';
 import * as Sentry from '@sentry/react';
 
 export const getStateEvent = (
@@ -457,10 +458,18 @@ export const getUnreadInfo = (room: Room, options?: UnreadInfoOptions): UnreadIn
     // If we have no read receipt, SDK counts may be unreliable. Always check timeline.
     if (!readUpToId) {
       const liveEvents = room.getLiveTimeline().getEvents();
-
-      const hasActivity = liveEvents.some(
-        (event) => event.getSender() !== userId && isNotificationEvent(event, room, userId)
-      );
+      const fullyReadEventId = room
+        .getAccountData(EventType.FullyRead)
+        ?.getContent<{ event_id?: string }>()?.event_id;
+      let hasActivity = false;
+      for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+        const event = liveEvents[i];
+        if (!event || event.getId() === fullyReadEventId) break;
+        if (event.getSender() !== userId && isNotificationEvent(event, room, userId)) {
+          hasActivity = true;
+          break;
+        }
+      }
 
       if (hasActivity) {
         // If SDK already has counts, use those. Otherwise show dot badge (count=1).
@@ -591,6 +600,17 @@ export const getMemberDisplayName = (
     return undefined;
   return name;
 };
+
+export const getTimelineSenderDisplayName = (
+  room: Room,
+  userId: string,
+  nicknames?: Record<string, string>,
+  profileDisplayName?: string
+): string =>
+  getMemberDisplayName(room, userId, nicknames) ??
+  profileDisplayName ??
+  getMxIdLocalPart(userId) ??
+  userId;
 
 export const getMemberSearchStr = (
   member: RoomMember,

@@ -128,7 +128,6 @@ const settingsLinkFocusIdsBySection: Record<SettingsSectionId, readonly string[]
     'catalog-themes',
     'catalog-tweaks',
     'theme-browse-remote',
-    'theme-catalog-clear-remote',
     'theme-chat-sable-widgets',
     'theme-chat-auto-approved',
     'theme-chat-auto-any',

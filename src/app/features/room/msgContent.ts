@@ -252,7 +252,9 @@ export const getGifMsgContent = async (
   gif: GifData,
   mxcUrl: string,
   spoiler?: boolean
-): Promise<IContent> => {
+): Promise<IContent | undefined> => {
+  if (!mxcUrl.startsWith('mxc://')) return undefined;
+
   const proxyUrl = mxcUrlToHttp(mx, mxcUrl, true);
   const [imgError, imgEl] = await to(loadImageElement(proxyUrl ?? gif.url, 'anonymous'));
   if (imgError) {

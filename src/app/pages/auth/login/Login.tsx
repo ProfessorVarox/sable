@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Box, Text, color } from 'folds';
+import { useMemo, useState } from 'react';
+import { Box, Switch, Text, Tooltip, TooltipProvider, color, config } from 'folds';
 import { Link, useSearchParams } from 'react-router-dom';
 import { SSOAction } from '$types/matrix-sdk';
 import { RegisterFlowStatus, useAuthFlows } from '$hooks/useAuthFlows';
@@ -15,6 +15,8 @@ import { OrDivider } from '$pages/auth/OrDivider';
 import { PasswordLoginForm } from './PasswordLoginForm';
 import { TokenLogin } from './TokenLogin';
 import { OidcLoginButton, OidcCallback } from './OidcLogin';
+import { sizedIcon, Info } from '$components/icons/phosphor';
+import { getPendingSlidingSyncLogin, setPendingSlidingSyncLogin } from './slidingSyncLogin';
 
 // react-router ignores the real query string in hashRouter mode, so read callback params direct.
 const getExternalSearchParams = () => {
@@ -38,6 +40,46 @@ const useLoginSearchParams = (searchParams: URLSearchParams): LoginPathSearchPar
     [searchParams]
   );
 
+type SlidingSyncLoginOptionProps = {
+  value: boolean;
+  onChange: (value: boolean) => void;
+};
+
+function SlidingSyncLoginOption({ value, onChange }: SlidingSyncLoginOptionProps) {
+  return (
+    <Box alignItems="Center" justifyContent="SpaceBetween" gap="300">
+      <Box alignItems="Center" gap="100">
+        <Text as="label" htmlFor="login-sliding-sync" priority="400">
+          Use sliding sync
+        </Text>
+        <TooltipProvider
+          delay={300}
+          tooltip={
+            <Tooltip style={{ maxWidth: '240px', padding: config.space.S200 }}>
+              <Text size="T200">
+                Sliding sync is faster and uses less bandwidth, but it can be buggier. You can
+                toggle it later in Settings at any time.
+              </Text>
+            </Tooltip>
+          }
+        >
+          {(triggerRef) => (
+            <span
+              ref={triggerRef}
+              role="img"
+              aria-label="About sliding sync"
+              style={{ display: 'inline-flex', color: color.Surface.OnContainer }}
+            >
+              {sizedIcon(Info, '100')}
+            </span>
+          )}
+        </TooltipProvider>
+      </Box>
+      <Switch variant="Primary" value={value} onChange={onChange} id="login-sliding-sync" />
+    </Box>
+  );
+}
+
 export function Login() {
   const server = useAuthServer();
   const { hashRouter } = useClientConfig();
@@ -51,6 +93,12 @@ export function Login() {
   const oidcRedirectUri = usePathWithOrigin(getLoginPath(server), { ignoreHashRouter: true });
   const external = getExternalSearchParams();
   const absoluteLoginPath = usePathWithOrigin(getLoginPath(server));
+  const [useSlidingSync, setUseSlidingSync] = useState(getPendingSlidingSyncLogin);
+
+  const handleSlidingSyncChange = (enabled: boolean) => {
+    setUseSlidingSync(enabled);
+    setPendingSlidingSyncLogin(enabled);
+  };
 
   if (hashRouter?.enabled && (external.loginToken || (external.code && external.state))) {
     window.location.replace(
@@ -85,7 +133,7 @@ export function Login() {
   const showLegacySso = !showOidc && parsedFlows.sso !== undefined;
 
   if (showOidc && oidcCode && oidcState) {
-    return <OidcCallback code={oidcCode} state={oidcState} />;
+    return <OidcCallback code={oidcCode} state={oidcState} slidingSyncOptIn={useSlidingSync} />;
   }
 
   return (
@@ -93,14 +141,21 @@ export function Login() {
       <Text size="H2" priority="400">
         Login
       </Text>
+      {!showPassword && (
+        <SlidingSyncLoginOption value={useSlidingSync} onChange={handleSlidingSyncChange} />
+      )}
       {parsedFlows.token && loginSearchParams.loginToken && (
-        <TokenLogin token={loginSearchParams.loginToken} />
+        <TokenLogin token={loginSearchParams.loginToken} slidingSyncOptIn={useSlidingSync} />
       )}
       {showPassword && (
         <>
           <PasswordLoginForm
             defaultUsername={loginSearchParams.username}
             defaultEmail={loginSearchParams.email}
+            slidingSyncOptIn={useSlidingSync}
+            slidingSyncOption={
+              <SlidingSyncLoginOption value={useSlidingSync} onChange={handleSlidingSyncChange} />
+            }
           />
           <span data-spacing-node />
           {(showLegacySso || showOidc) && <OrDivider />}

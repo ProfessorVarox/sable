@@ -399,6 +399,7 @@ export function useTimelineSync({
   >();
 
   const resetAutoScrollPendingRef = useRef(false);
+  const pendingAutoScrollBehaviorRef = useRef<'instant' | 'smooth' | undefined>(undefined);
 
   const eventsLength = getTimelinesEventsCount(timeline.linkedTimelines);
   const liveTimelineLinked = timeline.linkedTimelines.at(-1) === getLiveTimeline(room);
@@ -501,8 +502,10 @@ export function useTimelineSync({
             setUnreadInfo(getRoomUnreadInfo(room));
           }
 
-          scrollToBottom(mEvt.getSender() === mx.getUserId() ? 'instant' : 'smooth');
-          lastScrolledAtEventsLengthRef.current = eventsLengthRef.current + 1;
+          // Own messages should feel immediate, and unfocused windows throttle
+          // scroll animations, which can leave the view stuck mid-scroll.
+          pendingAutoScrollBehaviorRef.current =
+            mEvt.getSender() === mx.getUserId() || !document.hasFocus() ? 'instant' : 'smooth';
 
           setTimeline((ct) => ({ ...ct }));
           return;
@@ -513,7 +516,7 @@ export function useTimelineSync({
           setUnreadInfo(getRoomUnreadInfo(room));
         }
       },
-      [mx, room, isAtBottomRef, unreadInfo, scrollToBottom, setUnreadInfo, hideReadsRef]
+      [mx, room, isAtBottomRef, unreadInfo, setUnreadInfo, hideReadsRef]
     )
   );
 
@@ -562,6 +565,9 @@ export function useTimelineSync({
     const resetAutoScrollPending = resetAutoScrollPendingRef.current;
     if (resetAutoScrollPending) resetAutoScrollPendingRef.current = false;
 
+    const behavior = pendingAutoScrollBehaviorRef.current ?? 'instant';
+    pendingAutoScrollBehaviorRef.current = undefined;
+
     // liveTimelineLinked can be transiently false after TimelineReset: the SDK
     // fires the event before React commits the new linkedTimelines, so the stored
     // chain still references the old detached timeline. When auto-scroll recovery
@@ -576,7 +582,7 @@ export function useTimelineSync({
     if (eventsLength <= lastScrolledAtEventsLengthRef.current && !resetAutoScrollPending) return;
 
     lastScrolledAtEventsLengthRef.current = eventsLength;
-    scrollToBottom('instant');
+    scrollToBottom(behavior);
   }, [isAtBottom, liveTimelineLinked, eventsLength, scrollToBottom]);
 
   useEffect(() => {

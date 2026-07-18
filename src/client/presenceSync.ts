@@ -1,5 +1,12 @@
 import type { CryptoBackend, IDeviceLists, IToDeviceEvent, MatrixClient } from '$types/matrix-sdk';
-import { ClientEvent, Filter, Method, processToDeviceMessages, User } from '$types/matrix-sdk';
+import {
+  ClientEvent,
+  Filter,
+  Method,
+  processToDeviceMessages,
+  SetPresence,
+  User,
+} from '$types/matrix-sdk';
 import { createDebugLogger } from '$utils/debugLogger';
 
 const debugLog = createDebugLogger('presenceSync');
@@ -18,6 +25,12 @@ export class PresenceSyncManager {
   private disposed = false;
 
   private enabled = true;
+
+  private started = false;
+
+  private presence = SetPresence.Online;
+
+  private restartAfterRequest = false;
 
   private activeRequest: Promise<void> | null = null;
 
@@ -40,23 +53,40 @@ export class PresenceSyncManager {
     this.enabled = enabled;
 
     if (!enabled) {
+      this.restartAfterRequest = false;
       if (this.nextPollTimer !== undefined) clearTimeout(this.nextPollTimer);
       this.nextPollTimer = undefined;
       this.abortController?.abort();
       return;
     }
 
-    if (!this.activeRequest && !this.disposed) this.poll();
+    if (this.started && !this.activeRequest && !this.disposed) this.poll();
+  }
+
+  public setPresence(presence: SetPresence = SetPresence.Online): void {
+    if (this.presence === presence) return;
+    this.presence = presence;
+
+    if (!this.started || !this.enabled || this.disposed) return;
+    if (this.activeRequest) {
+      this.restartAfterRequest = true;
+      this.abortController?.abort();
+    } else {
+      this.poll();
+    }
   }
 
   public start(): void {
-    if (this.disposed || this.activeRequest || !this.enabled) return;
+    if (this.disposed || this.started) return;
+    this.started = true;
+    if (!this.enabled) return;
     this.poll();
   }
 
   public dispose(): void {
     this.disposed = true;
     this.enabled = false;
+    this.started = false;
     if (this.nextPollTimer !== undefined) clearTimeout(this.nextPollTimer);
     this.nextPollTimer = undefined;
     this.abortController?.abort();
@@ -135,7 +165,7 @@ export class PresenceSyncManager {
             filter: filterId,
             since: this.syncToken,
             timeout: this.pollTimeoutMs,
-            set_presence: 'online',
+            set_presence: this.presence,
           },
           undefined,
           { abortSignal: signal }
@@ -161,7 +191,10 @@ export class PresenceSyncManager {
       this.activeRequest = null;
       this.abortController = undefined;
 
-      if (this.enabled && !this.disposed) {
+      if (this.restartAfterRequest && this.started && this.enabled && !this.disposed) {
+        this.restartAfterRequest = false;
+        this.poll();
+      } else if (this.started && this.enabled && !this.disposed) {
         this.nextPollTimer = setTimeout(() => {
           this.nextPollTimer = undefined;
           this.poll();

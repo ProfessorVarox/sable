@@ -22,6 +22,7 @@ export * from 'matrix-js-sdk/lib/models/user';
 export * from 'matrix-js-sdk/lib/models/search-result';
 export * from 'matrix-js-sdk/lib/models/event-timeline';
 export * from 'matrix-js-sdk/lib/models/event-timeline-set';
+export { EventEmitterEvents } from 'matrix-js-sdk/lib/models/typed-event-emitter';
 export { Relations, RelationsEvent } from 'matrix-js-sdk/lib/models/relations';
 
 export * from 'matrix-js-sdk/lib/store/indexeddb';

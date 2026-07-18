@@ -28,6 +28,24 @@
 
     <link id="favicon" rel="shortcut icon" href="./public/favicon.png" />
 
+    <style>
+      html,
+      body {
+        background-color: #1b1a21;
+        background-image: radial-gradient(#2d2c36 2px, #1b1a21 2px);
+        background-size: 40px 40px;
+        color: #eae8f0;
+      }
+      @media (prefers-color-scheme: light) {
+        html,
+        body {
+          background-color: #ffffff;
+          background-image: radial-gradient(#e4e4e7 2px, #ffffff 2px);
+          color: #18181b;
+        }
+      }
+    </style>
+
     <link rel="manifest" href="/manifest.json" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="application-name" content="Sable" />

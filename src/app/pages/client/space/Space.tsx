@@ -107,6 +107,7 @@ import { CustomStateEvent } from '$types/matrix/room';
 import type { RoomBannerContent } from '$types/matrix-sdk-events';
 import { ModalWide } from '$styles/Modal.css';
 import { ImageViewer } from '$components/image-viewer';
+import { reportMediaLoadFailure } from '$utils/mediaLoadDiagnostics';
 import * as css from './styles.css';
 import { isResizingSidebarAtom } from '$state/isResizingSidebar';
 import { UserQuickTools } from '../sidebar/UserQuickTools';
@@ -285,7 +286,7 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
 
   const bannerState = useStateEvent(space, CustomStateEvent.RoomBanner);
   const bannerMXC = bannerState?.getContent<RoomBannerContent>()?.url;
-  const bannerURI = mxcUrlToHttp(mx, bannerMXC ?? '', true);
+  const bannerURI = mxcUrlToHttp(mx, bannerMXC ?? '', useAuthentication);
   const hasBanner = !!(bannerURI && !hideText && showBanners);
 
   const [bannerViewerOpen, setBannerViewerOpen] = useState(false);
@@ -388,7 +389,13 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
                   }
                 }}
               >
-                <img className={css.RoomCoverImage} src={bannerURI} alt="" draggable="false" />
+                <img
+                  className={css.RoomCoverImage}
+                  src={bannerURI}
+                  alt=""
+                  draggable="false"
+                  onError={() => reportMediaLoadFailure('room_banner')}
+                />
               </button>
               <SidebarResizer
                 setCurWidth={setCurHeight}

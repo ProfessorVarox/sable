@@ -49,8 +49,6 @@ import { useMessageSpacingItems } from '$hooks/useMessageSpacing';
 import { useDateFormatItems } from '$hooks/useDateFormat';
 import { SequenceCardStyle } from '$features/settings/styles.css';
 import { sessionsAtom, activeSessionIdAtom } from '$state/sessions';
-import { useClientConfig } from '$hooks/useClientConfig';
-import { resolveSlidingEnabled } from '$client/initMatrix';
 import { isKeyHotkey } from 'is-hotkey';
 import { settingsSyncLastSyncedAtom, settingsSyncStatusAtom } from '$hooks/useSettingsSync';
 import { exportSettingsAsJson, importSettingsFromJson } from '$utils/settingsSync';
@@ -1380,14 +1378,17 @@ function Embeds() {
   );
 }
 
-export function Sync() {
-  const clientConfig = useClientConfig();
+type GeneralProps = {
+  requestBack?: () => void;
+  requestClose: () => void;
+};
+
+function Sync() {
   const sessions = useAtomValue(sessionsAtom);
   const activeSessionId = useAtomValue(activeSessionIdAtom);
   const setSessions = useSetAtom(sessionsAtom);
   const activeSession = sessions.find((s) => s.userId === activeSessionId) ?? sessions[0];
 
-  const serverSlidingEnabled = resolveSlidingEnabled(clientConfig.slidingSync?.enabled);
   const useSlidingSync = activeSession?.slidingSyncOptIn === true;
 
   const handleSetSlidingSync = (value: boolean) => {
@@ -1400,76 +1401,6 @@ export function Sync() {
     window.location.reload();
   };
 
-  return (
-    <Box direction="Column" gap="100">
-      <Text size="L400" style={{ opacity: serverSlidingEnabled ? 1 : 0.5 }}>
-        Sync
-      </Text>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        style={{ opacity: serverSlidingEnabled ? 1 : 0.5 }}
-      >
-        <SettingTile
-          title="Use Sliding Sync"
-          focusId="use-sliding-sync"
-          description={
-            serverSlidingEnabled ? (
-              <>
-                Enable Sliding Sync for this current login/session. Requires server support and
-                admin configuration.{' '}
-                <a
-                  href="https://github.com/matrix-org/matrix-spec-proposals/blob/erikj/sss/proposals/4186-simplified-sliding-sync.md"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  More info/Documentation
-                </a>
-                .{' '}
-                <a
-                  href="https://github.com/SableClient/Sable/issues/39"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Known issues (Sable GitHub)
-                </a>
-                .
-              </>
-            ) : (
-              <>
-                Unavailable: the server has disabled Sliding Sync in its config.{' '}
-                <a
-                  href="https://github.com/matrix-org/matrix-spec-proposals/blob/erikj/sss/proposals/4186-simplified-sliding-sync.md"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  More info
-                </a>
-                .
-              </>
-            )
-          }
-          after={
-            <Switch
-              variant="Primary"
-              value={useSlidingSync}
-              onChange={handleSetSlidingSync}
-              disabled={!serverSlidingEnabled}
-            />
-          }
-        />
-      </SequenceCard>
-    </Box>
-  );
-}
-
-type GeneralProps = {
-  requestBack?: () => void;
-  requestClose: () => void;
-};
-
-function SettingsSyncSection() {
   const [syncEnabled, setSyncEnabled] = useSetting(settingsAtom, 'settingsSyncEnabled');
   const lastSynced = useAtomValue(settingsSyncLastSyncedAtom);
   const syncStatus = useAtomValue(settingsSyncStatusAtom);
@@ -1498,7 +1429,7 @@ function SettingsSyncSection() {
 
   return (
     <Box direction="Column" gap="100">
-      <Text size="L400">Settings Sync & Backup</Text>
+      <Text size="L400">Data Syncing</Text>
       <SequenceCard
         className={SequenceCardStyle}
         variant="SurfaceVariant"
@@ -1506,7 +1437,34 @@ function SettingsSyncSection() {
         gap="400"
       >
         <SettingTile
-          title="Sync across devices"
+          title="Use Sliding Sync"
+          focusId="use-sliding-sync"
+          description={
+            <>
+              Enable Sliding Sync for this current login/session. Requires server support.{' '}
+              <a
+                href="https://github.com/SableClient/Sable/issues/39"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Known issues (Sable GitHub)
+              </a>
+              .
+            </>
+          }
+          after={
+            <Switch variant="Primary" value={useSlidingSync} onChange={handleSetSlidingSync} />
+          }
+        />
+      </SequenceCard>
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="400"
+      >
+        <SettingTile
+          title="Sync settings across devices"
           focusId="sync-across-devices"
           description="Store your settings in your Matrix account so they follow you to any Sable instance. Notification and zoom preferences are kept per-device."
           after={<Switch variant="Primary" value={syncEnabled} onChange={setSyncEnabled} />}
@@ -1667,7 +1625,7 @@ export function General({ requestBack, requestClose }: Readonly<GeneralProps>) {
               <Messages />
               <Embeds />
               <Calls />
-              <SettingsSyncSection />
+              <Sync />
               <DiagnosticsAndPrivacy />
             </Box>
           </PageContent>

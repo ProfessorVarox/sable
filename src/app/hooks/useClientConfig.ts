@@ -27,18 +27,6 @@ export type ClientConfig = {
     webPushAppID?: string;
   };
 
-  slidingSync?: {
-    enabled?: boolean;
-    proxyBaseUrl?: string;
-    bootstrapClassicOnColdCache?: boolean;
-    listPageSize?: number;
-    timelineLimit?: number;
-    pollTimeoutMs?: number;
-    maxRooms?: number;
-    includeInviteList?: boolean;
-    probeTimeoutMs?: number;
-  };
-
   featuredCommunities?: {
     openAsDefault?: boolean;
     spaces?: string[];
@@ -59,17 +47,17 @@ export type ClientConfig = {
   settingsDefaults?: Partial<Settings>;
 };
 
-const ClientConfigContext = createContext<ClientConfig | null>(null);
+const EMPTY_CONFIG: ClientConfig = {};
+
+const ClientConfigContext = createContext<ClientConfig>(EMPTY_CONFIG);
 
 export const ClientConfigProvider = ClientConfigContext.Provider;
 
 export function useClientConfig(): ClientConfig {
-  const config = useContext(ClientConfigContext);
-  if (!config) throw new Error('Client config are not provided!');
-  return config;
+  return useContext(ClientConfigContext);
 }
 
-export function useOptionalClientConfig(): ClientConfig | null {
+export function useOptionalClientConfig(): ClientConfig {
   return useContext(ClientConfigContext);
 }
 

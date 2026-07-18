@@ -1,6 +1,6 @@
 import { Box, Button, color, config, Menu, MenuItem, Scroll, Text, toRem } from 'folds';
 import type { CSSProperties, SyntheticEvent } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAtomValue } from 'jotai';
 import type { Opts as LinkifyOpts } from 'linkifyjs';
@@ -59,6 +59,7 @@ import { PowerChip } from './PowerChip';
 import { IgnoredUserAlert, MutualRoomsChip, OptionsChip, ServerChip, ShareChip } from './UserChips';
 import { UserHero, UserHeroName } from './UserHero';
 import { KnownMembership } from '$types/matrix-sdk';
+import { hydrateRoomMember } from '$client/roomMemberHydration';
 import * as css from './styles.css';
 import * as prefix from '$unstable/prefixes';
 
@@ -436,9 +437,6 @@ export function UserRoomProfile({ userId, initialProfile }: Readonly<UserRoomPro
   const server = getMxIdServer(userId);
   const nicknames = useAtomValue(nicknamesAtom);
   const displayName = getMemberDisplayName(room, userId, nicknames);
-  const avatarMxc = getMemberAvatarMxc(room, userId);
-  const avatarUrl = (avatarMxc && mxcUrlToHttp(mx, avatarMxc, useAuthentication)) ?? undefined;
-
   const presence = useUserPresence(userId);
 
   const fetchedProfile = useUserProfile(userId, room);
@@ -446,6 +444,21 @@ export function UserRoomProfile({ userId, initialProfile }: Readonly<UserRoomPro
     fetchedProfile && Object.keys(fetchedProfile).length > 0
       ? fetchedProfile
       : (initialProfile as UserProfile) || fetchedProfile;
+
+  const [, refreshMemberProfile] = useState(0);
+  useEffect(() => {
+    if (room.getMember(userId)) return undefined;
+    let disposed = false;
+    void hydrateRoomMember(mx, room.roomId, userId).then(() => {
+      if (!disposed) refreshMemberProfile((version) => version + 1);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [mx, room, userId]);
+
+  const avatarMxc = getMemberAvatarMxc(room, userId) ?? extendedProfile.avatarUrl;
+  const avatarUrl = (avatarMxc && mxcUrlToHttp(mx, avatarMxc, useAuthentication)) ?? undefined;
 
   const parsedBanner =
     typeof extendedProfile.bannerUrl === 'string'

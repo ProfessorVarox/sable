@@ -89,7 +89,7 @@ export function RoomView({ eventId }: { eventId?: string }) {
   const creators = useRoomCreators(room);
 
   const permissions = useRoomPermissions(creators, powerLevels);
-  const canMessage = permissions.event(EventType.RoomMessage, mx.getSafeUserId());
+  const canMessage = permissions.message(room.hasEncryptionStateEvent(), mx.getSafeUserId());
 
   const [editorResetKey, setEditorResetKey] = useState(0);
   const handleResetEditor = useCallback(() => setEditorResetKey((prev) => prev + 1), []);

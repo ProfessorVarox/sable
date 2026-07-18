@@ -11,9 +11,9 @@ import {
   deleteAfterLoginRedirectPath,
   getAfterLoginRedirectPath,
 } from '$pages/afterLoginRedirectPath';
+import { clearPendingSlidingSyncLogin } from './slidingSyncLogin';
 import { getHomePath } from '$pages/pathUtils';
-import type { Session } from '$state/sessions';
-import { activeSessionIdAtom, sessionsAtom } from '$state/sessions';
+import { activeSessionIdAtom, sessionsAtom, type Session } from '$state/sessions';
 import { createLogger } from '$utils/debug';
 import { createDebugLogger } from '$utils/debugLogger';
 import { ErrorCode } from '../../../cs-errorcode';
@@ -156,9 +156,12 @@ export const useCommitLoginSession = () => {
   const setActiveSessionId = useSetAtom(activeSessionIdAtom);
 
   return useCallback(
-    (session: Session) => {
-      setSessions({ type: 'PUT', session });
-      setActiveSessionId(session.userId);
+    (session: Session, slidingSyncOptIn?: boolean) => {
+      const committedSession =
+        slidingSyncOptIn === undefined ? session : { ...session, slidingSyncOptIn };
+      setSessions({ type: 'PUT', session: committedSession });
+      setActiveSessionId(committedSession.userId);
+      clearPendingSlidingSyncLogin();
       const afterLoginRedirectUrl = getAfterLoginRedirectPath();
       deleteAfterLoginRedirectPath();
       const destination = afterLoginRedirectUrl ?? getHomePath();
@@ -169,7 +172,7 @@ export const useCommitLoginSession = () => {
   );
 };
 
-export const useLoginComplete = (data?: CustomLoginResponse) => {
+export const useLoginComplete = (data?: CustomLoginResponse, slidingSyncOptIn?: boolean) => {
   const commitSession = useCommitLoginSession();
 
   useEffect(() => {
@@ -179,12 +182,13 @@ export const useLoginComplete = (data?: CustomLoginResponse) => {
         userId: loginRes.user_id,
         baseUrl: loginBaseUrl,
       });
-      commitSession({
+      const newSession: Session = {
         baseUrl: loginBaseUrl,
         userId: loginRes.user_id,
         deviceId: loginRes.device_id,
         accessToken: loginRes.access_token,
-      });
+      };
+      commitSession(newSession, slidingSyncOptIn);
     }
-  }, [data, commitSession]);
+  }, [data, slidingSyncOptIn, commitSession]);
 };

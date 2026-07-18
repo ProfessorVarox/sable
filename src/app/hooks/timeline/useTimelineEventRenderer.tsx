@@ -65,6 +65,7 @@ import {
   getEditTargetId,
   getEventReactions,
   getMemberDisplayName,
+  getTimelineSenderDisplayName,
   getPreviousEditId,
   getRedactionTargetEvent,
   getRedactionTargetId,
@@ -288,6 +289,7 @@ export interface TimelineEventRendererOptions {
   mx: MatrixClient;
   pushProcessor: PushProcessor;
   nicknames: Record<string, string>;
+  profiles: Record<string, { displayName?: string }>;
   imagePackRooms: Room[];
   settings: {
     messageLayout: MessageLayout;
@@ -346,6 +348,7 @@ export function useTimelineEventRenderer({
   mx,
   pushProcessor,
   nicknames,
+  profiles,
   imagePackRooms,
   settings: {
     messageLayout,
@@ -393,6 +396,9 @@ export function useTimelineEventRenderer({
   } = hiddenEvents;
   const useAuthentication = useMediaAuthentication();
 
+  const getSenderDisplayName = (userId: string): string =>
+    getTimelineSenderDisplayName(room, userId, nicknames, profiles[userId]?.displayName);
+
   const renderEditTimelineEvent = (
     mEventId: string,
     mEvent: MatrixEvent,
@@ -405,8 +411,7 @@ export function useTimelineEventRenderer({
     const highlighted = focusItem?.index === item && focusItem.highlight;
     const marked = activeReplyId === mEventId && suppressMark !== true;
     const senderId = mEvent.getSender() ?? '';
-    const senderName =
-      getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+    const senderName = getSenderDisplayName(senderId);
     const editTargetId = getEditTargetId(mEvent);
     const chain = editTargetId && getEditChain(timelineSet, editTargetId, mEvent.getType(), room);
     const previousEditId = chain ? getPreviousEditId(mEvent, chain) : undefined;
@@ -567,8 +572,7 @@ export function useTimelineEventRenderer({
         const getContent = (() => editedNewContent ?? safeContent) as GetContentCallback;
 
         const senderId = mEvent.getSender() ?? '';
-        const senderDisplayName =
-          getMemberDisplayName(room, senderId, nicknames) ?? getMxIdLocalPart(senderId) ?? senderId;
+        const senderDisplayName = getSenderDisplayName(senderId);
 
         const forwardContent = safeContent['moe.sable.message.forward'] as
           | {
@@ -718,8 +722,7 @@ export function useTimelineEventRenderer({
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderDisplayName =
-          getMemberDisplayName(room, senderId, nicknames) ?? getMxIdLocalPart(senderId) ?? senderId;
+        const senderDisplayName = getSenderDisplayName(senderId);
 
         const pushActions = pushProcessor.actionsForEvent(mEvent);
         let notifyHighlight: 'silent' | 'loud' | undefined;
@@ -898,8 +901,7 @@ export function useTimelineEventRenderer({
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderDisplayName =
-          getMemberDisplayName(room, senderId, nicknames) ?? getMxIdLocalPart(senderId) ?? senderId;
+        const senderDisplayName = getSenderDisplayName(senderId);
         const content = mEvent.getContent() ?? {};
 
         return (
@@ -1045,8 +1047,7 @@ export function useTimelineEventRenderer({
         const getContent = (() => editedNewContent ?? safeContent) as GetContentCallback;
 
         const senderId = mEvent.getSender() ?? '';
-        const senderDisplayName =
-          getMemberDisplayName(room, senderId, nicknames) ?? getMxIdLocalPart(senderId) ?? senderId;
+        const senderDisplayName = getSenderDisplayName(senderId);
 
         const forwardContent = safeContent['moe.sable.message.forward'] as
           | {
@@ -1178,9 +1179,10 @@ export function useTimelineEventRenderer({
         if (membershipChanged && hideMembershipEvents) return null;
         if (!membershipChanged && hideNickAvatarEvents) return null;
 
+        const isRedacted = mEvent.isRedacted();
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
-        const parsed = parseMemberEvent(mEvent);
+        const parsed = isRedacted ? null : parseMemberEvent(mEvent);
 
         const timeJSX = (
           <Time
@@ -1259,24 +1261,28 @@ export function useTimelineEventRenderer({
             <EventContent
               messageLayout={messageLayout}
               time={timeJSX}
-              icon={parsed.icon}
+              icon={parsed?.icon ?? timelineIcon(Trash)}
               content={
-                <Text size="T300" priority="300">
-                  <Box direction="Row" style={{ flexWrap: 'wrap', columnGap: toRem(6) }}>
-                    {parsed.body}
-                  </Box>
-                </Text>
+                isRedacted ? (
+                  <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+                ) : (
+                  <Text size="T300" priority="300">
+                    <Box direction="Row" style={{ flexWrap: 'wrap', columnGap: toRem(6) }}>
+                      {parsed?.body}
+                    </Box>
+                  </Text>
+                )
               }
             />
           </Message>
         );
       },
       [EventType.RoomName]: (mEventId, mEvent, item, timelineSet, collapse) => {
+        const isRedacted = mEvent.isRedacted();
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderName =
-          getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
         const timeJSX = (
           <Time
             ts={mEvent.getTs()}
@@ -1353,25 +1359,29 @@ export function useTimelineEventRenderer({
             <EventContent
               messageLayout={messageLayout}
               time={timeJSX}
-              icon={timelineIcon(Hash)}
+              icon={isRedacted ? timelineIcon(Trash) : timelineIcon(Hash)}
               content={
-                <Box grow="Yes" direction="Column">
-                  <Text size="T300" priority="300">
-                    <DecoratedUser userId={senderId} userName={senderName} room={room} />
-                    {t('Organisms.RoomCommon.changed_room_name')}
-                  </Text>
-                </Box>
+                isRedacted ? (
+                  <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+                ) : (
+                  <Box grow="Yes" direction="Column">
+                    <Text size="T300" priority="300">
+                      <DecoratedUser userId={senderId} userName={senderName} room={room} />
+                      {t('Organisms.RoomCommon.changed_room_name')}
+                    </Text>
+                  </Box>
+                )
               }
             />
           </Message>
         );
       },
       [EventType.RoomTopic]: (mEventId, mEvent, item, timelineSet, collapse) => {
+        const isRedacted = mEvent.isRedacted();
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderName =
-          getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
 
         const timeJSX = (
           <Time
@@ -1449,25 +1459,29 @@ export function useTimelineEventRenderer({
             <EventContent
               messageLayout={messageLayout}
               time={timeJSX}
-              icon={timelineIcon(Hash)}
+              icon={isRedacted ? timelineIcon(Trash) : timelineIcon(Hash)}
               content={
-                <Box grow="Yes" direction="Column">
-                  <Text size="T300" priority="300">
-                    <DecoratedUser userId={senderId} userName={senderName} room={room} />
-                    {' changed room topic'}
-                  </Text>
-                </Box>
+                isRedacted ? (
+                  <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+                ) : (
+                  <Box grow="Yes" direction="Column">
+                    <Text size="T300" priority="300">
+                      <DecoratedUser userId={senderId} userName={senderName} room={room} />
+                      {' changed room topic'}
+                    </Text>
+                  </Box>
+                )
               }
             />
           </Message>
         );
       },
       [EventType.RoomAvatar]: (mEventId, mEvent, item, timelineSet, collapse) => {
+        const isRedacted = mEvent.isRedacted();
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderName =
-          getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
 
         const timeJSX = (
           <Time
@@ -1545,20 +1559,25 @@ export function useTimelineEventRenderer({
             <EventContent
               messageLayout={messageLayout}
               time={timeJSX}
-              icon={timelineIcon(Hash)}
+              icon={isRedacted ? timelineIcon(Trash) : timelineIcon(Hash)}
               content={
-                <Box grow="Yes" direction="Column">
-                  <Text size="T300" priority="300">
-                    <DecoratedUser userId={senderId} userName={senderName} room={room} />
-                    {' changed room avatar'}
-                  </Text>
-                </Box>
+                isRedacted ? (
+                  <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+                ) : (
+                  <Box grow="Yes" direction="Column">
+                    <Text size="T300" priority="300">
+                      <DecoratedUser userId={senderId} userName={senderName} room={room} />
+                      {' changed room avatar'}
+                    </Text>
+                  </Box>
+                )
               }
             />
           </Message>
         );
       },
       [EventType.GroupCallMemberPrefix]: (mEventId, mEvent, item, timelineSet, collapse) => {
+        const isRedacted = mEvent.isRedacted();
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
@@ -1648,14 +1667,24 @@ export function useTimelineEventRenderer({
             <EventContent
               messageLayout={messageLayout}
               time={timeJSX}
-              icon={callJoined ? timelineIcon(Phone) : timelineIcon(PhoneDisconnect)}
+              icon={
+                isRedacted
+                  ? timelineIcon(Trash)
+                  : callJoined
+                    ? timelineIcon(Phone)
+                    : timelineIcon(PhoneDisconnect)
+              }
               content={
-                <Box grow="Yes" direction="Column">
-                  <Text size="T300" priority="300">
-                    <DecoratedUser userId={senderId} userName={senderName} room={room} />
-                    {callJoined ? ' joined the call' : ' ended the call'}
-                  </Text>
-                </Box>
+                isRedacted ? (
+                  <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+                ) : (
+                  <Box grow="Yes" direction="Column">
+                    <Text size="T300" priority="300">
+                      <DecoratedUser userId={senderId} userName={senderName} room={room} />
+                      {callJoined ? ' joined the call' : ' ended the call'}
+                    </Text>
+                  </Box>
+                )
               }
             />
           </Message>
@@ -1667,8 +1696,7 @@ export function useTimelineEventRenderer({
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId;
         const senderId = mEvent.getSender() ?? '';
-        const senderName =
-          getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
         const targetId = getReactionAnnotationTargetId(mEvent) ?? mEvent.getRelation()?.event_id;
 
         const timeJSX = (
@@ -1884,8 +1912,7 @@ export function useTimelineEventRenderer({
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId;
         const senderId = mEvent.getSender() ?? '';
-        const senderName =
-          getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
         const targetId = getRedactionTargetId(mEvent);
 
         const timeJSX = (
@@ -1990,11 +2017,11 @@ export function useTimelineEventRenderer({
       },
       [EventType.RoomPinnedEvents]: (mEventId, mEvent, item, timelineSet, collapse) => {
         if (!hiddenEventOther) return null;
+        const isRedacted = mEvent.isRedacted();
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderName =
-          getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
 
         const { pinned } = mEvent.getContent();
         const prevPinned = mEvent.getPrevContent().pinned;
@@ -2083,39 +2110,43 @@ export function useTimelineEventRenderer({
             <EventContent
               messageLayout={messageLayout}
               time={timeJSX}
-              icon={timelineIcon(PushPin)}
+              icon={isRedacted ? timelineIcon(Trash) : timelineIcon(PushPin)}
               content={
-                <Box grow="Yes" direction="Column">
-                  <Text size="T300" priority="300">
-                    <DecoratedUser userId={senderId} userName={senderName} room={room} />
-                    {(pinsAdded?.length > 0 &&
-                      `pinned ${pinsAdded.length} message${pinsAdded.length > 1 ? 's' : ''}`) ||
-                      ''}
-                    {(pinsAdded?.length > 0 && pinsRemoved?.length > 0 && ` and `) || ''}
-                    {(pinsRemoved?.length > 0 &&
-                      `unpinned ${pinsRemoved.length} message${
-                        pinsRemoved.length > 1 ? 's' : ''
-                      }`) ||
-                      ''}
-                    {((!pinsAdded || pinsAdded.length <= 0) &&
-                      (!pinsRemoved || pinsRemoved.length <= 0) &&
-                      `has not changed the pins`) ||
-                      `:`}
-                  </Text>
-                  {pinPreviewIds.length > 0 &&
-                    pinPreviewIds
-                      .slice(0, 4)
-                      .map((x: string) => (
-                        <Reply
-                          key={x}
-                          style={{ opacity: '80%' }}
-                          room={room}
-                          replyEventId={x}
-                          onClick={handleOpenReply}
-                          replyIcon={<>{menuIcon(pinnedSet.has(x) ? PushPin : PushPinSlash)}</>}
-                        />
-                      ))}
-                </Box>
+                isRedacted ? (
+                  <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+                ) : (
+                  <Box grow="Yes" direction="Column">
+                    <Text size="T300" priority="300">
+                      <DecoratedUser userId={senderId} userName={senderName} room={room} />
+                      {(pinsAdded?.length > 0 &&
+                        `pinned ${pinsAdded.length} message${pinsAdded.length > 1 ? 's' : ''}`) ||
+                        ''}
+                      {(pinsAdded?.length > 0 && pinsRemoved?.length > 0 && ` and `) || ''}
+                      {(pinsRemoved?.length > 0 &&
+                        `unpinned ${pinsRemoved.length} message${
+                          pinsRemoved.length > 1 ? 's' : ''
+                        }`) ||
+                        ''}
+                      {((!pinsAdded || pinsAdded.length <= 0) &&
+                        (!pinsRemoved || pinsRemoved.length <= 0) &&
+                        `has not changed the pins`) ||
+                        `:`}
+                    </Text>
+                    {pinPreviewIds.length > 0 &&
+                      pinPreviewIds
+                        .slice(0, 4)
+                        .map((x: string) => (
+                          <Reply
+                            key={x}
+                            style={{ opacity: '80%' }}
+                            room={room}
+                            replyEventId={x}
+                            onClick={handleOpenReply}
+                            replyIcon={<>{menuIcon(pinnedSet.has(x) ? PushPin : PushPinSlash)}</>}
+                          />
+                        ))}
+                  </Box>
+                )
               }
             />
           </Message>
@@ -2124,11 +2155,11 @@ export function useTimelineEventRenderer({
     },
     (mEventId, mEvent, item, timelineSet, collapse) => {
       if (!hiddenEventOther) return null;
+      const isRedacted = mEvent.isRedacted();
       const highlighted = focusItem?.index === item && focusItem.highlight;
       const marked = activeReplyId === mEventId && !suppressMark;
       const senderId = mEvent.getSender() ?? '';
-      const senderName =
-        getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+      const senderName = getSenderDisplayName(senderId);
 
       const timeJSX = (
         <Time
@@ -2205,16 +2236,20 @@ export function useTimelineEventRenderer({
           <EventContent
             messageLayout={messageLayout}
             time={timeJSX}
-            icon={timelineIcon(Code)}
+            icon={isRedacted ? timelineIcon(Trash) : timelineIcon(Code)}
             content={
-              <Box grow="Yes" direction="Column">
-                <Text size="T300" priority="300">
-                  <DecoratedUser userId={senderId} userName={senderName} room={room} />
-                  {' sent '}
-                  <code className={customHtmlCss.Code}>{mEvent.getType()}</code>
-                  {' state event'}
-                </Text>
-              </Box>
+              isRedacted ? (
+                <RedactedContent reason={mEvent.getUnsigned().redacted_because?.content.reason} />
+              ) : (
+                <Box grow="Yes" direction="Column">
+                  <Text size="T300" priority="300">
+                    <DecoratedUser userId={senderId} userName={senderName} room={room} />
+                    {' sent '}
+                    <code className={customHtmlCss.Code}>{mEvent.getType()}</code>
+                    {' state event'}
+                  </Text>
+                </Box>
+              )
             }
           />
         </Message>
@@ -2229,8 +2264,7 @@ export function useTimelineEventRenderer({
       const highlighted = focusItem?.index === item && focusItem.highlight;
       const marked = activeReplyId === mEventId && !suppressMark;
       const senderId = mEvent.getSender() ?? '';
-      const senderName =
-        getMemberDisplayName(room, senderId, nicknames) || getMxIdLocalPart(senderId);
+      const senderName = getSenderDisplayName(senderId);
 
       const timeJSX = (
         <Time

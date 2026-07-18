@@ -40,6 +40,7 @@ import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
 import { nicknamesAtom } from '$state/nicknames';
+import { profilesCacheAtom } from '$state/userRoomProfile';
 import { settingsAtom } from '$state/settings';
 import { useHiddenEventSettings, useSetting } from '$state/hooks/settings';
 import { useRoomAbbreviationsContext } from '$hooks/useRoomAbbreviations';
@@ -130,6 +131,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
   const autoFillInProgressRef = useRef(false);
   const { editId, handleEdit } = useMessageEdit(editor);
   const nicknames = useAtomValue(nicknamesAtom);
+  const globalProfiles = useAtomValue(profilesCacheAtom);
   const pushProcessor = useMemo(() => new PushProcessor(mx), [mx]);
   const useAuthentication = useMediaAuthentication();
   const mentionClickHandler = useMentionClickHandler(room.roomId);
@@ -217,11 +219,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
   const canDeleteOwn = permissions.event(EventType.RoomRedaction, mx.getSafeUserId());
   const canSendReaction = permissions.event(EventType.Reaction, mx.getSafeUserId());
   const canPinEvent = permissions.stateEvent(EventType.RoomPinnedEvents, mx.getSafeUserId());
-  const isReadOnly = useMemo(() => {
-    const myPowerLevel = powerLevels?.users?.[mx.getUserId()!] ?? powerLevels?.users_default ?? 0;
-    const sendLevel = powerLevels?.events?.['m.room.message'] ?? powerLevels?.events_default ?? 0;
-    return myPowerLevel < sendLevel;
-  }, [powerLevels, mx]);
+  const isReadOnly = !permissions.message(room.hasEncryptionStateEvent(), mx.getSafeUserId());
   const getMemberPowerTag = useGetMemberPowerTag(room, creators, powerLevels);
   const parseMemberEvent = useMemberEventParser();
 
@@ -749,6 +747,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
     mx,
     pushProcessor,
     nicknames,
+    profiles: globalProfiles,
     imagePackRooms,
     settings: {
       messageLayout,

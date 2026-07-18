@@ -62,7 +62,7 @@ export function Room() {
     });
   }, [isWidgetDrawerOpen, room.roomId]);
   const powerLevels = usePowerLevels(room);
-  const members = useRoomMembers(mx, room.roomId);
+  const members = useRoomMembers(mx, room.roomId, screenSize === ScreenSize.Desktop && isDrawer);
   const chat = useAtomValue(callChatAtom);
   const [openThreadId, setOpenThread] = useAtom(roomIdToOpenThreadAtomFamily(room.roomId));
   const [threadBrowserOpen, setThreadBrowserOpen] = useAtom(
