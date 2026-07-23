@@ -1,6 +1,8 @@
 import { type ChangeEventHandler, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTimeoutToggle } from '$hooks/useTimeoutToggle';
-import { copyToClipboard, downloadTextFile } from '$utils/dom';
+import { downloadTextFile } from '$utils/dom';
+import { shareText } from '$utils/share';
+import { fetch } from '$utils/fetch';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
@@ -132,7 +134,7 @@ function CatalogTweakCard({
   const [copied, setCopied] = useTimeoutToggle();
   const handleCopy = useCallback(async () => {
     if (!copyUrl) return;
-    if (await copyToClipboard(copyUrl)) setCopied();
+    if (await shareText(copyUrl)) setCopied();
   }, [copyUrl, setCopied]);
 
   return (

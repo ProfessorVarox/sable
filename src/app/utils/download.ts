@@ -1,3 +1,9 @@
+import FileSaver from 'file-saver';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { type as osType } from '@tauri-apps/plugin-os';
+import { fetch } from '$utils/fetch';
+import { showToast } from '$state/toast';
+
 const INVALID_FILENAME_CHARS = /[<>:"/\\|?*]/g;
 const CONTROL_CHARS = /\p{Cc}/gu;
 const BIDI_CONTROL_CHARS = /[\u202a-\u202e\u2066-\u2069]/g;
@@ -44,3 +50,41 @@ export const getDownloadFilename = (
   body?: unknown,
   fallback = 'download'
 ): string => sanitizeDownloadFilename(getAttachmentFilename(filename, body, fallback), fallback);
+
+async function resolveBlob(input: Blob | string): Promise<Blob> {
+  if (typeof input !== 'string') return input;
+  const response = await fetch(input);
+  return response.blob();
+}
+
+export async function saveFileToDevice(
+  input: Blob | string,
+  filename: string,
+  mimeType?: string
+): Promise<void> {
+  if (isTauri()) {
+    const blob = await resolveBlob(input);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+    if (osType() === 'android') {
+      const { AndroidFs, AndroidPublicGeneralPurposeDir } =
+        await import('tauri-plugin-android-fs-api');
+      const uri = await AndroidFs.createNewPublicFile(
+        AndroidPublicGeneralPurposeDir.Download,
+        filename,
+        mimeType || blob.type || null,
+        { isPending: true }
+      );
+      await AndroidFs.writeFile(uri, bytes);
+      await AndroidFs.setPublicFilePending(uri, false);
+      showToast('Saved to Downloads');
+      return;
+    }
+
+    const saved = await invoke<boolean>('save_download', { filename, bytes: Array.from(bytes) });
+    if (saved) showToast('File saved');
+    return;
+  }
+
+  FileSaver.saveAs(input, filename);
+}

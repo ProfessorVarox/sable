@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { startTransition, useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import to from 'await-to-js';
 import * as Sentry from '@sentry/react';
 import type {
@@ -15,7 +15,6 @@ import { Direction, RoomEvent, RelationType, ThreadEvent } from '$types/matrix-s
 
 import { useAlive } from '$hooks/useAlive';
 import { markAsRead } from '$utils/notifications';
-import { decryptAllTimelineEvent } from '$utils/room';
 import {
   getInitialTimeline,
   getEmptyTimeline,
@@ -118,7 +117,8 @@ const useTimelinePagination = (
       const topTimeline = linkedTimelines[0];
       if (!topTimeline) return;
       const newLTimelines = getLinkedTimelines(topTimeline);
-      setTimeline(() => ({ linkedTimelines: newLTimelines }));
+      // Processing a growing history is interruptible so active scrolling remains responsive.
+      startTransition(() => setTimeline(() => ({ linkedTimelines: newLTimelines })));
     };
 
     return async (backwards: boolean) => {
@@ -164,18 +164,6 @@ const useTimelinePagination = (
             (backwards ? setBackwardStatus : setForwardStatus)('error');
           }
           return;
-        }
-
-        const fetchedTimeline =
-          timelineToPaginate.getNeighbouringTimeline(
-            backwards ? Direction.Backward : Direction.Forward
-          ) ?? timelineToPaginate;
-
-        const roomId = fetchedTimeline.getRoomId();
-        const evRoom = roomId ? mx.getRoom(roomId) : null;
-
-        if (evRoom?.hasEncryptionStateEvent()) {
-          await to(decryptAllTimelineEvent(mx, fetchedTimeline));
         }
 
         if (alive()) {
@@ -576,8 +564,10 @@ export function useTimelineSync({
       !(isAtBottom || resetAutoScrollPending) ||
       (!liveTimelineLinked && !resetAutoScrollPending) ||
       eventsLength === 0
-    )
+    ) {
+      lastScrolledAtEventsLengthRef.current = eventsLength;
       return;
+    }
 
     if (eventsLength <= lastScrolledAtEventsLengthRef.current && !resetAutoScrollPending) return;
 

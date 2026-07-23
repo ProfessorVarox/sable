@@ -32,6 +32,7 @@ import {
 import type { ResolvedHiddenEventSettings } from '$state/hooks/settings';
 import { MessageLayout, type MessageSpacing } from '$state/settings';
 import { nicknamesAtom } from '$state/nicknames';
+import { profilesCacheAtom } from '$state/userRoomProfile';
 import type { useGetMemberPowerTag } from '$hooks/useMemberPowerTag';
 import type { useMemberEventParser } from '$hooks/useMemberEventParser';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -86,6 +87,7 @@ import type { ForwardedMessageProps } from '$features/room/message';
 import { EncryptedContent, Message, Reactions } from '$features/room/message';
 
 import { useSableCosmetics } from '$hooks/useSableCosmetics';
+import { useRoomMemberHydration } from '$hooks/useRoomMemberHydration';
 import { M_POLL_START } from 'matrix-js-sdk';
 
 function DecoratedUser({ room, userId, userName }: DecoratedUserProps) {
@@ -135,6 +137,7 @@ function ThreadReplyChip({
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
   const nicknames = useAtomValue(nicknamesAtom);
+  const cachedProfiles = useAtomValue(profilesCacheAtom);
 
   const [counter, forceUpdate] = useState(0);
 
@@ -174,6 +177,9 @@ function ThreadReplyChip({
       );
   }, [room, mEventId, thread, counter]);
 
+  const latestSenderId = replyEvents.at(-1)?.getSender() ?? '';
+  useRoomMemberHydration(room, latestSenderId);
+
   if (!thread) return null;
 
   // Prefer the server-authoritative bundled count. thread.length only reflects
@@ -195,15 +201,14 @@ function ThreadReplyChip({
   });
 
   const latestReply = replyEvents.at(-1);
-  let latestSenderId = '';
   let latestBody = '';
   if (latestReply) {
-    latestSenderId = latestReply.getSender() ?? '';
     latestBody = (latestReply.getContent()?.body as string | undefined) ?? '';
   }
 
   const latestSenderName =
     getMemberDisplayName(room, latestSenderId, nicknames) ??
+    cachedProfiles[latestSenderId]?.displayName ??
     getMxIdLocalPart(latestSenderId) ??
     latestSenderId;
 
@@ -289,7 +294,7 @@ export interface TimelineEventRendererOptions {
   mx: MatrixClient;
   pushProcessor: PushProcessor;
   nicknames: Record<string, string>;
-  profiles: Record<string, { displayName?: string }>;
+  getProfile: (userId: string) => { displayName?: string } | undefined;
   imagePackRooms: Room[];
   settings: {
     messageLayout: MessageLayout;
@@ -348,7 +353,7 @@ export function useTimelineEventRenderer({
   mx,
   pushProcessor,
   nicknames,
-  profiles,
+  getProfile,
   imagePackRooms,
   settings: {
     messageLayout,
@@ -397,7 +402,7 @@ export function useTimelineEventRenderer({
   const useAuthentication = useMediaAuthentication();
 
   const getSenderDisplayName = (userId: string): string =>
-    getTimelineSenderDisplayName(room, userId, nicknames, profiles[userId]?.displayName);
+    getTimelineSenderDisplayName(room, userId, nicknames, getProfile(userId)?.displayName);
 
   const renderEditTimelineEvent = (
     mEventId: string,
@@ -466,7 +471,7 @@ export function useTimelineEventRenderer({
         onReplyClick={onReplyClick}
         onReactionToggle={onReactionToggle}
         senderId={senderId}
-        senderDisplayName={senderId}
+        senderDisplayName={senderName}
         sendStatus={mEvent.getAssociatedStatus()}
         collapse={collapse}
         activeReplyId={activeReplyId}
@@ -1194,6 +1199,7 @@ export function useTimelineEventRenderer({
         );
 
         const senderId = mEvent.getSender() ?? '';
+        const senderName = getSenderDisplayName(senderId);
         const reactionRelations = getEventReactions(timelineSet, mEventId);
         const annotations = reactionRelations?.getSortedAnnotationsByKey();
         const reactions = annotations?.filter((annotation) => annotation[1].size > 0);
@@ -1219,7 +1225,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -1317,7 +1323,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -1417,7 +1423,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -1517,7 +1523,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -1581,7 +1587,7 @@ export function useTimelineEventRenderer({
         const highlighted = focusItem?.index === item && focusItem.highlight;
         const marked = activeReplyId === mEventId && !suppressMark;
         const senderId = mEvent.getSender() ?? '';
-        const senderName = getMemberDisplayName(room, senderId) || getMxIdLocalPart(senderId);
+        const senderName = getSenderDisplayName(senderId);
 
         const content = mEvent.getContent() as Record<string, unknown>;
         const prevContent = mEvent.getPrevContent();
@@ -1625,7 +1631,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -1750,7 +1756,7 @@ export function useTimelineEventRenderer({
               onReplyClick={onReplyClick}
               onReactionToggle={onReactionToggle}
               senderId={senderId}
-              senderDisplayName={senderId}
+              senderDisplayName={senderName}
               sendStatus={mEvent.getAssociatedStatus()}
               collapse={collapse}
               activeReplyId={activeReplyId}
@@ -1837,7 +1843,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -1959,7 +1965,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -2068,7 +2074,7 @@ export function useTimelineEventRenderer({
             onReplyClick={onReplyClick}
             onReactionToggle={onReactionToggle}
             senderId={senderId}
-            senderDisplayName={senderId}
+            senderDisplayName={senderName}
             sendStatus={mEvent.getAssociatedStatus()}
             collapse={collapse}
             activeReplyId={activeReplyId}
@@ -2194,7 +2200,7 @@ export function useTimelineEventRenderer({
           onReplyClick={onReplyClick}
           onReactionToggle={onReactionToggle}
           senderId={senderId}
-          senderDisplayName={senderId}
+          senderDisplayName={senderName}
           sendStatus={mEvent.getAssociatedStatus()}
           collapse={collapse}
           activeReplyId={activeReplyId}
@@ -2299,7 +2305,7 @@ export function useTimelineEventRenderer({
           onReplyClick={onReplyClick}
           onReactionToggle={onReactionToggle}
           senderId={senderId}
-          senderDisplayName={senderId}
+          senderDisplayName={senderName}
           sendStatus={mEvent.getAssociatedStatus()}
           collapse={collapse}
           activeReplyId={activeReplyId}

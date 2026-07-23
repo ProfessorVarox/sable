@@ -1,6 +1,7 @@
 import type { MatrixClient, MSC3575RoomData, SlidingSync } from '$types/matrix-sdk';
 import { EventType, MatrixEvent, SlidingSyncEvent } from '$types/matrix-sdk';
 import { CustomAccountDataEvent } from '$types/matrix/accountData';
+import { CustomStateEvent } from '$types/matrix/room';
 
 const CACHE_VERSION = 1;
 const CACHE_KEY_PREFIX = 'sable.slidingSyncSidebarCache.';
@@ -37,6 +38,10 @@ const CACHED_STATE_TYPES = new Set<string>([
   EventType.RoomServerAcl,
   EventType.SpaceChild,
   EventType.SpaceParent,
+  CustomStateEvent.PowerLevelTags,
+  CustomStateEvent.RoomWidget,
+  CustomStateEvent.RoomAbbreviations,
+  CustomStateEvent.RoomBanner,
 ]);
 
 const emptyCache = (): SidebarCacheData => ({

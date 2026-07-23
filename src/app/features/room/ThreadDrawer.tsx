@@ -14,7 +14,7 @@ import {
   ThreadEvent,
   EventType,
 } from '$types/matrix-sdk';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { ReactEditor } from 'slate-react';
 import type { HTMLReactParserOptions } from 'html-react-parser';
 import type { Opts as LinkifyOpts } from 'linkifyjs';
@@ -37,6 +37,7 @@ import {
 } from '$utils/room';
 import { getMxIdLocalPart, toggleReaction } from '$utils/matrix';
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { useIsInactivePanel } from '$hooks/useRoom';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
 import { nicknamesAtom } from '$state/nicknames';
@@ -131,12 +132,17 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
   const autoFillInProgressRef = useRef(false);
   const { editId, handleEdit } = useMessageEdit(editor);
   const nicknames = useAtomValue(nicknamesAtom);
-  const globalProfiles = useAtomValue(profilesCacheAtom);
+  const jotaiStore = useStore();
+  const getGlobalProfile = useCallback(
+    (userId: string) => jotaiStore.get(profilesCacheAtom)[userId],
+    [jotaiStore]
+  );
   const pushProcessor = useMemo(() => new PushProcessor(mx), [mx]);
   const useAuthentication = useMediaAuthentication();
   const mentionClickHandler = useMentionClickHandler(room.roomId);
   const settingsLinkBaseUrl = useSettingsLinkBaseUrl();
   const spoilerClickHandler = useSpoilerClickHandler();
+  const isInactivePanel = useIsInactivePanel();
 
   // Settings
   const [messageLayout] = useSetting(settingsAtom, 'messageLayout');
@@ -460,6 +466,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
 
   // Mark thread as read when viewing it
   useEffect(() => {
+    if (isInactivePanel) return; // Don't send read receipt while room is behind the list
     const markThreadAsRead = async () => {
       const currentThread = room.getThread(threadRootId);
       if (!currentThread) return;
@@ -488,7 +495,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
 
     // Mark as read when opened and when new messages arrive
     markThreadAsRead();
-  }, [mx, room, threadRootId, forceUpdateCounter]);
+  }, [mx, room, threadRootId, forceUpdateCounter, isInactivePanel]);
 
   const replyEvents = getThreadReplyEvents(room, threadRootId);
   const isThreadLoading = !!thread && !thread.initialEventsFetched && replyEvents.length === 0;
@@ -747,7 +754,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
     mx,
     pushProcessor,
     nicknames,
-    profiles: globalProfiles,
+    getProfile: getGlobalProfile,
     imagePackRooms,
     settings: {
       messageLayout,

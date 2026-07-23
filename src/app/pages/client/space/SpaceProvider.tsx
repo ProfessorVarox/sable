@@ -29,9 +29,5 @@ export function RouteSpaceProvider({ children }: RouteSpaceProviderProps) {
     return <JoinBeforeNavigate roomIdOrAlias={spaceIdOrAlias ?? ''} viaServers={viaServers} />;
   }
 
-  return (
-    <SpaceProvider key={space.roomId} value={space}>
-      {children}
-    </SpaceProvider>
-  );
+  return <SpaceProvider value={space}>{children}</SpaceProvider>;
 }

@@ -24,7 +24,6 @@ import { createDebugLogger } from '$utils/debugLogger';
 import { CustomStateEvent } from '$types/matrix/room';
 import * as Sentry from '@sentry/react';
 import { SlidingSyncSidebarCache } from './slidingSyncSidebarCache';
-import { hydrateRoomMembers } from './roomMemberHydration';
 
 const log = createLogger('slidingSync');
 const debugLog = createDebugLogger('slidingSync');
@@ -46,6 +45,7 @@ const ACTIVE_ROOM_SUBSCRIPTION_KEY = 'active_room';
 const SIDEBAR_ROOM_SUBSCRIPTION_KEY = 'sidebar_room';
 const SPACE_SUBSCRIPTION_KEY = 'space';
 const IMAGE_PACK_SUBSCRIPTION_KEY = 'image_packs';
+const SPACE_IMAGE_PACK_SUBSCRIPTION_KEY = 'space_image_packs';
 const ACTIVE_ROOM_TIMELINE_LIMIT = 30;
 
 export type PartialSlidingSyncRequest = {
@@ -73,6 +73,8 @@ export type SlidingSyncDiagnostics = {
   lists: SlidingSyncListDiagnostics[];
 };
 
+export type HydrationProgress = { loadedRooms: number; totalRooms: number };
+
 const clampPositive = (value: number | undefined, fallback: number): number => {
   if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) return fallback;
   return Math.round(value);
@@ -88,6 +90,8 @@ const buildListRequiredState = (): MSC3575RoomSubscription['required_state'] => 
   [EventType.RoomCanonicalAlias, ''],
   [EventType.RoomJoinRules, ''],
   [EventType.RoomMember, MSC3575_STATE_KEY_ME],
+  [EventType.GroupCallPrefix, ''],
+  [EventType.GroupCallMemberPrefix, MSC3575_WILDCARD],
 ];
 
 const SPACE_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
@@ -138,12 +142,21 @@ const buildUnencryptedSubscription = (timelineLimit: number): MSC3575RoomSubscri
   required_state: ACTIVE_ROOM_REQUIRED_STATE,
 });
 
+const IMAGE_PACK_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
+  [CustomStateEvent.ImagePack, MSC3575_WILDCARD],
+  [CustomStateEvent.PoniesRoomEmotes, MSC3575_WILDCARD],
+];
+
 const buildImagePackSubscription = (): MSC3575RoomSubscription => ({
   timeline_limit: 0,
-  required_state: [
-    [CustomStateEvent.ImagePack, MSC3575_WILDCARD],
-    [CustomStateEvent.PoniesRoomEmotes, MSC3575_WILDCARD],
-  ],
+  required_state: IMAGE_PACK_REQUIRED_STATE,
+});
+
+// Pack rooms that are also spaces need both state sets; room subscriptions
+// use exactly one named key, so register the union as its own subscription.
+const buildSpaceImagePackSubscription = (): MSC3575RoomSubscription => ({
+  timeline_limit: 0,
+  required_state: [...SPACE_REQUIRED_STATE, ...IMAGE_PACK_REQUIRED_STATE],
 });
 
 const buildSpaceSubscription = (): MSC3575RoomSubscription => ({
@@ -230,6 +243,8 @@ export class SlidingSyncManager {
 
   private readonly imagePackRoomSubscriptions = new Set<string>();
 
+  private deferredImagePackSubscriptions: Set<string> | null = null;
+
   private roomSubscriptionSyncQueued = false;
 
   private readonly roomTimelineLimit: number;
@@ -302,6 +317,10 @@ export class SlidingSyncManager {
     Set<(loading: boolean) => void>
   >();
 
+  private readonly hydrationStatusListeners = new Set<
+    (isHydrating: boolean, progress?: HydrationProgress) => void
+  >();
+
   private readonly roomDataAwaitingSyncCompletion = new Set<string>();
 
   /** Wall-clock time recorded in attach() — used to compute true initial-sync latency. */
@@ -344,6 +363,10 @@ export class SlidingSyncManager {
       buildImagePackSubscription()
     );
     this.slidingSync.addCustomSubscription(SPACE_SUBSCRIPTION_KEY, buildSpaceSubscription());
+    this.slidingSync.addCustomSubscription(
+      SPACE_IMAGE_PACK_SUBSCRIPTION_KEY,
+      buildSpaceImagePackSubscription()
+    );
 
     this.onLifecycle = (state, resp, err) => {
       debugLog.info('sync', `Sliding sync lifecycle: ${state}`, {
@@ -382,7 +405,6 @@ export class SlidingSyncManager {
       if (err || !resp || state !== SlidingSyncState.Complete) return;
 
       this.recordServerMembershipRooms(resp);
-      this.hydrateReferencedMembers(resp);
 
       this.roomDataAwaitingSyncCompletion.forEach((roomId) =>
         this.notifyRoomSubscriptionStatus(roomId, false)
@@ -560,6 +582,8 @@ export class SlidingSyncManager {
       listeners.forEach((listener) => listener(false))
     );
     this.roomSubscriptionStatusListeners.clear();
+    this.hydrationStatusListeners.forEach((listener) => listener(false));
+    this.hydrationStatusListeners.clear();
 
     this.disposed = true;
     this.slidingSync.stop();
@@ -603,42 +627,6 @@ export class SlidingSyncManager {
       } else {
         this.serverMembershipRoomIds.add(roomId);
       }
-    });
-  }
-
-  private hydrateReferencedMembers(response: MSC3575SlidingSyncResponse): void {
-    const userIdsByRoom = new Map<string, Set<string>>();
-    const add = (roomId: string, userId: unknown) => {
-      if (!this.activeRoomSubscriptions.has(roomId) || typeof userId !== 'string') return;
-      const userIds = userIdsByRoom.get(roomId) ?? new Set<string>();
-      userIds.add(userId);
-      userIdsByRoom.set(roomId, userIds);
-    };
-
-    Object.entries(response.rooms ?? {}).forEach(([roomId, roomData]) => {
-      [...(roomData.timeline ?? []), ...(roomData.required_state ?? [])].forEach((event) => {
-        add(roomId, event.sender);
-      });
-    });
-
-    const receipts = response.extensions?.receipts as
-      | {
-          rooms?: Record<
-            string,
-            { content?: Record<string, Record<string, Record<string, unknown>>> }
-          >;
-        }
-      | undefined;
-    Object.entries(receipts?.rooms ?? {}).forEach(([roomId, event]) => {
-      Object.values(event.content ?? {}).forEach((receiptTypes) => {
-        Object.values(receiptTypes).forEach((users) => {
-          Object.keys(users).forEach((userId) => add(roomId, userId));
-        });
-      });
-    });
-
-    userIdsByRoom.forEach((userIds, roomId) => {
-      void hydrateRoomMembers(this.mx, roomId, userIds);
     });
   }
 
@@ -825,6 +813,7 @@ export class SlidingSyncManager {
       if (!this.listsFullyLoaded) {
         this.listsFullyLoaded = true;
         this.initialListHydrationCompleted = true;
+        this.hydrationStatusListeners.forEach((listener) => listener(false));
         this.reconcileSidebarCacheMembership();
         globalThis.setTimeout(() => this.flushDeferredSubscriptions(), 0);
         this.applySteadyStateListRanges();
@@ -842,7 +831,12 @@ export class SlidingSyncManager {
         });
       }
     } else if (expandedAny) {
-      this.listsFullyLoaded = false;
+      if (this.listsFullyLoaded) {
+        this.listsFullyLoaded = false;
+      }
+      this.hydrationStatusListeners.forEach((listener) =>
+        listener(true, this.getHydrationProgress())
+      );
       log.log(`Sliding Sync lists expanding... for ${this.mx.getUserId()}`);
     }
 
@@ -951,6 +945,39 @@ export class SlidingSyncManager {
     return this.activeRoomSubscriptions.has(roomId);
   }
 
+  public getHydrationProgress(): HydrationProgress {
+    let loadedRooms = 0;
+    let totalRooms = 0;
+    this.listKeys.forEach((key) => {
+      const existing = this.slidingSync.getListData(key);
+      const knownCount = existing?.joinedCount ?? 0;
+      const currentEnd = this.confirmedListRangeEnds.get(key) ?? -1;
+
+      if (knownCount > 0) {
+        totalRooms += knownCount;
+        loadedRooms += Math.min(knownCount, currentEnd + 1);
+      }
+    });
+    return { loadedRooms, totalRooms };
+  }
+
+  public isSyncingRoomData(): boolean {
+    return !this.listsFullyLoaded;
+  }
+
+  public onHydrationStatusChange(
+    listener: (isHydrating: boolean, progress?: HydrationProgress) => void
+  ): () => void {
+    this.hydrationStatusListeners.add(listener);
+    listener(
+      this.isSyncingRoomData(),
+      this.isSyncingRoomData() ? this.getHydrationProgress() : undefined
+    );
+    return () => {
+      this.hydrationStatusListeners.delete(listener);
+    };
+  }
+
   public isResponseProcessing(): boolean {
     return this.responseProcessing;
   }
@@ -975,6 +1002,7 @@ export class SlidingSyncManager {
       } else if (removedSpaceSubscription || removedSidebarSubscription) {
         this.queueRoomSubscriptionSync();
       }
+      this.mx.store.removeRoom(roomId);
     }
   }
 
@@ -984,6 +1012,10 @@ export class SlidingSyncManager {
     const spaces = this.deferredSpaceSubscriptions;
     this.deferredSpaceSubscriptions = new Set();
     this.setSpaceSubscriptions(spaces);
+
+    const imagePacks = this.deferredImagePackSubscriptions;
+    this.deferredImagePackSubscriptions = null;
+    if (imagePacks) this.setImagePackSubscriptions(imagePacks);
   }
 
   private queueRoomSubscriptionSync(): void {
@@ -1009,7 +1041,12 @@ export class SlidingSyncManager {
       } else if (this.sidebarRoomSubscriptions.has(roomId)) {
         this.slidingSync.useCustomSubscription(roomId, SIDEBAR_ROOM_SUBSCRIPTION_KEY);
       } else if (this.spaceSubscriptions.has(roomId)) {
-        this.slidingSync.useCustomSubscription(roomId, SPACE_SUBSCRIPTION_KEY);
+        this.slidingSync.useCustomSubscription(
+          roomId,
+          this.imagePackRoomSubscriptions.has(roomId)
+            ? SPACE_IMAGE_PACK_SUBSCRIPTION_KEY
+            : SPACE_SUBSCRIPTION_KEY
+        );
       } else {
         this.slidingSync.useCustomSubscription(roomId, IMAGE_PACK_SUBSCRIPTION_KEY);
       }
@@ -1034,6 +1071,10 @@ export class SlidingSyncManager {
   public setImagePackSubscriptions(roomIds: Iterable<string>): void {
     if (this.disposed) return;
     const next = new Set(roomIds);
+    if (!this.listsFullyLoaded) {
+      this.deferredImagePackSubscriptions = next;
+      return;
+    }
     const unchanged =
       next.size === this.imagePackRoomSubscriptions.size &&
       [...next].every((roomId) => this.imagePackRoomSubscriptions.has(roomId));

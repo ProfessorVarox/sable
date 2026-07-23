@@ -3,7 +3,7 @@ import type {
   IAuthData,
   MatrixError,
   ILoginFlowsResponse,
-  OidcClientConfig,
+  ValidatedAuthMetadata,
 } from '$types/matrix-sdk';
 
 export enum RegisterFlowStatus {
@@ -48,7 +48,7 @@ export const parseRegisterErrResp = (matrixError: MatrixError): RegisterFlowsRes
 export type AuthFlows = {
   loginFlows: ILoginFlowsResponse;
   registerFlows: RegisterFlowsResponse;
-  authMetadata?: OidcClientConfig;
+  authMetadata?: ValidatedAuthMetadata;
 };
 
 const AuthFlowsContext = createContext<AuthFlows | null>(null);

@@ -1,6 +1,5 @@
 import type { MouseEventHandler } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import FileSaver from 'file-saver';
 import classNames from 'classnames';
 import {
   Box,
@@ -28,6 +27,7 @@ import {
   sizedIcon,
 } from '$components/icons/phosphor';
 import { useImageGestures } from '$hooks/useImageGestures';
+import { useAndroidBackHandler } from '$utils/androidBack';
 import { useSetting } from '$state/hooks/settings';
 import { isPixelatedRendering, settingsAtom } from '$state/settings';
 import { downloadMedia } from '$utils/matrix';
@@ -37,7 +37,7 @@ import { CheckerboardIcon, CopyIcon, DownloadIcon } from '@phosphor-icons/react'
 import FocusTrap from 'focus-trap-react';
 import { stopPropagation } from '$utils/keyboard';
 import { copyImageToClipboard } from '$utils/dom';
-import { getDownloadFilename } from '$utils/download';
+import { getDownloadFilename, saveFileToDevice } from '$utils/download';
 
 export type ImageViewerProps = {
   alt: string;
@@ -51,6 +51,12 @@ export const ImageViewer = as<'div', ImageViewerProps>(
   ({ className, alt, filename, src, requestClose, info, ...props }, ref) => {
     const zoomInputRef = useRef<HTMLInputElement>(null);
     const [pixelatedImageRendering] = useSetting(settingsAtom, 'pixelatedImageRendering');
+
+    // Android back closes the viewer instead of navigating away.
+    useAndroidBackHandler(() => {
+      requestClose();
+      return true;
+    });
 
     const [isImageReady, setIsImageReady] = useState(false);
     const [isEditingZoom, setIsEditingZoom] = useState(false);
@@ -100,7 +106,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
 
     const handleDownload = async () => {
       const fileContent = await downloadMedia(src);
-      FileSaver.saveAs(fileContent, getDownloadFilename(filename, alt, 'image'));
+      await saveFileToDevice(fileContent, getDownloadFilename(filename, alt, 'image'));
     };
 
     const [menuAnchor, setMenuAnchor] = useState<RectCords>();

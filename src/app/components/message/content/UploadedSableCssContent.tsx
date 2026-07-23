@@ -3,6 +3,7 @@ import type { EncryptedAttachmentInfo } from 'browser-encrypt-attachment';
 import { Box, Button, IconButton, Spinner, Switch, Text, config, toRem } from 'folds';
 
 import { Star, sizedIcon } from '$components/icons/phosphor';
+import { getCspNonce } from '$utils/cspNonce';
 import { ThemePreviewCard } from '$components/theme/ThemePreviewCard';
 import { CssViewerButton } from '$components/theme/CssViewerButton';
 import { usePatchSettings } from '$features/settings/cosmetics/themeSettingsPatch';
@@ -161,7 +162,7 @@ function UploadedTweakCard({ data }: { data: Extract<SuccessfulUpload, { role: '
       </Box>
       {styleBlock && (
         <>
-          <style>{styleBlock}</style>
+          <style nonce={getCspNonce()}>{styleBlock}</style>
           <Box
             className={scopeClass}
             style={{

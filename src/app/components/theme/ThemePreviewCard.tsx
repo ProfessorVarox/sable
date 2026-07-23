@@ -4,6 +4,7 @@ import { Check, Download, Link, Star, Warning, sizedIcon } from '$components/ico
 
 import { useTimeoutToggle } from '$hooks/useTimeoutToggle';
 import { copyToClipboard } from '$utils/dom';
+import { getCspNonce } from '$utils/cspNonce';
 import { buildPreviewStyleBlock, extractSafePreviewCustomProperties } from '../../theme/previewCss';
 import { CssViewerButton } from './CssViewerButton';
 
@@ -194,7 +195,7 @@ export function ThemePreviewCard({
 
       {styleBlock ? (
         <>
-          <style>{styleBlock}</style>
+          <style nonce={getCspNonce()}>{styleBlock}</style>
           <Box
             className={scopeClass}
             direction="Column"

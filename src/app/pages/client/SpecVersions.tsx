@@ -1,10 +1,15 @@
 import type { ReactNode } from 'react';
-import { useCallback } from 'react';
-import { Box, Button, Dialog, config, Text } from 'folds';
+import { useCallback, useState } from 'react';
+import { Box, Button, Dialog, config, Spinner, Text, color } from 'folds';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { SpecVersionsLoader } from '$components/SpecVersionsLoader';
 import { SpecVersionsProvider } from '$hooks/useSpecVersions';
 import { SplashScreen } from '$components/splash-screen';
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { logoutClient } from '$client/initMatrix';
+import { activeSessionIdAtom, sessionsAtom, type Session } from '$state/sessions';
+import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import { useClientConfig } from '$hooks/useClientConfig';
 import type { SpecVersions } from '../../cs-api';
 
 const EMPTY_VERSIONS: SpecVersions = { versions: [] };
@@ -14,6 +19,39 @@ type HomeserverOfflineErrorProps = {
   onRetry: () => void;
 };
 function HomeserverOfflineError({ baseUrl, onRetry }: HomeserverOfflineErrorProps) {
+  const mx = useMatrixClient();
+  const sessions = useAtomValue(sessionsAtom);
+  const activeSessionId = useAtomValue(activeSessionIdAtom);
+  const setActiveSessionId = useSetAtom(activeSessionIdAtom);
+  const setSessions = useSetAtom(sessionsAtom);
+  const { disableAccountSwitcher } = useClientConfig();
+  const [showAccounts, setShowAccounts] = useState(false);
+
+  const activeSession =
+    sessions.find((session) => session.userId === activeSessionId) ?? sessions[0];
+  const otherSessions = disableAccountSwitcher
+    ? []
+    : sessions.filter((session) => session.userId !== activeSession?.userId);
+
+  const handleSwitch = (session: Session) => {
+    setActiveSessionId(session.userId);
+  };
+
+  const [logoutState, logout] = useAsyncCallback<void, Error, []>(
+    useCallback(async () => {
+      if (!activeSession) return;
+
+      await logoutClient(mx, activeSession);
+      setSessions({ type: 'DELETE', session: activeSession });
+      setActiveSessionId(
+        sessions.find((session) => session.userId !== activeSession.userId)?.userId
+      );
+      window.location.reload();
+    }, [mx, activeSession, sessions, setSessions, setActiveSessionId])
+  );
+
+  const loggingOut = logoutState.status === AsyncStatus.Loading;
+
   return (
     <SplashScreen>
       <Box direction="Column" grow="Yes" alignItems="Center" justifyContent="Center" gap="400">
@@ -26,11 +64,59 @@ function HomeserverOfflineError({ baseUrl, onRetry }: HomeserverOfflineErrorProp
                 may have a connection issue. Please try again.
               </Text>
             </Box>
-            <Button variant="Critical" onClick={onRetry} fill="Soft">
-              <Text as="span" size="B400">
-                Retry
-              </Text>
-            </Button>
+            <Box direction="Column" gap="200">
+              <Button variant="Critical" onClick={onRetry} fill="Soft" disabled={loggingOut}>
+                <Text as="span" size="B400">
+                  Retry
+                </Text>
+              </Button>
+              {otherSessions.length > 0 && (
+                <>
+                  <Button
+                    variant="Secondary"
+                    fill="Soft"
+                    onClick={() => setShowAccounts((visible) => !visible)}
+                    aria-expanded={showAccounts}
+                  >
+                    <Text as="span" size="B400">
+                      Switch account
+                    </Text>
+                  </Button>
+                  {showAccounts && (
+                    <Box direction="Column" gap="100">
+                      {otherSessions.map((session) => (
+                        <Button
+                          key={session.userId}
+                          variant="Secondary"
+                          fill="None"
+                          onClick={() => handleSwitch(session)}
+                        >
+                          <Text as="span" size="B300" truncate>
+                            {session.userId}
+                          </Text>
+                        </Button>
+                      ))}
+                    </Box>
+                  )}
+                </>
+              )}
+              <Button
+                variant="Critical"
+                fill="None"
+                onClick={logout}
+                disabled={loggingOut}
+                before={loggingOut && <Spinner variant="Critical" size="200" />}
+              >
+                <Text as="span" size="B400">
+                  Logout
+                </Text>
+              </Button>
+              {logoutState.status === AsyncStatus.Error && (
+                <Text size="T200" style={{ color: color.Critical.Main }}>
+                  Failed to logout. {logoutState.error.message}
+                </Text>
+              )}
+            </Box>
           </Box>
         </Dialog>
       </Box>

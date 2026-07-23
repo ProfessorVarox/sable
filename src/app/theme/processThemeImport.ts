@@ -1,4 +1,5 @@
 import { ThemeKind } from '$hooks/useTheme';
+import { fetch } from '$utils/fetch';
 
 import { putCachedThemeCss } from './cache';
 import {

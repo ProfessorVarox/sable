@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Fix display names for read receipts, event relations, and state events when using sliding sync with the member drawer closed.
+Fix display names in read receipts and event details when using sliding sync with member drawer closed.

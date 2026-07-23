@@ -116,7 +116,7 @@ export function BrokenContent({ body }: BrokenContentProps) {
   );
 }
 
-function getIncomingMediaMxcUrl(url: unknown): string | undefined {
+export function getIncomingMediaMxcUrl(url: unknown): string | undefined {
   return typeof url === 'string' && url.startsWith('mxc://') ? url : undefined;
 }
 

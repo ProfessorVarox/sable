@@ -2,7 +2,9 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Dialog, Text, color, config } from 'folds';
 import type { ClientConfig } from '$hooks/useClientConfig';
+import { takePreloadedConfig } from '$utils/preload';
 import { trimTrailingSlash } from '$utils/common';
+import { fetch } from '$utils/fetch';
 import { SplashScreen } from '$components/splash-screen';
 
 export const FALLBACK_CLIENT_CONFIG: ClientConfig = {
@@ -13,6 +15,15 @@ export const FALLBACK_CLIENT_CONFIG: ClientConfig = {
 };
 
 export const getClientConfig = async (): Promise<ClientConfig> => {
+  const preloaded = takePreloadedConfig();
+  if (preloaded !== undefined) {
+    const data = await preloaded.catch(() => undefined);
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      return data as ClientConfig;
+    }
+    // Preload missed or invalid — fall through to fresh fetch.
+  }
+
   const url = `${trimTrailingSlash(import.meta.env.BASE_URL)}/config.json`;
   const response = await fetch(url, { method: 'GET' });
   if (!response.ok) {

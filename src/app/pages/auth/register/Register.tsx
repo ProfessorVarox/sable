@@ -11,6 +11,8 @@ import { getLoginPath, withSearchParam } from '$pages/pathUtils';
 import { usePathWithOrigin } from '$hooks/usePathWithOrigin';
 import type { RegisterPathSearchParams } from '$pages/paths';
 import { SSOLogin } from '$pages/auth/SSOLogin';
+import { isTauri } from '@tauri-apps/api/core';
+import { buildTauriSsoRedirectUrl } from '$pages/auth/SSOTauri';
 import { OrDivider } from '$pages/auth/OrDivider';
 import { OidcLoginButton } from '$pages/auth/login/OidcLogin';
 import { PasswordRegisterForm, SUPPORTED_REGISTER_STAGES } from './PasswordRegisterForm';
@@ -35,7 +37,8 @@ export function Register() {
   const { sso } = useParsedLoginFlows(loginFlows.flows);
 
   // redirect to /login because only that path handle m.login.token and the OIDC callback
-  const ssoRedirectUrl = usePathWithOrigin(getLoginPath(server));
+  const webSsoRedirectUrl = usePathWithOrigin(getLoginPath(server));
+  const ssoRedirectUrl = isTauri() ? buildTauriSsoRedirectUrl(server) : webSsoRedirectUrl;
   const oidcRedirectUri = usePathWithOrigin(getLoginPath(server), { ignoreHashRouter: true });
 
   const isAddingAccount = searchParams.get('addAccount') === '1';
@@ -43,7 +46,7 @@ export function Register() {
     ? withSearchParam(getLoginPath(server), { addAccount: '1' })
     : getLoginPath(server);
 
-  const showOidc = authMetadata !== undefined;
+  const showOidc = authMetadata?.prompt_values_supported?.includes('create') === true;
 
   if (showOidc) {
     return (
@@ -57,6 +60,7 @@ export function Register() {
           redirectUri={oidcRedirectUri}
           label={`Continue with ${server}`}
           prompt="create"
+          server={server}
         />
         <span data-spacing-node />
         <Text align="Center">

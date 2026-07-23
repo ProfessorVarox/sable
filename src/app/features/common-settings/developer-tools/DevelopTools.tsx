@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
-import { Box, Text, IconButton, Scroll, Switch, Button, MenuItem, config, color } from 'folds';
+import { Box, Text, Scroll, Switch, Button, MenuItem, config, color } from 'folds';
 import {
   CaretDown,
   CaretRight,
   CaretUp,
   chipIcon,
-  composerIcon,
   menuIcon,
   Plus,
-  X,
 } from '$components/icons/phosphor';
 import { EventType, NotificationCountType, type MatrixEvent } from '$types/matrix-sdk';
-import { Page, PageContent, PageHeader } from '$components/page';
+import { PageContent, SettingsSectionPage } from '$components/page';
 import { SequenceCard } from '$components/sequence-card';
 import { SettingTile } from '$components/setting-tile';
 import { useSetting } from '$state/hooks/settings';
@@ -37,9 +35,10 @@ import type { StateEventInfo } from './StateEventEditor';
 import { StateEventEditor } from './StateEventEditor';
 
 type DeveloperToolsProps = {
+  requestBack?: () => void;
   requestClose: () => void;
 };
-export function DeveloperTools({ requestClose }: DeveloperToolsProps) {
+export function DeveloperTools({ requestBack, requestClose }: DeveloperToolsProps) {
   const [developerTools, setDeveloperTools] = useSetting(settingsAtom, 'developerTools');
   const mx = useMatrixClient();
   const room = useRoom();
@@ -191,21 +190,11 @@ export function DeveloperTools({ requestClose }: DeveloperToolsProps) {
   }
 
   return (
-    <Page>
-      <PageHeader outlined={false}>
-        <Box grow="Yes" gap="200">
-          <Box grow="Yes" alignItems="Center" gap="200">
-            <Text size="H3" truncate>
-              Developer Tools
-            </Text>
-          </Box>
-          <Box shrink="No">
-            <IconButton onClick={requestClose} variant="Surface">
-              {composerIcon(X)}
-            </IconButton>
-          </Box>
-        </Box>
-      </PageHeader>
+    <SettingsSectionPage
+      title="Developer Tools"
+      requestBack={requestBack}
+      requestClose={requestClose}
+    >
       <Box grow="Yes">
         <Scroll hideTrack visibility="Hover">
           <PageContent>
@@ -626,6 +615,6 @@ export function DeveloperTools({ requestClose }: DeveloperToolsProps) {
           </PageContent>
         </Scroll>
       </Box>
-    </Page>
+    </SettingsSectionPage>
   );
 }

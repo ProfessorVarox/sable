@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { EventTimeline, EventTimelineSet, MatrixEvent } from '$types/matrix-sdk';
 import type { ResolvedHiddenEventSettings } from '$state/hooks/settings';
 import type { ProcessedEvent } from './useProcessedTimeline';
-import { useProcessedTimeline } from './useProcessedTimeline';
+import {
+  getProcessedRowIndexForRawTimelineIndex,
+  useProcessedTimeline,
+} from './useProcessedTimeline';
 
 const MY_USER = '@alice:test';
 const OTHER_USER = '@bob:test';
@@ -136,6 +139,27 @@ const dividerIds = (processed: ProcessedEvent[]) =>
   processed.filter((e) => e.willRenderNewDivider).map((e) => e.id);
 
 describe('useProcessedTimeline new-messages divider', () => {
+  it('preserves absolute event order across linked timelines', () => {
+    const first = [createEvent({ id: '$a' }), createEvent({ id: '$b' })];
+    const second = [createEvent({ id: '$c' }), createEvent({ id: '$d' })];
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: [0, 1, 2, 3],
+        linkedTimelines: [createTimeline(first), createTimeline(second)],
+        ignoredUsersSet: new Set(),
+        hiddenEvents,
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: true,
+        hideNickAvatarEvents: true,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$b', '$c', '$d']);
+  });
+
   it('renders exactly one divider after a receipt anchored on a rendered message', () => {
     const processed = processTimeline([createEvent({ id: '$a' }), createEvent({ id: '$b' })], '$a');
 
@@ -223,5 +247,23 @@ describe('useProcessedTimeline new-messages divider', () => {
     );
 
     expect(dividerIds(processed)).toEqual([]);
+  });
+});
+
+describe('getProcessedRowIndexForRawTimelineIndex', () => {
+  it('finds the nearest preceding visible row in one pass', () => {
+    const processed = processTimeline(
+      [createEvent({ id: '$a' }), createReaction('$hidden', '$a'), createEvent({ id: '$b' })],
+      undefined
+    );
+
+    expect(getProcessedRowIndexForRawTimelineIndex(processed, 1)).toEqual({
+      rowIndex: 0,
+      focusRawIndex: 0,
+    });
+    expect(getProcessedRowIndexForRawTimelineIndex(processed, 2)).toEqual({
+      rowIndex: 1,
+      focusRawIndex: 2,
+    });
   });
 });

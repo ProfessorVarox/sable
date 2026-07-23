@@ -64,6 +64,9 @@ function makeMockMx(overrides: Record<string, unknown> = {}) {
     getJoinedRooms: vi.fn<() => Promise<{ joined_rooms: string[] }>>().mockResolvedValue({
       joined_rooms: [],
     }),
+    store: {
+      removeRoom: vi.fn<() => void>(),
+    },
     on: vi.fn<() => void>(),
     off: vi.fn<() => void>(),
     removeListener: vi.fn<() => void>(),
@@ -117,7 +120,7 @@ describe('SlidingSyncManager initial request', () => {
 
     expect(joined?.ranges).toEqual([[0, 29]]);
     expect(joined?.timeline_limit).toBe(1);
-    expect(joined?.required_state).toHaveLength(8);
+    expect(joined?.required_state).toHaveLength(10);
     expect(joined?.required_state).toContainEqual([EventType.RoomJoinRules, '']);
     expect(joined?.required_state).not.toContainEqual(['m.space.child', '*']);
     expect(updates).toMatchObject({
@@ -148,6 +151,53 @@ describe('SlidingSyncManager initial request', () => {
     await Promise.resolve();
     expect(manager.isResponseProcessing()).toBe(false);
     expect(settled).toHaveBeenCalledOnce();
+  });
+
+  it('does not fan out member requests for users referenced by startup sync', async () => {
+    const getStateEvent = vi.fn<() => Promise<Record<string, unknown>>>().mockResolvedValue({
+      membership: KnownMembership.Join,
+    });
+    const room = {
+      getMember: vi.fn<() => undefined>(),
+      currentState: { setStateEvents: vi.fn<() => void>() },
+    };
+    const manager = makeManager(
+      makeMockMx({
+        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
+        getStateEvent,
+      })
+    );
+    manager.attach();
+
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: {
+        '!room:example.com': {
+          required_state: [
+            {
+              type: EventType.RoomMember,
+              state_key: '@user:example.com',
+              sender: '@user:example.com',
+              content: { membership: KnownMembership.Join },
+            },
+          ],
+          timeline: [{ sender: '@timeline-user:example.com' }],
+        },
+      },
+      extensions: {
+        receipts: {
+          rooms: {
+            '!room:example.com': {
+              content: {
+                $event: { 'm.read': { '@receipt-user:example.com': { ts: 1 } } },
+              },
+            },
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+
+    expect(getStateEvent).not.toHaveBeenCalled();
   });
 
   it('includes the selected room subscription before the first request', () => {
@@ -333,6 +383,7 @@ describe('SlidingSyncManager room subscription coordination', () => {
   it('uses the active subscription while a room is also an image-pack room', () => {
     const manager = makeManager(makeMockMx());
     const roomId = '!pack:example.com';
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
 
     manager.setImagePackSubscriptions([roomId]);
     manager.subscribeToRoom(roomId);
@@ -346,6 +397,7 @@ describe('SlidingSyncManager room subscription coordination', () => {
   it('restores the image-pack subscription when the room is no longer active', () => {
     const manager = makeManager(makeMockMx());
     const roomId = '!pack:example.com';
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
 
     manager.setImagePackSubscriptions([roomId]);
     manager.subscribeToRoom(roomId);
@@ -400,12 +452,127 @@ describe('SlidingSyncManager room subscription coordination', () => {
 
   it('removes image-pack subscriptions which are no longer configured', () => {
     const manager = makeManager(makeMockMx());
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
 
     manager.setImagePackSubscriptions(['!old:example.com', '!current:example.com']);
     manager.setImagePackSubscriptions(['!current:example.com']);
 
     expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(
       new Set(['!current:example.com'])
+    );
+  });
+
+  it('defers image-pack subscriptions until lists are loaded so pack spaces get the composite key', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!spacepack:example.com';
+
+    manager.setImagePackSubscriptions([roomId]);
+    expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).not.toHaveBeenCalled();
+
+    manager.setSpaceSubscriptions([roomId]);
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
+    (manager as unknown as { flushDeferredSubscriptions: () => void }).flushDeferredSubscriptions();
+
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'space_image_packs'
+    );
+    expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(
+      new Set([roomId])
+    );
+  });
+
+  it('registers the composite space+image-pack subscription', () => {
+    makeManager(makeMockMx());
+
+    const call = (
+      mocks.slidingSyncInstance.addCustomSubscription.mock.calls as unknown as [
+        string,
+        { timeline_limit: number; required_state: [string, string][] },
+      ][]
+    ).find(([name]) => name === 'space_image_packs');
+    expect(call).toBeDefined();
+    const [, subscription] = call!;
+    expect(subscription.timeline_limit).toBe(0);
+    expect(subscription.required_state).toEqual(
+      expect.arrayContaining([
+        ['m.space.child', '*'],
+        ['m.room.image_pack', '*'],
+        ['im.ponies.room_emotes', '*'],
+      ])
+    );
+  });
+
+  it('uses the composite subscription when a pack room is also a space', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!spacepack:example.com';
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
+
+    manager.setImagePackSubscriptions([roomId]);
+    manager.setSpaceSubscriptions([roomId]);
+
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'space_image_packs'
+    );
+  });
+
+  it('uses the composite subscription regardless of registration order', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!spacepack:example.com';
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
+
+    manager.setSpaceSubscriptions([roomId]);
+    manager.setImagePackSubscriptions([roomId]);
+
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'space_image_packs'
+    );
+  });
+
+  it('prefers the active subscription over the composite and falls back on unsubscribe', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!spacepack:example.com';
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
+
+    manager.setImagePackSubscriptions([roomId]);
+    manager.setSpaceSubscriptions([roomId]);
+    manager.subscribeToRoom(roomId);
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'active_room'
+    );
+
+    manager.unsubscribeFromRoom(roomId);
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'space_image_packs'
+    );
+  });
+
+  it('reverts to the plain subscription when the other role is removed', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!spacepack:example.com';
+    (manager as unknown as { listsFullyLoaded: boolean }).listsFullyLoaded = true;
+
+    manager.setImagePackSubscriptions([roomId]);
+    manager.setSpaceSubscriptions([roomId]);
+
+    manager.setImagePackSubscriptions([]);
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'space'
+    );
+    expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(
+      new Set([roomId])
+    );
+
+    manager.setImagePackSubscriptions([roomId]);
+    manager.setSpaceSubscriptions([]);
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'image_packs'
     );
   });
 });

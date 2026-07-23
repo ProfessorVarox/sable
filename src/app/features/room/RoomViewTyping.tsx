@@ -1,4 +1,4 @@
-import { Box, IconButton, Text, as } from 'folds';
+import { Box, IconButton, Text, as, toRem } from 'folds';
 import { chipIcon, X } from '$components/icons/phosphor';
 import type { Room } from '$types/matrix-sdk';
 import classNames from 'classnames';
@@ -47,79 +47,83 @@ export const RoomViewTyping = as<'div', RoomViewTypingProps>(
     };
 
     return (
-      <div style={{ position: 'relative' }}>
-        <Box
-          className={classNames(css.RoomViewTyping, className)}
-          alignItems="Center"
-          gap="400"
-          {...props}
-          ref={ref}
-          style={{ zIndex: 9 }}
+      <Box
+        className={classNames(css.RoomViewTyping, className)}
+        alignItems="Center"
+        gap="400"
+        shrink="No"
+        {...props}
+        ref={ref}
+      >
+        <TypingIndicator />
+        <Text className={css.TypingText} size="T300" truncate>
+          {typingNames.length === 1 && (
+            <>
+              <b>{typingNames[0]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' is typing...'}
+              </Text>
+            </>
+          )}
+          {typingNames.length === 2 && (
+            <>
+              <b>{typingNames[0]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' and '}
+              </Text>
+              <b>{typingNames[1]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' are typing...'}
+              </Text>
+            </>
+          )}
+          {typingNames.length === 3 && (
+            <>
+              <b>{typingNames[0]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {', '}
+              </Text>
+              <b>{typingNames[1]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' and '}
+              </Text>
+              <b>{typingNames[2]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' are typing...'}
+              </Text>
+            </>
+          )}
+          {typingNames.length > 3 && (
+            <>
+              <b>{typingNames[0]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {', '}
+              </Text>
+              <b>{typingNames[1]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {', '}
+              </Text>
+              <b>{typingNames[2]}</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' and '}
+              </Text>
+              <b>{typingNames.length - 3} others</b>
+              <Text as="span" size="Inherit" priority="300">
+                {' are typing...'}
+              </Text>
+            </>
+          )}
+        </Text>
+        <IconButton
+          title="Drop Typing Status"
+          size="300"
+          radii="Pill"
+          onClick={handleDropAll}
+          style={{ padding: toRem(2) }}
         >
-          <TypingIndicator />
-          <Text className={css.TypingText} size="T300" truncate>
-            {typingNames.length === 1 && (
-              <>
-                <b>{typingNames[0]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' is typing...'}
-                </Text>
-              </>
-            )}
-            {typingNames.length === 2 && (
-              <>
-                <b>{typingNames[0]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' and '}
-                </Text>
-                <b>{typingNames[1]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' are typing...'}
-                </Text>
-              </>
-            )}
-            {typingNames.length === 3 && (
-              <>
-                <b>{typingNames[0]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {', '}
-                </Text>
-                <b>{typingNames[1]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' and '}
-                </Text>
-                <b>{typingNames[2]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' are typing...'}
-                </Text>
-              </>
-            )}
-            {typingNames.length > 3 && (
-              <>
-                <b>{typingNames[0]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {', '}
-                </Text>
-                <b>{typingNames[1]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {', '}
-                </Text>
-                <b>{typingNames[2]}</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' and '}
-                </Text>
-                <b>{typingNames.length - 3} others</b>
-                <Text as="span" size="Inherit" priority="300">
-                  {' are typing...'}
-                </Text>
-              </>
-            )}
-          </Text>
-          <IconButton title="Drop Typing Status" size="300" radii="Pill" onClick={handleDropAll}>
-            {chipIcon(X)}
-          </IconButton>
-        </Box>
-      </div>
+          {chipIcon(X)}
+        </IconButton>
+      </Box>
     );
   }
 );

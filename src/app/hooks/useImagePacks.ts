@@ -159,25 +159,19 @@ export const useGlobalImagePacks = (): ImagePack[] => {
       (mEvent) => {
         const eventType = mEvent.getType();
         const roomId = mEvent.getRoomId();
-        const stateKey = mEvent.getStateKey();
         if (
           (eventType === (CustomStateEvent.ImagePack as string) ||
             eventType === (CustomStateEvent.PoniesRoomEmotes as string)) &&
           roomId &&
-          typeof stateKey === 'string'
+          packRoomIds.includes(roomId)
         ) {
           setGlobalPacks((prev) => {
-            const global = !!prev.find(
-              (pack) =>
-                pack.address && pack.address.roomId === roomId && pack.address.stateKey === stateKey
-            );
-            if (!global) return prev;
             const next = getGlobalImagePacks(mx);
             return imagePackListEqual(prev, next) ? prev : next;
           });
         }
       },
-      [mx]
+      [mx, packRoomIds]
     )
   );
 

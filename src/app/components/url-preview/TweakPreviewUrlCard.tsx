@@ -15,6 +15,7 @@ import { Check, Link, Star, Warning, sizedIcon } from '$components/icons/phospho
 
 import { useClientConfig } from '$hooks/useClientConfig';
 import { useTimeoutToggle } from '$hooks/useTimeoutToggle';
+import { getCspNonce } from '$utils/cspNonce';
 import { usePatchSettings } from '$features/settings/cosmetics/themeSettingsPatch';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom, type ThemeRemoteTweakFavorite } from '$state/settings';
@@ -28,6 +29,7 @@ import { SableChatPreviewPlaceholder } from './SableChatPreviewPlaceholder';
 import { ThemeThirdPartyBanner } from './ThemeThirdPartyBanner';
 import { CssViewerButton } from '../theme/CssViewerButton';
 import { pruneThemeTweakFavorites, themeUrlHostLabel } from '../../theme/themeLibrary';
+import { fetch } from '$utils/fetch';
 
 function basenameFromFullSableUrl(url: string): string {
   const tail = url.split('/').pop() ?? url;
@@ -346,7 +348,7 @@ export function TweakPreviewUrlCard({ url }: { url: string }) {
 
       {styleBlock ? (
         <>
-          <style>{styleBlock}</style>
+          <style nonce={getCspNonce()}>{styleBlock}</style>
           <Box
             className={scopeClass}
             direction="Column"

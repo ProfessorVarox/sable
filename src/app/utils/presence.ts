@@ -17,10 +17,10 @@ export const setUserPresence = async (
   presence: Presence,
   statusMsg?: string
 ): Promise<void> => {
-  const syncPresence = presenceToSetPresence(presence);
-  getPresenceSyncManager(mx)?.setPresence(syncPresence);
+  const setPresence = presenceToSetPresence(presence);
+  getPresenceSyncManager(mx)?.setDesiredPresence(setPresence);
   await Promise.all([
-    mx.setSyncPresence(syncPresence),
+    mx.setSyncPresence(setPresence),
     mx.setPresence({
       presence,
       status_msg: statusMsg,

@@ -49,6 +49,11 @@ describe('byOrderKey', () => {
       undefined,
     ]);
   });
+
+  it('returns 0 for identical order keys', () => {
+    expect(byOrderKey('a', 'a')).toBe(0);
+    expect(byOrderKey(undefined, undefined)).toBe(0);
+  });
 });
 
 describe('factoryRoomIdByActivity', () => {

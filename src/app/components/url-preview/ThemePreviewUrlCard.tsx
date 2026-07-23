@@ -20,6 +20,7 @@ import { ThemePreviewCard } from '../theme/ThemePreviewCard';
 import { SableChatPreviewPlaceholder } from './SableChatPreviewPlaceholder';
 import { ThemeThirdPartyBanner } from './ThemeThirdPartyBanner';
 import { pruneThemeFavorites, themeUrlHostLabel } from '../../theme/themeLibrary';
+import { fetch } from '$utils/fetch';
 
 function isHttps(url: string): boolean {
   return /^https:\/\//i.test(url);

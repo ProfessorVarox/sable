@@ -1,4 +1,5 @@
 const DB_NAME = 'sable-theme-cache';
+import { fetch } from '$utils/fetch';
 const DB_VERSION = 1;
 const STORE = 'themes';
 const UPDATE_CHANNEL = 'sable-theme-cache-updates';

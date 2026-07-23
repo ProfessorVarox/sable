@@ -10,7 +10,6 @@ import type {
   MatrixEvent,
   Room,
   RoomMember,
-  CryptoBackend,
   StateEvents,
 } from '$types/matrix-sdk';
 import {
@@ -28,7 +27,6 @@ import {
 import type { IRoomCreateContent, RoomToParents, UnreadInfo } from '$types/matrix/room';
 import { NotificationType } from '$types/matrix/room';
 import { getMxIdLocalPart } from '$utils/matrix';
-import * as Sentry from '@sentry/react';
 
 export const getStateEvent = (
   room: Room,
@@ -638,32 +636,6 @@ export const getMemberAvatarMxc = (room: Room, userId: string): string | undefin
 export const isMembershipChanged = (mEvent: MatrixEvent): boolean =>
   mEvent.getContent().membership !== mEvent.getPrevContent().membership ||
   mEvent.getContent().reason !== mEvent.getPrevContent().reason;
-
-export const decryptAllTimelineEvent = async (mx: MatrixClient, timeline: EventTimeline) => {
-  const crypto = mx.getCrypto();
-  if (!crypto) return;
-  const decryptionPromises = timeline
-    .getEvents()
-    .filter((event) => event.isEncrypted())
-    .toReversed()
-    .map((event) => event.attemptDecryption(crypto as CryptoBackend, { isRetry: true }));
-  const decryptStart = performance.now();
-  await Sentry.startSpan(
-    {
-      name: 'decrypt.bulk',
-      op: 'matrix.crypto',
-      attributes: { event_count: decryptionPromises.length },
-    },
-    () => Promise.allSettled(decryptionPromises)
-  );
-  if (decryptionPromises.length > 0) {
-    Sentry.metrics.distribution(
-      'sable.decryption.bulk_latency_ms',
-      performance.now() - decryptStart,
-      { attributes: { event_count: String(decryptionPromises.length) } }
-    );
-  }
-};
 
 export const getEventReactions = (timelineSet: EventTimelineSet, eventId: string) =>
   timelineSet.relations.getChildEventsForEvent(

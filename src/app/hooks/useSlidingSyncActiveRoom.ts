@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { useAccountDataCallback } from '$hooks/useAccountDataCallback';
 import { getSlidingSyncManager } from '$client/initMatrix';
 import { useResolvedRoomIdOrAlias } from '$hooks/router/useResolvedRoomId';
 import { useSpaces } from '$state/hooks/roomList';
 import { allRoomsAtom } from '$state/room-list/roomList';
+import { getGlobalImagePackRoomIds } from '$plugins/custom-emoji';
 import { ClientEvent } from '$types/matrix-sdk';
+import { CustomAccountDataEvent } from '$types/matrix/accountData';
 import {
   DIRECT_ROOM_PATH,
   HOME_ROOM_PATH,
@@ -107,6 +110,34 @@ export const useSlidingSyncSpaceSubscriptions = (): void => {
   }, [manager, spaces]);
 };
 
+// Subscribe pack rooms before the emoji board first opens so their
+// pack state is already available.
+export const useSlidingSyncImagePackSubscriptions = (): void => {
+  const manager = useAvailableSlidingSyncManager();
+  const mx = useMatrixClient();
+
+  useEffect(() => {
+    if (!manager) return undefined;
+    manager.setImagePackSubscriptions(getGlobalImagePackRoomIds(mx));
+    return undefined;
+  }, [manager, mx]);
+
+  useAccountDataCallback(
+    mx,
+    useCallback(
+      (mEvent) => {
+        if (
+          mEvent.getType() === (CustomAccountDataEvent.ImagePackRooms as string) ||
+          mEvent.getType() === (CustomAccountDataEvent.PoniesEmoteRooms as string)
+        ) {
+          manager?.setImagePackSubscriptions(getGlobalImagePackRoomIds(mx));
+        }
+      },
+      [manager, mx]
+    )
+  );
+};
+
 export const useSlidingSyncRoomLoading = (roomId: string): boolean => {
   const manager = useAvailableSlidingSyncManager();
   const [loading, setLoading] = useState(() => manager?.isRoomSubscriptionLoading(roomId) ?? false);
@@ -126,4 +157,5 @@ export const useSlidingSyncRoomLoading = (roomId: string): boolean => {
 export const useSlidingSyncActiveRoom = (): void => {
   useSlidingSyncRouteRooms();
   useSlidingSyncSpaceSubscriptions();
+  useSlidingSyncImagePackSubscriptions();
 };

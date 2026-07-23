@@ -12,27 +12,51 @@ import {
   KnownMembership,
   SyncState,
 } from '$types/matrix-sdk';
+import { fetch } from '$utils/fetch';
+import { clearMediaCache } from '$utils/mediaCache';
 
 import { clearNavToActivePathStore } from '$state/navToActivePath';
-import type { Session, SessionStoreName } from '$state/sessions';
-import { getSessionStoreName } from '$state/sessions';
+import type { Session, Sessions, SessionStoreName } from '$state/sessions';
+import {
+  ACTIVE_SESSION_KEY,
+  getSessionStoreName,
+  getStoredSessionRefreshToken,
+  MATRIX_SESSIONS_KEY,
+} from '$state/sessions';
+import { getLocalStorageItem } from '$state/utils/atomWithLocalStorage';
 import { createLogger } from '$utils/debug';
 import { createDebugLogger } from '$utils/debugLogger';
 import * as Sentry from '@sentry/react';
 import { pushSessionToSW } from '../sw-session';
-import { SessionOidcTokenRefresher } from './oidcTokenRefresher';
+import { assertAuthMetadataIssuer, createSessionTokenRefresher } from './oidcTokenRefresher';
+import { revokeOAuthToken } from './oauthTokenRevocation';
 import { cryptoCallbacks } from './secretStorageKeys';
 import type { SlidingSyncDiagnostics } from './slidingSync';
 import { scopeEphemeralExtensions, SlidingSyncManager } from './slidingSync';
 import { PresenceSyncManager } from './presenceSync';
 import { SlidingSyncSidebarCache } from './slidingSyncSidebarCache';
 import { hydrateRoomMember } from './roomMemberHydration';
+import { clearCachedUserProfiles } from './userProfileCache';
+import {
+  primeVersionsFromCache,
+  revalidateVersionsCache,
+  clearCachedVersions,
+  cacheVersionsFromClient,
+} from './versionsCache';
 
 const log = createLogger('initMatrix');
 const debugLog = createDebugLogger('initMatrix');
 const slidingSyncByClient = new WeakMap<MatrixClient, SlidingSyncManager>();
 const membershipActionCleanupByClient = new WeakMap<MatrixClient, () => void>();
 const presenceSyncByClient = new WeakMap<MatrixClient, PresenceSyncManager>();
+
+export const ownsActiveMediaSession = (session?: Session): boolean => {
+  if (!session) return true;
+  const sessions = getLocalStorageItem<Sessions>(MATRIX_SESSIONS_KEY, []);
+  const activeSessionId = getLocalStorageItem<string | undefined>(ACTIVE_SESSION_KEY, undefined);
+  const activeSession = sessions.find((item) => item.userId === activeSessionId) ?? sessions[0];
+  return activeSession?.userId === session.userId;
+};
 const presenceStartCleanupByClient = new WeakMap<MatrixClient, () => void>();
 const SLIDING_SYNC_POLL_TIMEOUT_MS = 45000;
 
@@ -222,7 +246,7 @@ type BuiltClient = {
   indexedDBStore: IndexedDBStore;
 };
 
-const buildClient = (session: Session): BuiltClient => {
+const buildClient = async (session: Session): Promise<BuiltClient> => {
   const storeName = getSessionStoreName(session);
 
   const indexedDBStore = new IndexedDBStore({
@@ -233,11 +257,15 @@ const buildClient = (session: Session): BuiltClient => {
 
   const legacyCryptoStore = new IndexedDBCryptoStore(global.indexedDB, storeName.crypto);
 
-  const tokenRefresher =
-    session.oidc && session.refreshToken ? new SessionOidcTokenRefresher(session) : undefined;
+  const tempClient = createClient({
+    baseUrl: session.baseUrl,
+    fetchFn: fetch,
+  });
+  const tokenRefresher = createSessionTokenRefresher(session, tempClient);
 
   const mx = createClient({
     baseUrl: session.baseUrl,
+    fetchFn: fetch,
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     userId: session.userId,
@@ -247,9 +275,7 @@ const buildClient = (session: Session): BuiltClient => {
     timelineSupport: true,
     cryptoCallbacks: cryptoCallbacks as unknown as CryptoCallbacks,
     verificationMethods: ['m.sas.v1'],
-    tokenRefreshFunction: tokenRefresher
-      ? (refreshToken) => tokenRefresher.doRefreshAccessToken(refreshToken)
-      : undefined,
+    tokenRefreshFunction: tokenRefresher?.tokenRefreshFunction,
   });
 
   return { mx, indexedDBStore };
@@ -265,13 +291,16 @@ const initializeClient = async (
 ): Promise<ClientInitializationResult> => {
   let builtClient: BuiltClient;
   try {
-    builtClient = buildClient(session);
+    builtClient = await buildClient(session);
   } catch (error) {
     return { ok: false, error, phase: 'sync_store' };
   }
   const { mx, indexedDBStore } = builtClient;
 
-  void mx.getVersions().catch(() => undefined);
+  void primeVersionsFromCache(mx, session.baseUrl, session.userId).then((primed) => {
+    if (primed) void revalidateVersionsCache(mx, session.baseUrl, session.userId);
+    else void cacheVersionsFromClient(mx, session.baseUrl, session.userId);
+  });
 
   const syncStorePromise = measureStartupPhase('sync_store', () => indexedDBStore.startup());
   const cryptoPromise = measureStartupPhase('rust_crypto', () =>
@@ -518,6 +547,7 @@ export const clearCacheAndReload = async (mx: MatrixClient) => {
   stopClient(mx);
   clearNavToActivePathStore(mx.getSafeUserId());
   SlidingSyncSidebarCache.clear(mx.getSafeUserId());
+  clearCachedUserProfiles(mx.getSafeUserId());
   await mx.store.deleteAllData();
   window.location.reload();
 };
@@ -531,39 +561,24 @@ export const getClientSyncDiagnostics = (mx: MatrixClient): ClientSyncDiagnostic
   };
 };
 
-const revokeOidcToken = async (
-  endpoint: string,
-  token: string,
-  tokenTypeHint: 'access_token' | 'refresh_token',
-  clientId: string
-): Promise<void> => {
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ token, token_type_hint: tokenTypeHint, client_id: clientId }),
-  });
-  if (!res.ok) {
-    throw new Error(`OIDC token revocation failed (${res.status})`);
-  }
-};
-
 const revokeOidcSession = async (mx: MatrixClient, session: Session): Promise<void> => {
-  const clientId = session.oidc?.clientId;
-  if (!clientId) return;
+  const oidc = session.oidc;
+  if (!oidc) return;
   const metadata = await mx.getAuthMetadata();
-  const endpoint = metadata.revocation_endpoint;
-  if (!endpoint) return;
+  assertAuthMetadataIssuer(oidc.issuer, metadata);
 
-  const accessToken = mx.getAccessToken() ?? undefined;
-  const results = await Promise.allSettled([
-    session.refreshToken
-      ? revokeOidcToken(endpoint, session.refreshToken, 'refresh_token', clientId)
-      : Promise.resolve(),
-    accessToken
-      ? revokeOidcToken(endpoint, accessToken, 'access_token', clientId)
-      : Promise.resolve(),
-  ]);
-  if (results.some((r) => r.status === 'rejected')) {
+  const refreshToken = getStoredSessionRefreshToken(session.userId) ?? session.refreshToken;
+  const token = refreshToken ?? mx.getAccessToken() ?? undefined;
+  if (!token) return;
+
+  try {
+    await revokeOAuthToken(
+      metadata,
+      oidc.clientId,
+      token,
+      refreshToken ? 'refresh_token' : 'access_token'
+    );
+  } catch {
     debugLog.warn('general', 'OIDC token revocation had failures', { userId: session.userId });
   }
 };
@@ -579,7 +594,6 @@ export const logoutClient = async (mx: MatrixClient, session?: Session) => {
     sessionUserId: session?.userId,
   });
   debugLog.info('general', 'Logging out client', { userId: mx.getUserId() });
-  pushSessionToSW();
   stopClient(mx);
   try {
     if (session?.oidc) {
@@ -594,6 +608,8 @@ export const logoutClient = async (mx: MatrixClient, session?: Session) => {
 
   if (session) {
     SlidingSyncSidebarCache.clear(session.userId);
+    clearCachedVersions(session.baseUrl, session.userId);
+    clearCachedUserProfiles(session.userId);
     const storeName: SessionStoreName = getSessionStoreName(session);
     await mx.clearStores({ cryptoDatabasePrefix: storeName.rustCryptoPrefix });
     await deleteDatabase(storeName.sync);
@@ -602,6 +618,15 @@ export const logoutClient = async (mx: MatrixClient, session?: Session) => {
   } else {
     await mx.clearStores();
     window.localStorage.clear();
+  }
+
+  try {
+    await clearMediaCache();
+  } finally {
+    if (ownsActiveMediaSession(session)) {
+      // Queue the final clear after any in-flight refresh.
+      await pushSessionToSW();
+    }
   }
 };
 
@@ -613,5 +638,6 @@ export const clearLoginData = async () => {
     if (name) window.indexedDB.deleteDatabase(name);
   });
   window.localStorage.clear();
+  await clearMediaCache();
   window.location.reload();
 };
