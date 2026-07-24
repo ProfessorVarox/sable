@@ -18,6 +18,7 @@ import { isRoomPrivate } from '$utils/roomVisibility';
 import { canForwardEvent } from '$utils/room';
 import * as prefix from '$unstable/prefixes';
 import { SearchWrapper } from '$features/navigate';
+import { useDismissOnBack } from '$utils/androidBack';
 const debugLog = createDebugLogger('MessageForward');
 
 // Message forwarding component
@@ -106,6 +107,9 @@ export function MessageForwardInternal({
   useEffect(() => {
     if (!forwardable) onClose();
   }, [forwardable, onClose]);
+
+  // Android back closes the forward picker instead of navigating away.
+  useDismissOnBack(onClose);
 
   // possible targets to forward the message to
   const forwardTargets = useMemo(

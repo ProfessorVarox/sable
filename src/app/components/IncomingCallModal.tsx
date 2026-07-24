@@ -16,6 +16,7 @@ import {
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { Room } from '$types/matrix-sdk';
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useRoomName } from '$hooks/useRoomMeta';
 import { useCallEmbed } from '$hooks/useCallEmbed';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
@@ -34,6 +35,7 @@ import {
   type IncomingCall,
 } from '$state/callEmbed';
 import { createDebugLogger } from '$utils/debugLogger';
+import { useDismissOnBack } from '$utils/androidBack';
 import { dismissSystemCallNotifications } from '$features/call/callNotificationBridge';
 import { getIncomingCallBlockers } from '$features/call/getIncomingCallBlockers';
 import { RoomAvatar } from './room-avatar';
@@ -59,12 +61,13 @@ type IncomingCallInternalProps = {
 
 export function IncomingCallInternal({ room, incomingCall, onClose }: IncomingCallInternalProps) {
   const mx = useMatrixClient();
+  const useAuthentication = useMediaAuthentication();
   const screenSize = useScreenSizeContext();
   const compact = screenSize === ScreenSize.Mobile;
   const roomName = useRoomName(room);
   const callEmbed = useCallEmbed();
   const { navigateRoom } = useRoomNavigate();
-  const roomAvatarUrl = getRoomAvatarUrl(mx, room, 96);
+  const roomAvatarUrl = getRoomAvatarUrl(mx, room, 96, useAuthentication);
   const setAutoJoinIntent = useSetAtom(autoJoinCallIntentAtom);
   const setMutedRoomId = useSetAtom(mutedCallRoomIdAtom);
   const setCallSoundBlocked = useSetAtom(callSoundBlockedAtom);
@@ -75,7 +78,8 @@ export function IncomingCallInternal({ room, incomingCall, onClose }: IncomingCa
     incomingCall.senderId;
   const callerAvatarMxc = room.getMember(incomingCall.senderId)?.getMxcAvatarUrl();
   const callerAvatarUrl = callerAvatarMxc
-    ? (mx.mxcUrlToHttp(callerAvatarMxc, 96, 96, 'crop') ?? undefined)
+    ? (mx.mxcUrlToHttp(callerAvatarMxc, 96, 96, 'crop', undefined, undefined, useAuthentication) ??
+      undefined)
     : undefined;
 
   const isRingNotification = incomingCall.notificationType === 'ring';
@@ -334,9 +338,12 @@ export function IncomingCallModal() {
   const mx = useMatrixClient();
   const room = incomingCall ? mx.getRoom(incomingCall.roomId) : null;
 
-  if (!incomingCall || !room) return null;
-
   const close = () => setIncomingCall(null);
+
+  // Android back dismisses the incoming call modal instead of navigating away.
+  useDismissOnBack(close, !!incomingCall && !!room);
+
+  if (!incomingCall || !room) return null;
 
   return (
     <Overlay open backdrop={<OverlayBackdrop />}>

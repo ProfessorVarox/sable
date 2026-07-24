@@ -88,7 +88,6 @@ export function SwipeableOverlayWrapper({
     <div
       {...bind()}
       style={{
-        touchAction: 'pan-y',
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',

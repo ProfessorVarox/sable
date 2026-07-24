@@ -271,21 +271,25 @@ export function Home() {
   const noRoomToDisplay = rooms.length === 0;
   const [closedCategories, setClosedCategories] = useAtom(useClosedNavCategoriesAtom());
 
+  const defaultCategoryClosed = closedCategories.has(DEFAULT_CATEGORY_ID);
+  const sortRoomsByActivity = defaultCategoryClosed || isShowingAllRoomsInHome;
+  const orderedRooms = useMemo(
+    () =>
+      Array.from(rooms).toSorted(
+        sortRoomsByActivity ? factoryRoomIdByActivity(mx) : factoryRoomIdByAtoZ(mx)
+      ),
+    [mx, rooms, sortRoomsByActivity]
+  );
+
   const sortedRooms = useMemo(() => {
-    const items = Array.from(rooms).toSorted(
-      closedCategories.has(DEFAULT_CATEGORY_ID) || isShowingAllRoomsInHome
-        ? factoryRoomIdByActivity(mx)
-        : factoryRoomIdByAtoZ(mx)
-    );
+    if (!defaultCategoryClosed) return orderedRooms;
+
     const hasUnread = (roomId: string) => {
       const unread = roomToUnread.get(roomId);
       return !!unread && (unread.total > 0 || unread.highlight > 0);
     };
-    if (closedCategories.has(DEFAULT_CATEGORY_ID)) {
-      return items.filter((rId) => hasUnread(rId) || rId === selectedRoomId);
-    }
-    return items;
-  }, [mx, rooms, closedCategories, roomToUnread, selectedRoomId, isShowingAllRoomsInHome]);
+    return orderedRooms.filter((rId) => hasUnread(rId) || rId === selectedRoomId);
+  }, [orderedRooms, defaultCategoryClosed, roomToUnread, selectedRoomId]);
 
   const getItemKey = useCallback((index: number) => sortedRooms[index] ?? index, [sortedRooms]);
 

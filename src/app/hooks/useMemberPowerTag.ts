@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react';
 import type { MatrixClient, Room, RoomMember } from '$types/matrix-sdk';
 import type { MemberPowerTag, MemberPowerTagIcon } from '$types/matrix/room';
 import { accessibleColor } from '$plugins/color';
+import { mxcUrlToHttp } from '$utils/matrix';
 import type { PowerLevelTags } from './usePowerLevelTags';
 import { getPowerLevelTag, usePowerLevelTags } from './usePowerLevelTags';
 import type { IPowerLevels } from './usePowerLevels';
@@ -40,7 +41,7 @@ export const getPowerTagIconSrc = (
   icon: MemberPowerTagIcon
 ): string | undefined =>
   icon?.key?.startsWith('mxc://')
-    ? (mx.mxcUrlToHttp(icon.key, 96, 96, 'scale', undefined, undefined, useAuthentication) ?? '🌻')
+    ? (mxcUrlToHttp(mx, icon.key, useAuthentication, 96, 96, 'scale') ?? '🌻')
     : icon?.key;
 
 export const useAccessiblePowerTagColors = (

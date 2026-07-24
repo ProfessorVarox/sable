@@ -60,6 +60,10 @@ type SlidingSyncOptions = {
   initialRoomIds?: Iterable<string>;
 };
 
+type RoomScopedExtensionResponse = {
+  rooms?: Record<string, unknown>;
+};
+
 export type SlidingSyncListDiagnostics = {
   key: string;
   knownCount: number;
@@ -235,6 +239,14 @@ export class SlidingSyncManager {
 
   private readonly activeRoomSubscriptions = new Set<string>();
 
+  /**
+   * Room IDs joined locally via reconcileRoomMembership(Join) but not yet
+   * confirmed as joined by the server's sliding-sync response. The SDK can
+   * revert these to "invite" when the server still sends invite_state after a
+   * join; we re-assert join after each sync until the server catches up.
+   */
+  private readonly optimisticallyJoinedRoomIds = new Set<string>();
+
   private readonly sidebarRoomSubscriptions = new Set<string>();
 
   private readonly spaceSubscriptions = new Set<string>();
@@ -244,6 +256,13 @@ export class SlidingSyncManager {
   private readonly imagePackRoomSubscriptions = new Set<string>();
 
   private deferredImagePackSubscriptions: Set<string> | null = null;
+
+  /**
+   * Room IDs that received data in the current sync cycle. Used to narrow the
+   * sync-settled unread recompute to only changed rooms instead of all rooms.
+   * Populated by onCacheRoomData, cleared after the settled listeners fire.
+   */
+  private readonly dirtyRoomIds = new Set<string>();
 
   private roomSubscriptionSyncQueued = false;
 
@@ -294,7 +313,9 @@ export class SlidingSyncManager {
 
   private responseProcessing = false;
 
-  private readonly responseSettledListeners = new Set<() => void>();
+  private readonly responseSettledListeners = new Set<
+    (dirtyRoomIds: ReadonlySet<string>) => void
+  >();
 
   private previousListCounts: Map<string, number> = new Map();
 
@@ -405,6 +426,7 @@ export class SlidingSyncManager {
       if (err || !resp || state !== SlidingSyncState.Complete) return;
 
       this.recordServerMembershipRooms(resp);
+      this.reassertOptimisticJoins();
 
       this.roomDataAwaitingSyncCompletion.forEach((roomId) =>
         this.notifyRoomSubscriptionStatus(roomId, false)
@@ -493,10 +515,23 @@ export class SlidingSyncManager {
         });
       }
 
+      ['receipts', 'account_data'].forEach((extensionName) => {
+        const extension = resp.extensions?.[extensionName] as
+          | RoomScopedExtensionResponse
+          | undefined;
+        const rooms = extension?.rooms ?? {};
+        Object.entries(rooms).forEach(([roomId, data]) => {
+          if (extensionName === 'account_data' && Array.isArray(data) && data.length === 0) return;
+          this.dirtyRoomIds.add(roomId);
+        });
+      });
+
       globalThis.queueMicrotask(() => {
         if (this.disposed) return;
         this.responseProcessing = false;
-        this.responseSettledListeners.forEach((listener) => listener());
+        const dirtyRoomIds = new Set(this.dirtyRoomIds);
+        this.dirtyRoomIds.clear();
+        this.responseSettledListeners.forEach((listener) => listener(dirtyRoomIds));
       });
     };
 
@@ -515,6 +550,7 @@ export class SlidingSyncManager {
     };
 
     this.onCacheRoomData = (roomId, data) => {
+      this.dirtyRoomIds.add(roomId);
       this.sidebarCache.cacheRoom(roomId, data);
 
       if (!this.initialListHydrationCompleted || this.hydratingSidebarCache) return;
@@ -575,8 +611,10 @@ export class SlidingSyncManager {
     });
 
     this.pendingRoomDataListeners.clear();
+    this.optimisticallyJoinedRoomIds.clear();
     this.responseProcessing = false;
     this.responseSettledListeners.clear();
+    this.dirtyRoomIds.clear();
     this.roomDataAwaitingSyncCompletion.clear();
     this.roomSubscriptionStatusListeners.forEach((listeners) =>
       listeners.forEach((listener) => listener(false))
@@ -982,9 +1020,36 @@ export class SlidingSyncManager {
     return this.responseProcessing;
   }
 
-  public subscribeToResponseSettled(listener: () => void): () => void {
+  public subscribeToResponseSettled(
+    listener: (dirtyRoomIds: ReadonlySet<string>) => void
+  ): () => void {
     this.responseSettledListeners.add(listener);
     return () => this.responseSettledListeners.delete(listener);
+  }
+
+  /**
+   * Re-assert join for rooms the SDK reverted to "invite" because the server's
+   * sliding-sync proxy still sent invite_state after a successful join. Runs
+   * after the SDK has finished processing all room data for the cycle (Complete
+   * fires post-processing) and before the responseSettled microtask that drives
+   * unread computation, so the app sees the corrected membership.
+   */
+  private reassertOptimisticJoins(): void {
+    if (this.optimisticallyJoinedRoomIds.size === 0) return;
+    for (const roomId of this.optimisticallyJoinedRoomIds) {
+      const room = this.mx.getRoom(roomId);
+      if (!room) {
+        this.optimisticallyJoinedRoomIds.delete(roomId);
+        continue;
+      }
+      if (room.getMyMembership() === (KnownMembership.Join as string)) {
+        // Server has caught up: the room is genuinely joined now. Stop tracking.
+        this.optimisticallyJoinedRoomIds.delete(roomId);
+      } else {
+        // SDK reverted to invite (or another state). Re-assert join.
+        room.updateMyMembership(KnownMembership.Join);
+      }
+    }
   }
 
   public reconcileRoomMembership(
@@ -993,7 +1058,18 @@ export class SlidingSyncManager {
   ): void {
     this.mx.getRoom(roomId)?.updateMyMembership(membership);
 
+    if (membership === KnownMembership.Join) {
+      // Track the room so we can re-assert join if the SDK reverts it while the
+      // server's sliding-sync proxy still reports the room in the invite list.
+      this.optimisticallyJoinedRoomIds.add(roomId);
+      // Subscribe so the next sync pulls real joined member state into the
+      // room's current state, letting recalculate() see "join" not "invite".
+      this.subscribeToRoom(roomId);
+      return;
+    }
+
     if (membership === KnownMembership.Leave) {
+      this.optimisticallyJoinedRoomIds.delete(roomId);
       this.sidebarCache.removeRoom(roomId);
       const removedSpaceSubscription = this.spaceSubscriptions.delete(roomId);
       const removedSidebarSubscription = this.sidebarRoomSubscriptions.delete(roomId);

@@ -19,7 +19,7 @@ export type MediaTransportOptions = {
 
 const inflightRequests = new Map<string, Promise<Blob>>();
 
-const MEDIA_FETCH_TIMEOUT_MS = 30_000;
+const MEDIA_FETCH_TIMEOUT_MS = 120_000;
 
 const MATRIX_SESSIONS_KEY = 'matrixSessions';
 const ACTIVE_SESSION_KEY = 'matrixActiveSession';
@@ -299,8 +299,31 @@ async function fetchMediaBlobInternal(url: string, options?: MediaTransportOptio
     return fetchAndCache(await fetchMediaResponse(url, undefined, cacheMode));
   }
 
+  const fetchWithRetry = async (
+    fetchUrl: string,
+    token: string | undefined,
+    fetchCacheMode: MediaFetchCacheMode
+  ): Promise<Response> => {
+    try {
+      const response = await fetchMediaResponse(fetchUrl, token, fetchCacheMode);
+      if (response.ok || isRetryableAuthError(response)) return response;
+      // Retry once on server errors (5xx) after a short backoff
+      if (response.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1500));
+        return fetchMediaResponse(fetchUrl, token, fetchCacheMode);
+      }
+      return response;
+    } catch (err) {
+      // Don't retry on AbortError (user navigated away / manual abort)
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // Network error or timeout — retry once after a short backoff
+      await new Promise((r) => setTimeout(r, 1500));
+      return fetchMediaResponse(fetchUrl, token, fetchCacheMode);
+    }
+  };
+
   const initialAccessToken = resolveAccessToken(url, options);
-  const initialResponse = await fetchMediaResponse(url, initialAccessToken, cacheMode);
+  const initialResponse = await fetchWithRetry(url, initialAccessToken, cacheMode);
   if (initialResponse.ok) {
     return fetchAndCache(initialResponse);
   }

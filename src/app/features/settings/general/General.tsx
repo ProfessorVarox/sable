@@ -4,13 +4,14 @@ import type {
   KeyboardEventHandler,
   MouseEventHandler,
 } from 'react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { useAtomValue, useSetAtom } from 'jotai';
 import type { RectCords } from 'folds';
 import {
   Box,
   Button,
+  color,
   config,
   Header,
   IconButton,
@@ -27,17 +28,25 @@ import {
   ArrowUp,
   CaretDown,
   composerIcon,
+  DotsSixVerticalIcon,
   Download,
+  Gif,
   Info,
   menuIcon,
   Shield,
+  Smiley,
+  Sticker,
   X,
 } from '$components/icons/phosphor';
 import FocusTrap from 'focus-trap-react';
+import {
+  draggable,
+  dropTargetForElements,
+} from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { PageContent } from '$components/page';
 import { SequenceCard } from '$components/sequence-card';
 import { useSetting } from '$state/hooks/settings';
-import type { DateFormat, MessageSpacing, CaptionPosition } from '$state/settings';
+import type { DateFormat, EditorButtonId, MessageSpacing, CaptionPosition } from '$state/settings';
 import { MessageLayout, RightSwipeAction, settingsAtom } from '$state/settings';
 import { SettingTile } from '$components/setting-tile';
 import { KeySymbol } from '$utils/key-symbol';
@@ -418,10 +427,105 @@ function DateAndTime() {
   );
 }
 
+const EDITOR_BUTTON_META = {
+  gif: { name: 'Gif', Icon: Gif },
+  sticker: { name: 'Sticker', Icon: Sticker },
+  emoji: { name: 'Emoji', Icon: Smiley },
+};
+
+type EditorButtonOrderRowProps = {
+  id: EditorButtonId;
+  index: number;
+  isDragging: boolean;
+  onDraggingIndexChange: (index: number | null) => void;
+  onReorder: (from: number, to: number) => void;
+};
+
+function EditorButtonOrderRow({
+  id,
+  index,
+  isDragging,
+  onDraggingIndexChange,
+  onReorder,
+}: Readonly<EditorButtonOrderRowProps>) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const { name, Icon } = EDITOR_BUTTON_META[id];
+
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!element) return undefined;
+    return draggable({
+      element,
+      getInitialData: () => ({ index }),
+      onDragStart: () => onDraggingIndexChange(index),
+      onDrop: () => onDraggingIndexChange(null),
+    });
+  }, [index, onDraggingIndexChange]);
+
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!element) return undefined;
+    return dropTargetForElements({
+      element,
+      getData: () => ({ index }),
+      onDrop: ({ source }) => {
+        const from = source.data.index;
+        if (typeof from !== 'number' || from === index) return;
+        onReorder(from, index);
+      },
+    });
+  }, [index, onReorder]);
+
+  return (
+    <SequenceCard
+      ref={rowRef}
+      className={SequenceCardStyle}
+      variant="Surface"
+      direction="Column"
+      style={{ opacity: isDragging ? 0.4 : 1, cursor: 'grab' }}
+    >
+      <SettingTile
+        focusId={`editor-button-order-${id}`}
+        title={name}
+        before={composerIcon(Icon, { weight: 'regular' })}
+        after={composerIcon(DotsSixVerticalIcon)}
+      />
+    </SequenceCard>
+  );
+}
+
 function Editor() {
   const [enterForNewline, setEnterForNewline] = useSetting(settingsAtom, 'enterForNewline');
   const [editorToolbar, setEditorToolbar] = useSetting(settingsAtom, 'editorToolbar');
   const [editorOldAddFile, setEditorOldAddFile] = useSetting(settingsAtom, 'editorOldAddFile');
+  const [editorMicButton, setEditorMicButton] = useSetting(settingsAtom, 'editorMicButton');
+  const [editorEmojiButton, setEditorEmojiButton] = useSetting(settingsAtom, 'editorEmojiButton');
+  const [editorGifButton, setEditorGifButton] = useSetting(settingsAtom, 'editorGifButton');
+  const [editorStickerButton, setEditorStickerButton] = useSetting(
+    settingsAtom,
+    'editorStickerButton'
+  );
+  const [editorButtonOrder, setEditorButtonOrder] = useSetting(settingsAtom, 'editorButtonOrder');
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+
+  const handleReorder = useCallback(
+    (from: number, to: number) => {
+      if (from === to) return;
+      setEditorButtonOrder((prev) => {
+        const next = [...prev];
+        const removed = next.splice(from, 1);
+        next.splice(to, 0, ...removed);
+        return next;
+      });
+    },
+    [setEditorButtonOrder]
+  );
+  const enabledButtons: Record<EditorButtonId, boolean> = {
+    gif: editorGifButton,
+    sticker: editorStickerButton,
+    emoji: editorEmojiButton,
+  };
+  const hasEnabledOrder = editorButtonOrder.some((id) => enabledButtons[id]);
   const [hideActivity, setHideActivity] = useSetting(settingsAtom, 'hideActivity');
   const [hideReads, setHideReads] = useSetting(settingsAtom, 'hideReads');
   const [sendPresence, setSendPresence] = useSetting(settingsAtom, 'sendPresence');
@@ -459,6 +563,78 @@ function Editor() {
             <Switch variant="Primary" value={editorOldAddFile} onChange={setEditorOldAddFile} />
           }
         />
+      </SequenceCard>
+      <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+        <SettingTile
+          title="Show Voice Recording Button"
+          focusId="show-voice-recording-button"
+          description="Show the microphone button in the message composer. When off, the send button shows even when the editor is empty."
+          after={<Switch variant="Primary" value={editorMicButton} onChange={setEditorMicButton} />}
+        />
+      </SequenceCard>
+      <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+        <SettingTile
+          title="Show Emoji Button"
+          focusId="show-emoji-button"
+          description="Show the emoji button inline with the message composer."
+          after={
+            <Switch variant="Primary" value={editorEmojiButton} onChange={setEditorEmojiButton} />
+          }
+        />
+      </SequenceCard>
+      <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+        <SettingTile
+          title="Show Gif Button"
+          focusId="show-gif-button"
+          description="Show the gif button inline with the message composer. This makes requests to klipy.com whenever you search for a gif."
+          after={<Switch variant="Primary" value={editorGifButton} onChange={setEditorGifButton} />}
+        />
+      </SequenceCard>
+      <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+        <SettingTile
+          title="Show Sticker Button"
+          focusId="show-sticker-button"
+          description="Show the sticker button inline with the message composer."
+          after={
+            <Switch
+              variant="Primary"
+              value={editorStickerButton}
+              onChange={setEditorStickerButton}
+            />
+          }
+        />
+      </SequenceCard>
+      <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
+        <SettingTile
+          title="Composer Button Order"
+          focusId="composer-button-order"
+          description="Drag to reorder the buttons shown in the message composer. Use the show/hide toggles above to control which buttons appear."
+        />
+        {hasEnabledOrder && (
+          <Box
+            direction="Column"
+            gap="200"
+            style={{
+              backgroundColor: color.Background.Container,
+              borderRadius: config.radii.R400,
+              marginInline: config.space.S300,
+              marginTop: config.space.S300,
+            }}
+          >
+            {editorButtonOrder.map((id, index) =>
+              enabledButtons[id] ? (
+                <EditorButtonOrderRow
+                  key={id}
+                  id={id}
+                  index={index}
+                  isDragging={draggingIndex === index}
+                  onDraggingIndexChange={setDraggingIndex}
+                  onReorder={handleReorder}
+                />
+              ) : null
+            )}
+          </Box>
+        )}
       </SequenceCard>
       <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
         <SettingTile
@@ -1412,6 +1588,7 @@ function Sync() {
       ? `Last synced at ${dayjs(lastSynced).format('HH:mm:ss')}`
       : 'Not yet synced this session',
     syncing: 'Syncing…',
+    partial: 'Settings synced, but some local tweaks were too large to sync.',
     error: 'Sync failed — will retry on next change',
   };
 
@@ -1444,7 +1621,7 @@ function Sync() {
         <SettingTile
           title="Sync settings across devices"
           focusId="sync-across-devices"
-          description="Store your settings in your Matrix account so they follow you to any Sable instance. Notification and zoom preferences are kept per-device."
+          description="Store your settings in your Matrix account so they follow you to any Sable instance. Locally imported tweak CSS is uploaded as unencrypted account data readable by your homeserver. Notification and zoom preferences are kept per-device."
           after={<Switch variant="Primary" value={syncEnabled} onChange={setSyncEnabled} />}
         />
         {syncEnabled && (

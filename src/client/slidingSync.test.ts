@@ -137,7 +137,7 @@ describe('SlidingSyncManager initial request', () => {
 
   it('settles response processing after post-response work can finish', async () => {
     const manager = makeManager(makeMockMx());
-    const settled = vi.fn<() => void>();
+    const settled = vi.fn<(dirtyRoomIds: ReadonlySet<string>) => void>();
     manager.subscribeToResponseSettled(settled);
     manager.attach();
 
@@ -151,6 +151,114 @@ describe('SlidingSyncManager initial request', () => {
     await Promise.resolve();
     expect(manager.isResponseProcessing()).toBe(false);
     expect(settled).toHaveBeenCalledOnce();
+  });
+
+  it('includes receipt-only and account-data-only rooms in the settled unread delta', async () => {
+    const manager = makeManager(makeMockMx());
+    const settled = vi.fn<(dirtyRoomIds: ReadonlySet<string>) => void>();
+    manager.subscribeToResponseSettled(settled);
+    manager.attach();
+
+    fireLifecycle(SlidingSyncState.RequestFinished, {});
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: {},
+      extensions: {
+        receipts: {
+          rooms: {
+            '!receipt:example.com': {
+              type: 'm.receipt',
+              content: {},
+            },
+          },
+        },
+        account_data: {
+          rooms: {
+            '!account-data:example.com': [
+              {
+                type: EventType.FullyRead,
+                content: { event_id: '$event' },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(settled).toHaveBeenCalledOnce();
+    expect([...settled.mock.calls[0]![0]]).toEqual([
+      '!receipt:example.com',
+      '!account-data:example.com',
+    ]);
+  });
+
+  it('excludes account_data rooms with no events from the dirty set', async () => {
+    const manager = makeManager(makeMockMx());
+    const settled = vi.fn<(dirtyRoomIds: ReadonlySet<string>) => void>();
+    manager.subscribeToResponseSettled(settled);
+    manager.attach();
+
+    fireLifecycle(SlidingSyncState.RequestFinished, {});
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: {},
+      extensions: {
+        account_data: {
+          rooms: {
+            '!unchanged:example.com': [],
+            '!changed:example.com': [
+              {
+                type: EventType.FullyRead,
+                content: { event_id: '$event' },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(settled).toHaveBeenCalledOnce();
+    expect([...settled.mock.calls[0]![0]]).toEqual(['!changed:example.com']);
+  });
+
+  it('marks only rooms with real data dirty across a full sync response', async () => {
+    const manager = makeManager(makeMockMx());
+    const settled = vi.fn<(dirtyRoomIds: ReadonlySet<string>) => void>();
+    manager.subscribeToResponseSettled(settled);
+    manager.attach();
+
+    fireLifecycle(SlidingSyncState.RequestFinished, {});
+    fireRoomData('!real:example.com', { initial: false });
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: {
+        '!real:example.com': { name: 'Real Room', notification_count: 0, highlight_count: 0 },
+      },
+      extensions: {
+        account_data: {
+          rooms: Object.fromEntries(
+            Array.from({ length: 50 }, (_, i) => [`!empty${i}:example.com`, []])
+          ),
+        },
+        receipts: {
+          rooms: {
+            '!real:example.com': {
+              type: 'm.receipt',
+              content: {},
+            },
+          },
+        },
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(settled).toHaveBeenCalledOnce();
+    const dirty = [...settled.mock.calls[0]![0]];
+    // Only the room that actually received data — not the 50 empty echoes.
+    expect(dirty).toEqual(['!real:example.com']);
+    expect(dirty).toHaveLength(1);
   });
 
   it('does not fan out member requests for users referenced by startup sync', async () => {
@@ -695,6 +803,128 @@ describe('SlidingSyncManager local membership reconciliation', () => {
     await vi.waitFor(() => expect(getJoinedRooms).toHaveBeenCalledOnce());
 
     expect(reconcileRooms).not.toHaveBeenCalled();
+  });
+
+  it('subscribes an optimistically joined room and tracks it for re-assertion', () => {
+    const updateMyMembership = vi.fn<() => void>();
+    const manager = makeManager(
+      makeMockMx({
+        getRoom: vi.fn<() => { updateMyMembership: typeof updateMyMembership }>().mockReturnValue({
+          updateMyMembership,
+        }),
+      })
+    );
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+
+    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
+    // Room is now an active subscription so the next sync pulls real joined state
+    expect(manager.isRoomActive('!invite:example.com')).toBe(true);
+    expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(
+      new Set(['!invite:example.com'])
+    );
+  });
+
+  it('re-asserts join after a sync cycle when the SDK reverted to invite', () => {
+    let myMembership: string = KnownMembership.Invite;
+    const updateMyMembership = vi.fn<(m: string) => void>().mockImplementation((m) => {
+      myMembership = m;
+    });
+    const room = {
+      getMyMembership: vi.fn<() => string>().mockImplementation(() => myMembership),
+      updateMyMembership,
+    };
+    const manager = makeManager(
+      makeMockMx({
+        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
+      })
+    );
+    manager.attach();
+
+    // Optimistic join
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+    expect(myMembership).toBe(KnownMembership.Join);
+
+    // Simulate the SDK reverting to invite during a sync cycle, then fire Complete.
+    // (room.recalculate() in the SDK would set this back to invite via invite_state)
+    myMembership = KnownMembership.Invite;
+
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: {
+        '!invite:example.com': {
+          required_state: [],
+          invite_state: [
+            {
+              type: EventType.RoomMember,
+              state_key: '@user:example.com',
+              sender: '@inviter:example.com',
+              content: { membership: KnownMembership.Invite },
+            },
+          ],
+        },
+      },
+    });
+
+    // The manager re-asserted join
+    expect(updateMyMembership).toHaveBeenLastCalledWith(KnownMembership.Join);
+    expect(myMembership).toBe(KnownMembership.Join);
+  });
+
+  it('stops tracking a room once the server confirms join (no invite_state)', () => {
+    let myMembership: string = KnownMembership.Join;
+    const updateMyMembership = vi.fn<(m: string) => void>().mockImplementation((m) => {
+      myMembership = m;
+    });
+    const room = {
+      getMyMembership: vi.fn<() => string>().mockImplementation(() => myMembership),
+      updateMyMembership,
+    };
+    const manager = makeManager(
+      makeMockMx({
+        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
+      })
+    );
+    manager.attach();
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+
+    // Server caught up: room is joined, no invite_state in the response.
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: {
+        '!invite:example.com': {
+          required_state: [
+            {
+              type: EventType.RoomMember,
+              state_key: '@user:example.com',
+              sender: '@user:example.com',
+              content: { membership: KnownMembership.Join },
+            },
+          ],
+          timeline: [],
+        },
+      },
+    });
+
+    // Room is no longer tracked; a subsequent revert would not be re-asserted.
+    expect(updateMyMembership).toHaveBeenCalledTimes(1); // only the initial optimistic join
+  });
+
+  it('clears optimistic join tracking on leave', () => {
+    const updateMyMembership = vi.fn<() => void>();
+    const manager = makeManager(
+      makeMockMx({
+        getRoom: vi.fn<() => { updateMyMembership: typeof updateMyMembership }>().mockReturnValue({
+          updateMyMembership,
+        }),
+      })
+    );
+    manager.subscribeToRoom('!room:example.com');
+
+    manager.reconcileRoomMembership('!room:example.com', KnownMembership.Join);
+    manager.reconcileRoomMembership('!room:example.com', KnownMembership.Leave);
+
+    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Leave);
+    expect(manager.isRoomActive('!room:example.com')).toBe(false);
   });
 });
 

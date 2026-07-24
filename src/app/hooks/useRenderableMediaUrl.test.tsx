@@ -219,7 +219,7 @@ describe('useRenderableMediaUrl', () => {
     const { result } = renderHook(() => useRenderableMediaUrl(rawAuthUrl));
 
     expect(result.current).toBe(
-      `sable-media://${rawAuthUrl}&__sable_media_cache=2&__sable_media_session=anonymous`
+      `sable-media://${rawAuthUrl}&__sable_media_cache=3&__sable_media_session=anonymous`
     );
     expect(tauriApi.convertFileSrc).toHaveBeenCalledWith(rawAuthUrl, 'sable-media');
   });
@@ -233,7 +233,7 @@ describe('useRenderableMediaUrl', () => {
     const { result } = renderHook(() => useRenderableMediaUrl(rewrittenUrl));
 
     expect(result.current).toBe(
-      `${rewrittenUrl}?__sable_media_cache=2&__sable_media_session=anonymous`
+      `${rewrittenUrl}?__sable_media_cache=3&__sable_media_session=anonymous`
     );
     expect(tauriApi.convertFileSrc).not.toHaveBeenCalled();
   });

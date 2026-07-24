@@ -27,7 +27,7 @@ import {
   sizedIcon,
 } from '$components/icons/phosphor';
 import { useImageGestures } from '$hooks/useImageGestures';
-import { useAndroidBackHandler } from '$utils/androidBack';
+import { useDismissOnBack } from '$utils/androidBack';
 import { useSetting } from '$state/hooks/settings';
 import { isPixelatedRendering, settingsAtom } from '$state/settings';
 import { downloadMedia } from '$utils/matrix';
@@ -53,10 +53,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
     const [pixelatedImageRendering] = useSetting(settingsAtom, 'pixelatedImageRendering');
 
     // Android back closes the viewer instead of navigating away.
-    useAndroidBackHandler(() => {
-      requestClose();
-      return true;
-    });
+    useDismissOnBack(requestClose);
 
     const [isImageReady, setIsImageReady] = useState(false);
     const [isEditingZoom, setIsEditingZoom] = useState(false);

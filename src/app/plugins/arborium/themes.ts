@@ -1,8 +1,8 @@
-import { pluginVersion } from '@arborium/arborium';
-
 export type ArboriumThemeKind = 'light' | 'dark';
 
-export const ARBORIUM_CDN_VERSION = pluginVersion;
+// Keep this literal aligned with the installed package. The theme test compares it with
+// Arborium's runtime export without pulling the syntax highlighter into the startup bundle.
+export const ARBORIUM_CDN_VERSION = '2.18.1';
 
 const ARBORIUM_THEME_DEFINITIONS = [
   { id: 'alabaster', label: 'Alabaster', kind: 'light' },

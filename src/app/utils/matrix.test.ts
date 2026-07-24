@@ -46,7 +46,7 @@ describe('rewriteAuthenticatedMediaUrl', () => {
     tauriApi.isTauri.mockReturnValue(true);
     const url = 'https://matrix.example.org/_matrix/client/v1/media/download/example.org/abc123';
     expect(rewriteAuthenticatedMediaUrl(url)).toBe(
-      `sable-media://${url}?__sable_media_cache=2&__sable_media_session=%40user%3Aexample.com`
+      `sable-media://${url}?__sable_media_cache=3&__sable_media_session=%40user%3Aexample.com`
     );
     expect(tauriApi.convertFileSrc).toHaveBeenCalledWith(url, 'sable-media');
   });
@@ -56,7 +56,7 @@ describe('rewriteAuthenticatedMediaUrl', () => {
     const url =
       'https://matrix.example.org/_matrix/client/v1/media/thumbnail/example.org/abc123?width=96&height=96&method=crop';
     expect(rewriteAuthenticatedMediaUrl(url)).toBe(
-      `sable-media://${url}&__sable_media_cache=2&__sable_media_session=%40user%3Aexample.com`
+      `sable-media://${url}&__sable_media_cache=3&__sable_media_session=%40user%3Aexample.com`
     );
   });
 
@@ -70,7 +70,7 @@ describe('rewriteAuthenticatedMediaUrl', () => {
     const url = `https://matrix.example.org${path}`;
     const separator = url.includes('?') ? '&' : '?';
     expect(rewriteAuthenticatedMediaUrl(url)).toBe(
-      `sable-media://${url}${separator}__sable_media_cache=2&__sable_media_session=%40user%3Aexample.com`
+      `sable-media://${url}${separator}__sable_media_cache=3&__sable_media_session=%40user%3Aexample.com`
     );
   });
 
@@ -95,7 +95,7 @@ describe('rewriteAuthenticatedMediaUrl', () => {
     const url =
       'sable-media://https://matrix.example.org/_matrix/client/v1/media/download/example.org/abc123';
     expect(rewriteAuthenticatedMediaUrl(url)).toBe(
-      `${url}?__sable_media_cache=2&__sable_media_session=%40user%3Aexample.com`
+      `${url}?__sable_media_cache=3&__sable_media_session=%40user%3Aexample.com`
     );
     expect(tauriApi.convertFileSrc).not.toHaveBeenCalled();
   });
@@ -110,7 +110,7 @@ describe('mxcUrlToHttp', () => {
     } as unknown as MatrixClient;
 
     expect(mxcUrlToHttp(mx, 'mxc://example.org/video', false)).toBe(
-      `sable-media://${legacyUrl}?__sable_media_cache=2&__sable_media_session=%40user%3Aexample.com`
+      `sable-media://${legacyUrl}?__sable_media_cache=3&__sable_media_session=%40user%3Aexample.com`
     );
   });
 });

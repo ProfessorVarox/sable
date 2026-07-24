@@ -7,10 +7,14 @@ use std::{
     time::Duration,
 };
 
+use aes::cipher::{KeyIvInit, StreamCipher};
+use aes::Aes256;
+use base64::Engine;
+use ctr::{Ctr128BE, Ctr64BE};
 use sha2::{Digest, Sha256};
 use tauri::{
     http::{header, response::Builder as ResponseBuilder, Request, Response, StatusCode, Uri},
-    AppHandle, Manager, Runtime, UriSchemeContext, UriSchemeResponder,
+    AppHandle, Manager, Runtime, State, UriSchemeContext, UriSchemeResponder,
 };
 use tauri_plugin_http::reqwest::{
     header::{AUTHORIZATION, CONTENT_TYPE},
@@ -22,7 +26,7 @@ pub const MEDIA_URI_SCHEME: &str = "sable-media";
 
 const MEDIA_PATH_PREFIXES: [&str; 2] = ["/_matrix/media/", "/_matrix/client/v1/media/"];
 const CACHE_SUBDIR: &str = "sable-media";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CONCURRENT_REQUESTS: usize = 4;
 const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
@@ -35,6 +39,7 @@ type FetchResult = Result<(String, Option<Arc<Vec<u8>>>, PathBuf), StatusCode>;
 
 pub struct MediaSessionState {
     inner: RwLock<Option<MediaSession>>,
+    encryption: RwLock<HashMap<String, EncryptionParams>>,
     client: OnceLock<Client>,
     semaphore: Semaphore,
     cache_miss_gates: Mutex<HashMap<String, Weak<AsyncMutex<Option<FetchResult>>>>>,
@@ -44,6 +49,7 @@ impl Default for MediaSessionState {
     fn default() -> Self {
         Self {
             inner: RwLock::new(None),
+            encryption: RwLock::new(HashMap::new()),
             client: OnceLock::new(),
             semaphore: Semaphore::new(MAX_CONCURRENT_REQUESTS),
             cache_miss_gates: Mutex::new(HashMap::new()),
@@ -56,9 +62,11 @@ impl MediaSessionState {
     fn client(&self) -> Client {
         self.client
             .get_or_init(|| {
+                // MSC3916: default policy strips Authorization on cross-origin redirects to a signed CDN URL.
                 Client::builder()
                     .timeout(REQUEST_TIMEOUT)
                     .connect_timeout(CONNECT_TIMEOUT)
+                    .redirect(tauri_plugin_http::reqwest::redirect::Policy::default())
                     .build()
                     .unwrap_or_else(|_| Client::new())
             })
@@ -88,6 +96,15 @@ impl MediaSessionState {
 struct MediaSession {
     origin: String,
     token: String,
+}
+
+#[derive(Clone)]
+struct EncryptionParams {
+    key: [u8; 32],
+    iv: [u8; 16],
+    counter_length: u8,
+    expected_sha256: Vec<u8>,
+    content_type: String,
 }
 
 #[tauri::command]
@@ -123,6 +140,82 @@ pub fn clear_media_session<R: Runtime>(
     if let Ok(temp_dir) = temp_cache_dir(&app) {
         let _ = fs::remove_dir_all(temp_dir);
     }
+}
+
+#[tauri::command]
+pub fn set_media_encryption(
+    state: State<MediaSessionState>,
+    url: String,
+    key: String,
+    iv: String,
+    sha256: String,
+    version: String,
+    mime_type: String,
+) -> Result<(), String> {
+    // Decode key from base64url to [u8; 32]
+    let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&key)
+        .map_err(|e| format!("invalid key base64url: {e}"))?;
+    if key_bytes.len() != 32 {
+        return Err(format!("key must be 32 bytes, got {}", key_bytes.len()));
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+
+    // Decode IV from unpadded standard base64 to [u8; 16]
+    let iv_bytes = base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(&iv)
+        .map_err(|e| format!("invalid iv base64: {e}"))?;
+    if iv_bytes.len() != 16 {
+        return Err(format!("iv must be 16 bytes, got {}", iv_bytes.len()));
+    }
+    let mut iv_arr = [0u8; 16];
+    iv_arr.copy_from_slice(&iv_bytes);
+
+    // Decode sha256 from unpadded standard base64
+    let sha256_bytes = base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(&sha256)
+        .map_err(|e| format!("invalid sha256 base64: {e}"))?;
+
+    let counter_length: u8 = if version == "v1" || version == "v2" {
+        64
+    } else {
+        128
+    };
+
+    let params = EncryptionParams {
+        key: key_arr,
+        iv: iv_arr,
+        counter_length,
+        expected_sha256: sha256_bytes,
+        content_type: mime_type,
+    };
+
+    // Strip sable-media:// prefix to match the lookup key in decrypt_if_encrypted.
+    let normalized_key = normalize_encryption_key(&url);
+
+    let mut guard = state
+        .encryption
+        .write()
+        .map_err(|_| "encryption lock poisoned".to_string())?;
+    guard.insert(normalized_key, params);
+    Ok(())
+}
+
+fn normalize_encryption_key(url: &str) -> String {
+    if url.starts_with("sable-media://") || url.starts_with("http://sable-media.localhost/") {
+        if let Ok(uri) = Uri::try_from(url) {
+            let path = uri.path().trim_start_matches('/');
+            let decoded = percent_encoding::percent_decode_str(path)
+                .decode_utf8()
+                .unwrap_or(std::borrow::Cow::Borrowed(path));
+            if let Ok(parsed) = Url::parse(&decoded) {
+                return parsed.to_string();
+            }
+            return decoded.into_owned();
+        }
+    }
+    url.to_string()
 }
 
 pub fn respond<R: Runtime>(
@@ -161,7 +254,17 @@ async fn handle_request<R: Runtime>(
             .inner
             .read()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        guard.clone().ok_or(StatusCode::UNAUTHORIZED)?
+        match guard.clone() {
+            Some(s) => s,
+            None => {
+                return Ok(Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header(header::RETRY_AFTER, "1")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Vec::new())
+                    .expect("failed to build 503 media response"));
+            }
+        }
     };
 
     let media_url = Url::parse(&target).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -328,7 +431,7 @@ async fn fetch_and_cache(
 
     let upstream = state
         .client()
-        .get(media_url)
+        .get(media_url.clone())
         .header(AUTHORIZATION, format!("Bearer {}", session.token))
         .send()
         .await
@@ -352,6 +455,13 @@ async fn fetch_and_cache(
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?
         .to_vec();
+
+    // Check for encryption params and decrypt if present
+    let (body, content_type) =
+        match decrypt_if_encrypted(state, media_url.as_str(), body, &content_type) {
+            Ok((decrypted_body, decrypted_ct)) => (decrypted_body, decrypted_ct),
+            Err(status) => return Err(status),
+        };
 
     if body.len() as u64 > max_temp_cache_bytes {
         return Ok((content_type, Some(Arc::new(body)), temp_body_path));
@@ -387,6 +497,55 @@ async fn fetch_and_cache(
             Ok((content_type, Some(Arc::new(body)), temp_body_path))
         }
     }
+}
+
+/// Decrypt the body if encryption params exist for this URL.
+fn decrypt_if_encrypted(
+    state: &MediaSessionState,
+    url: &str,
+    ciphertext: Vec<u8>,
+    upstream_content_type: &str,
+) -> Result<(Vec<u8>, String), StatusCode> {
+    let encryption = {
+        let guard = state
+            .encryption
+            .read()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        guard.get(url).cloned()
+    };
+
+    let Some(params) = encryption else {
+        // No encryption params: pass through unchanged
+        return Ok((ciphertext, upstream_content_type.to_owned()));
+    };
+
+    // Verify SHA-256 of ciphertext
+    let mut hasher = Sha256::new();
+    hasher.update(&ciphertext);
+    let actual_sha256 = hasher.finalize().to_vec();
+    if actual_sha256 != params.expected_sha256 {
+        let _ = state.encryption.write().map(|mut guard| guard.remove(url));
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    // Decrypt in-place using AES-CTR
+    let mut plaintext = ciphertext;
+    match params.counter_length {
+        64 => {
+            let mut cipher = Ctr64BE::<Aes256>::new((&params.key).into(), (&params.iv).into());
+            cipher.apply_keystream(&mut plaintext);
+        }
+        128 => {
+            let mut cipher = Ctr128BE::<Aes256>::new((&params.key).into(), (&params.iv).into());
+            cipher.apply_keystream(&mut plaintext);
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+
+    // Remove encryption params — decrypted content is now cached on disk
+    let _ = state.encryption.write().map(|mut guard| guard.remove(url));
+
+    Ok((plaintext, params.content_type))
 }
 
 async fn write_cache(
@@ -769,5 +928,32 @@ mod tests {
     fn serve_range_memory_rejects_unsatisfiable_range() {
         let response = serve_range_memory(&[], "application/octet-stream", "bytes=0-0");
         assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+
+    #[test]
+    fn normalize_encryption_key_strips_sable_media_prefix() {
+        let input = "sable-media://localhost/https%3A%2F%2Fmatrix.example.org%2F_matrix%2Fclient%2Fv1%2Fmedia%2Fdownload%2Fmatrix.org%2Fabc123";
+        let result = super::normalize_encryption_key(input);
+        assert_eq!(
+            result,
+            "https://matrix.example.org/_matrix/client/v1/media/download/matrix.org/abc123"
+        );
+    }
+
+    #[test]
+    fn normalize_encryption_key_strips_windows_prefix() {
+        let input = "http://sable-media.localhost/https%3A%2F%2Fmatrix.example.org%2F_matrix%2Fclient%2Fv1%2Fmedia%2Fthumbnail%2Fmatrix.org%2Fxyz%3Fwidth%3D96%26height%3D96";
+        let result = super::normalize_encryption_key(input);
+        assert_eq!(
+            result,
+            "https://matrix.example.org/_matrix/client/v1/media/thumbnail/matrix.org/xyz?width=96&height=96"
+        );
+    }
+
+    #[test]
+    fn normalize_encryption_key_passes_through_bare_url() {
+        let input = "https://matrix.example.org/_matrix/client/v1/media/download/matrix.org/abc123";
+        let result = super::normalize_encryption_key(input);
+        assert_eq!(result, input);
     }
 }

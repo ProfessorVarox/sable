@@ -1,4 +1,5 @@
-import type { Settings } from '$state/settings';
+import { sanitizeThemeRemoteTweakFavorites, type Settings } from '$state/settings';
+import { isLocalImportTweakUrl } from '../theme/localImportUrls';
 import { sanitizeShortcutOverrides } from '../keyboard/shortcuts';
 
 /**
@@ -31,18 +32,56 @@ export const NON_SYNCABLE_KEYS = new Set<keyof Settings>([
 ]);
 
 export const SETTINGS_SYNC_VERSION = 1;
+export const MAX_SYNCED_LOCAL_TWEAK_CSS_BYTES = 256 * 1024;
+const MAX_SYNCED_TWEAK_URL_LENGTH = 8192;
 
 export type SettingsSyncContent = {
   v: number;
   settings: Partial<Settings>;
 };
 
-/** Strip non-syncable keys and wrap in a versioned envelope. */
-export const serializeForSync = (settings: Settings): SettingsSyncContent => {
-  const syncable = { ...settings } as Partial<Settings>;
-  NON_SYNCABLE_KEYS.forEach((key) => delete syncable[key]);
-  return { v: SETTINGS_SYNC_VERSION, settings: syncable };
+export type PreparedSettingsSync = {
+  content: SettingsSyncContent;
+  excludedLocalTweakUrls: string[];
 };
+
+export function sanitizeThemeRemoteEnabledTweakFullUrls(val: unknown): string[] | undefined {
+  if (!Array.isArray(val)) return undefined;
+  return val.flatMap((url) => {
+    if (typeof url !== 'string') return [];
+    const trimmed = url.trim();
+    return trimmed.length > 0 && trimmed.length <= MAX_SYNCED_TWEAK_URL_LENGTH ? [trimmed] : [];
+  });
+}
+
+/** Prepare a bounded, atomic local-tweak payload and report any excluded URLs. */
+export const prepareSettingsForSync = (settings: Settings): PreparedSettingsSync => {
+  const syncable = { ...settings } as Partial<Settings>;
+  const favorites = sanitizeThemeRemoteTweakFavorites(settings.themeRemoteTweakFavorites) ?? [];
+  let usedCssBytes = 0;
+  const excludedLocalTweakUrls: string[] = [];
+  syncable.themeRemoteTweakFavorites = favorites.filter((favorite) => {
+    if (!isLocalImportTweakUrl(favorite.fullUrl) || typeof favorite.cssText !== 'string')
+      return true;
+    const bytes = new TextEncoder().encode(favorite.cssText).byteLength;
+    if (usedCssBytes + bytes > MAX_SYNCED_LOCAL_TWEAK_CSS_BYTES) {
+      excludedLocalTweakUrls.push(favorite.fullUrl);
+      return false;
+    }
+    usedCssBytes += bytes;
+    return true;
+  });
+  const excluded = new Set(excludedLocalTweakUrls);
+  syncable.themeRemoteEnabledTweakFullUrls = (
+    sanitizeThemeRemoteEnabledTweakFullUrls(settings.themeRemoteEnabledTweakFullUrls) ?? []
+  ).filter((url) => !excluded.has(url));
+  NON_SYNCABLE_KEYS.forEach((key) => delete syncable[key]);
+  return { content: { v: SETTINGS_SYNC_VERSION, settings: syncable }, excludedLocalTweakUrls };
+};
+
+/** Strip non-syncable keys and wrap in a versioned envelope. */
+export const serializeForSync = (settings: Settings): SettingsSyncContent =>
+  prepareSettingsForSync(settings).content;
 
 /**
  * Validate incoming account data and merge it into current settings.
@@ -56,9 +95,50 @@ export const deserializeFromSync = (data: unknown, currentSettings: Settings): S
   const remote = content.settings;
   if (!remote || typeof remote !== 'object' || Array.isArray(remote)) return null;
 
-  const merged = { ...currentSettings, ...(remote as Partial<Settings>) };
+  const remoteSettings = remote as Partial<Settings>;
+  const merged = { ...currentSettings, ...remoteSettings };
+  const remoteTweakFavorites = sanitizeThemeRemoteTweakFavorites(
+    remoteSettings.themeRemoteTweakFavorites
+  );
+  if ('themeRemoteTweakFavorites' in remoteSettings) {
+    const excluded = new Set(prepareSettingsForSync(currentSettings).excludedLocalTweakUrls);
+    const remoteFavorites = remoteTweakFavorites ?? currentSettings.themeRemoteTweakFavorites;
+    const remoteUrls = new Set(remoteFavorites.map((favorite) => favorite.fullUrl));
+    const preservedExcluded = currentSettings.themeRemoteTweakFavorites.filter(
+      (favorite) => excluded.has(favorite.fullUrl) && !remoteUrls.has(favorite.fullUrl)
+    );
+    merged.themeRemoteTweakFavorites = [...remoteFavorites, ...preservedExcluded];
+    if ('themeRemoteEnabledTweakFullUrls' in remoteSettings) {
+      const remoteEnabled =
+        sanitizeThemeRemoteEnabledTweakFullUrls(remoteSettings.themeRemoteEnabledTweakFullUrls) ??
+        currentSettings.themeRemoteEnabledTweakFullUrls;
+      const remoteEnabledSet = new Set(remoteEnabled);
+      merged.themeRemoteEnabledTweakFullUrls = [
+        ...remoteEnabled,
+        ...currentSettings.themeRemoteEnabledTweakFullUrls.filter(
+          (url) => excluded.has(url) && !remoteEnabledSet.has(url)
+        ),
+      ];
+    }
+  }
+  if (
+    'themeRemoteEnabledTweakFullUrls' in remoteSettings &&
+    !('themeRemoteTweakFavorites' in remoteSettings)
+  ) {
+    const remoteEnabled =
+      sanitizeThemeRemoteEnabledTweakFullUrls(remoteSettings.themeRemoteEnabledTweakFullUrls) ??
+      currentSettings.themeRemoteEnabledTweakFullUrls;
+    const remoteEnabledSet = new Set(remoteEnabled);
+    const excluded = new Set(prepareSettingsForSync(currentSettings).excludedLocalTweakUrls);
+    merged.themeRemoteEnabledTweakFullUrls = [
+      ...remoteEnabled,
+      ...currentSettings.themeRemoteEnabledTweakFullUrls.filter(
+        (url) => excluded.has(url) && !remoteEnabledSet.has(url)
+      ),
+    ];
+  }
   merged.shortcutOverrides =
-    sanitizeShortcutOverrides((remote as Partial<Settings>).shortcutOverrides) ??
+    sanitizeShortcutOverrides(remoteSettings.shortcutOverrides) ??
     currentSettings.shortcutOverrides;
   // Always restore non-syncable keys from local state.
   NON_SYNCABLE_KEYS.forEach((key) => {

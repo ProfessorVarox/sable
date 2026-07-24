@@ -96,6 +96,7 @@ export function ThemeImportModal({ open, onClose }: ThemeImportModalProps) {
           basename: r.basename,
           pinned: true,
           importedLocal: r.importedLocal,
+          cssText: r.cssText,
         };
         const nextEnabled = enabledTweakFullUrls.includes(r.fullUrl)
           ? [...enabledTweakFullUrls]

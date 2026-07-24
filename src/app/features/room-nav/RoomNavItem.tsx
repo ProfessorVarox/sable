@@ -79,6 +79,7 @@ import { nicknamesAtom } from '$state/nicknames';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { warmupRoomDecryption } from '$utils/decryptScheduler';
 import { useMobileTapActivation } from '$hooks/useMobileTapActivation';
+import { useOpenMobileDrawerContent } from '$components/page/MobileNavDrawerContext';
 
 // Call Hooks & Plugins
 import { useCallMembers, useCallSession } from '$hooks/useCall';
@@ -336,6 +337,7 @@ export function RoomNavItem({
   const navigate = useNavigate();
   const screenSize = useScreenSizeContext();
   const isMobile = screenSize === ScreenSize.Mobile;
+  const openMobileDrawerContent = useOpenMobileDrawerContent();
 
   const callSession = useCallSession(room);
   const callMembers = useCallMembers(room, callSession);
@@ -414,13 +416,21 @@ export function RoomNavItem({
         navigateRoom(room.roomId);
       }
     } else {
-      // Render the room off the urgent path so the tap doesn't freeze the UI on mount.
-      startTransition(() => navigate(linkPath));
+      if (isMobile && openMobileDrawerContent) {
+        openMobileDrawerContent(linkPath);
+      } else {
+        // Render the room off the urgent path so the tap doesn't freeze the UI on mount.
+        startTransition(() => navigate(linkPath));
+      }
     }
   };
 
   const mobileTapActivation = useMobileTapActivation(isMobile && !room.isCallRoom(), () => {
-    navigate(linkPath);
+    if (openMobileDrawerContent) {
+      openMobileDrawerContent(linkPath);
+    } else {
+      navigate(linkPath);
+    }
   });
 
   const handleChatButtonClick = (evt: MouseEvent<HTMLButtonElement>) => {

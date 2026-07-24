@@ -13,6 +13,7 @@ import { useEditor, resetEditor } from '$components/editor';
 import { Page } from '$components/page';
 import { useKeyDown } from '$hooks/useKeyDown';
 import { editableActiveElement } from '$utils/dom';
+import { mobileOrTablet } from '$utils/user-agent';
 import { settingsAtom } from '$state/settings';
 import { useSetting } from '$state/hooks/settings';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
@@ -30,6 +31,8 @@ import { callEmbedAtom } from '$state/callEmbed';
 import { useCallJoined } from '$hooks/useCallEmbed';
 import { CallView } from '$features/call/CallView';
 import { useRoom } from '$hooks/useRoom';
+import { useMessageEdit } from '$hooks/useMessageEdit';
+import { useAlive } from '$hooks/useAlive';
 import { RoomViewFollowing, RoomViewFollowingPlaceholder } from './RoomViewFollowing';
 import { RoomInput } from './RoomInput';
 import { RoomTombstone } from './RoomTombstone';
@@ -92,6 +95,12 @@ export function RoomView({ eventId }: { eventId?: string }) {
 
   const [editorResetKey, setEditorResetKey] = useState(0);
   const handleResetEditor = useCallback(() => setEditorResetKey((prev) => prev + 1), []);
+  const alive = useAlive();
+  const { editId, handleEdit } = useMessageEdit(editor, {
+    onReset: handleResetEditor,
+    alive,
+    focusOnCancel: !mobileOrTablet(),
+  });
 
   useDelayedEventsSupport();
   const delayedEventsSupported = useAtomValue(delayedEventsSupportedAtom);
@@ -138,7 +147,10 @@ export function RoomView({ eventId }: { eventId?: string }) {
   const showCallView = !room.isCallRoom() && (callMembers.length > 0 || isJoinedInThisRoom);
 
   return (
-    <Page ref={roomViewRef}>
+    <Page
+      ref={roomViewRef}
+      style={{ position: 'relative', overflow: 'hidden', isolation: 'isolate', minWidth: 0 }}
+    >
       <SwipeableChatWrapper onOpenMembers={handleOpenMembers}>
         <Box grow="Yes" direction="Column">
           {showCallView && (
@@ -153,6 +165,8 @@ export function RoomView({ eventId }: { eventId?: string }) {
             editor={editor}
             onEditorReset={handleResetEditor}
             onEditLastMessageRef={editLastMessageRef}
+            editId={editId}
+            onEditId={handleEdit}
           />
           <div style={{ position: 'relative', flexShrink: 0 }}>
             <RoomViewTyping room={room} />
@@ -181,6 +195,8 @@ export function RoomView({ eventId }: { eventId?: string }) {
                     fileDropContainerRef={roomViewRef}
                     ref={roomInputRef}
                     onEditLastMessage={() => editLastMessageRef.current?.()}
+                    editId={editId}
+                    onCancelEdit={() => handleEdit(undefined)}
                   />
                 )}
                 {!canMessage && (

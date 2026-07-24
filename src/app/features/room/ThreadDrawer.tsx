@@ -7,7 +7,6 @@ import {
   Direction,
   MatrixEvent,
   MatrixEventEvent,
-  PushProcessor,
   ReceiptType,
   RelationType,
   RoomEvent,
@@ -137,7 +136,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
     (userId: string) => jotaiStore.get(profilesCacheAtom)[userId],
     [jotaiStore]
   );
-  const pushProcessor = useMemo(() => new PushProcessor(mx), [mx]);
+  const pushProcessor = mx.pushProcessor;
   const useAuthentication = useMediaAuthentication();
   const mentionClickHandler = useMentionClickHandler(room.roomId);
   const settingsLinkBaseUrl = useSettingsLinkBaseUrl();
@@ -819,11 +818,13 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
   }, [threadRootHeight]);
   return (
     <Box
+      ref={drawerRef}
       className={overlay ? css.ThreadDrawerOverlay : css.ThreadDrawer}
       direction="Column"
       shrink="No"
       style={{
-        position: 'relative',
+        position: overlay ? 'absolute' : 'relative',
+        isolation: 'isolate',
         width: overlay ? '100%' : toRem(curWidth),
       }}
     >

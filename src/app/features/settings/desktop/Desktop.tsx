@@ -64,6 +64,13 @@ export function Desktop({ requestBack, requestClose }: DesktopProps) {
                       />
                     }
                   />
+                </SequenceCard>
+                <SequenceCard
+                  className={SequenceCardStyle}
+                  variant="SurfaceVariant"
+                  direction="Column"
+                  gap="400"
+                >
                   <SettingTile
                     title="Close button keeps Sable running"
                     focusId="close-to-background-on-close"

@@ -35,7 +35,7 @@ import {
 } from './mediaTransport';
 
 const DOMAIN_REGEX = /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b/;
-const TAURI_MEDIA_CACHE_VERSION = '__sable_media_cache=2';
+const TAURI_MEDIA_CACHE_VERSION = '__sable_media_cache=3';
 const TAURI_MEDIA_PATH_PREFIXES = [
   '/_matrix/client/v1/media/',
   '/_matrix/media/v3/download/',

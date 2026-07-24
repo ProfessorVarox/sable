@@ -12,7 +12,7 @@ import {
 import type { Editor } from 'slate';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import type { Room } from '$types/matrix-sdk';
-import { PushProcessor, Direction, EventType } from '$types/matrix-sdk';
+import { Direction, EventType } from '$types/matrix-sdk';
 import classNames from 'classnames';
 import type { VListHandle } from 'virtua';
 import { VList } from 'virtua';
@@ -303,6 +303,8 @@ export type RoomTimelineProps = {
   editor: Editor;
   onEditorReset?: () => void;
   onEditLastMessageRef?: React.MutableRefObject<(() => void) | undefined>;
+  editId?: string;
+  onEditId?: (editId?: string) => void;
 };
 
 export function RoomTimeline({
@@ -311,12 +313,16 @@ export function RoomTimeline({
   editor,
   onEditorReset,
   onEditLastMessageRef,
+  editId: propsEditId,
+  onEditId: propsOnEditId,
 }: Readonly<RoomTimelineProps>) {
   const mx = useMatrixClient();
   const alive = useAlive();
   const roomSyncLoading = useSlidingSyncRoomLoading(room.roomId);
 
-  const { editId, handleEdit } = useMessageEdit(editor, { onReset: onEditorReset, alive });
+  const internalEdit = useMessageEdit(editor, { onReset: onEditorReset, alive });
+  const editId = propsOnEditId ? propsEditId : internalEdit.editId;
+  const handleEdit = propsOnEditId ?? internalEdit.handleEdit;
   const { navigateRoom } = useRoomNavigate();
   const isInactivePanel = useIsInactivePanel();
 
@@ -428,7 +434,7 @@ export function RoomTimeline({
   const optionalSpace = useSpaceOptionally();
   const roomParents = useAtomValue(roomToParentsAtom);
   const imagePackRooms = useImagePackRooms(room.roomId, roomParents);
-  const pushProcessor = useMemo(() => new PushProcessor(mx), [mx]);
+  const pushProcessor = mx.pushProcessor;
   const parseMemberEvent = useMemberEventParser();
 
   const replyDraftAtom = useMemo(() => roomIdToReplyDraftAtomFamily(room.roomId), [room.roomId]);

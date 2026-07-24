@@ -157,4 +157,20 @@ describe('CallEmbed.getWidget', () => {
 
     expect(url.pathname).toContain('/public/element-call/index.html');
   });
+
+  it('uses the actual window origin as parentUrl on Tauri, not the canonical app URL', () => {
+    vi.stubGlobal('window', {
+      location: {
+        origin: 'https://tauri.localhost',
+        protocol: 'https:',
+        host: 'tauri.localhost',
+        hostname: 'tauri.localhost',
+      },
+    });
+    const room = createRoom(false);
+    const widget = CallEmbed.getWidget(mx, room, ElementCallIntent.StartCallVoice, 'dark');
+    const url = new URL(widget.getCompleteUrl({ currentUserId: '@alice:example.com' }));
+
+    expect(url.searchParams.get('parentUrl')).toBe('https://tauri.localhost');
+  });
 });

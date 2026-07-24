@@ -458,6 +458,8 @@ function BackgroundPushNotificationSetting() {
     settingsAtom,
     'pushTransportOverride'
   );
+  const [useRichPushPayloads] = useSetting(settingsAtom, 'useRichPushPayloads');
+  const [pushNotifyUrlOverride] = useSetting(settingsAtom, 'pushNotifyUrlOverride');
   const [legacyPushNotifications, setLegacyPushNotifications] = useSetting(
     settingsAtom,
     'usePushNotifications'
@@ -591,6 +593,8 @@ function BackgroundPushNotificationSetting() {
     vapidPublicKey: clientConfig.pushNotificationDetails?.vapidPublicKey,
     webPushAppID: clientConfig.pushNotificationDetails?.webPushAppID,
     pushNotifyUrl: clientConfig.pushNotificationDetails?.pushNotifyUrl,
+    useRichPushPayloads,
+    pushNotifyUrlOverride,
   });
 
   const buildRegisteredUnifiedPushState = (
@@ -1002,6 +1006,10 @@ export function SystemNotification() {
     settingsAtom,
     'clearNotificationsOnRead'
   );
+  const [useRichPushPayloads, setUseRichPushPayloads] = useSetting(
+    settingsAtom,
+    'useRichPushPayloads'
+  );
   const [showUnreadCounts, setShowUnreadCounts] = useSetting(settingsAtom, 'showUnreadCounts');
   const [badgeCountDMsOnly, setBadgeCountDMsOnly] = useSetting(settingsAtom, 'badgeCountDMsOnly');
   const [showPingCounts, setShowPingCounts] = useSetting(settingsAtom, 'showPingCounts');
@@ -1124,6 +1132,19 @@ export function SystemNotification() {
               disabled={!showMessageContent}
             />
           }
+        />
+      </SequenceCard>
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="400"
+      >
+        <SettingTile
+          title="Rich Push Payloads"
+          focusId="rich-push-payloads"
+          description="Include message content in push payloads for faster notifications. Your push gateway can see unencrypted message text."
+          after={<Switch value={useRichPushPayloads} onChange={setUseRichPushPayloads} />}
         />
       </SequenceCard>
       <SequenceCard

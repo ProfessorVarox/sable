@@ -22,9 +22,20 @@ tauri-typegen = "0.5"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# default-features = false drops reqwest + native-tls (openssl); ureq is a sync
+# rustls transport with no async-runtime dependency.
+sentry = { version = "0.48.5", default-features = false, features = [
+  "backtrace",
+  "contexts",
+  "panic",
+  "debug-images",
+  "ureq",
+] }
 tokio = { version = "1", features = ["time", "sync", "fs", "io-util"] }
 ts-rs = "12.0.0"
 sha2 = "0.10"
+aes = "0.8"
+ctr = "0.9"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 async-stream = "0.3"
@@ -73,12 +84,12 @@ windows = { version = "0.61", features = [
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "0ca647a8d762cbba2ecfbefed7ff13565ec46229" }
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "cc3a468263db75e40a8a4751f3dae9bce5bc4234" }
 
 # default-features = false drops notify-rust so macOS uses the native
 # UNUserNotificationCenter backend (needs a signed .app to deliver).
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "0ca647a8d762cbba2ecfbefed7ff13565ec46229", default-features = false }
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "cc3a468263db75e40a8a4751f3dae9bce5bc4234", default-features = false }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = { version = "2", optional = true }
@@ -102,7 +113,7 @@ cef = { version = "=148.0.0", optional = true }
 libloading = "0.8"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "0ca647a8d762cbba2ecfbefed7ff13565ec46229", features = [
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "cc3a468263db75e40a8a4751f3dae9bce5bc4234", features = [
   "push-notifications",
 ] }
 tauri-plugin-edge-to-edge = { git = "https://github.com/SableClient/tauri-plugin-edge-to-edge.git", rev = "33c6116c27be28c06df5a9d02231ecc5fdeb93c5" }

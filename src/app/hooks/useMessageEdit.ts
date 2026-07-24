@@ -6,6 +6,7 @@ import { isEmptyEditor, moveCursor } from '$components/editor';
 export interface UseMessageEditOptions {
   onReset?: () => void;
   alive?: () => boolean;
+  focusOnCancel?: boolean;
 }
 
 /**
@@ -27,6 +28,8 @@ export function useMessageEdit(
   aliveRef.current = options?.alive;
   const onResetRef = useRef(options?.onReset);
   onResetRef.current = options?.onReset;
+  const focusOnCancelRef = useRef(options?.focusOnCancel ?? true);
+  focusOnCancelRef.current = options?.focusOnCancel ?? true;
 
   const handleEdit = useCallback(
     (targetEditId?: string) => {
@@ -35,6 +38,7 @@ export function useMessageEdit(
         return;
       }
       setEditId(undefined);
+      if (!focusOnCancelRef.current) return;
       requestAnimationFrame(() => {
         if (aliveRef.current && !aliveRef.current()) return;
         if (onResetRef.current && isEmptyEditor(editor)) onResetRef.current();

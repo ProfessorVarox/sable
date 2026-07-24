@@ -1,12 +1,19 @@
 import type { ReactNode } from 'react';
-import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AnimationPlaybackControls } from 'framer-motion';
-import { animate, motion, useDragControls, useMotionValue, useReducedMotion } from 'framer-motion';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
 import { lastVisitedRoomAtom } from '$state/room/lastRoom';
+import { useReducedMotion } from 'framer-motion';
 import {
   DIRECT_PATH,
   DIRECT_ROOM_PATH,
@@ -20,11 +27,12 @@ import {
 import { resolveSection } from '$pages/pathUtils';
 import { isRoomAlias, isRoomId } from '$utils/matrix';
 import { PersistentRoomHost } from './PersistentRoomHost';
-
-const SETTLE_STIFFNESS = 1000;
-const SETTLE_DAMPING = 63;
-const OPEN_FRACTION = 0.35;
-const VELOCITY_THRESHOLD = 400;
+import { MobileNavDrawerContext, type MobileSwipeTarget } from './MobileNavDrawerContext';
+import {
+  classifyMobileGesture,
+  getDrawerSettlePosition,
+  type MobileGestureMode,
+} from './mobileSwipeCoordinator';
 
 type MobileNavDrawerProps = {
   nav: ReactNode;
@@ -33,8 +41,21 @@ type MobileNavDrawerProps = {
   children: ReactNode;
 };
 
-/** Sliding mobile drawer: the list and active room are adjacent panels; dragging
- * reveals the list and commits the route on release. */
+const DRAWER_TRANSITION_MS = 220;
+
+type ActiveTouchGesture = {
+  startX: number;
+  startY: number;
+  startPosition: number;
+  lastX: number;
+  lastTime: number;
+  velocityX: number;
+  mode: MobileGestureMode;
+  message?: MobileSwipeTarget;
+  chat?: MobileSwipeTarget;
+};
+
+/** Sliding mobile drawer with one touch coordinator and a GPU-transformed panel track. */
 export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDrawerProps) {
   const [mobileGestures] = useSetting(settingsAtom, 'mobileGestures');
   const reduceMotion = useReducedMotion();
@@ -55,8 +76,8 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
   const matchedRoomId = roomMatch?.params.roomIdOrAlias
     ? decodeURIComponent(roomMatch.params.roomIdOrAlias)
     : undefined;
-  // `:roomIdOrAlias` also matches non-room segments like `create`, `search`, `lobby`.
-  // Only treat it as a room when it's a real Matrix id/alias.
+  // `:roomIdOrAlias` also matches non-room segments like `create`, `search`, and `lobby`.
+  // Only treat it as a room when it is a real Matrix ID or alias.
   const isRoomRoute = !!matchedRoomId && (isRoomId(matchedRoomId) || isRoomAlias(matchedRoomId));
 
   const listView =
@@ -68,20 +89,87 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
   const contentOpen = !listView;
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
   const navPanelRef = useRef<HTMLDivElement | null>(null);
   const contentPanelRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
-  const x = useMotionValue(0);
-  const dragControls = useDragControls();
-  const settleAnimRef = useRef<AnimationPlaybackControls | null>(null);
+  const widthRef = useRef(0);
+  const positionRef = useRef(0);
 
-  const initialIntent = contentOpen ? 1 : 0;
-  const [panelIntent, setPanelIntent] = useState(initialIntent);
-  const panelIntentRef = useRef(initialIntent);
+  const [panelIntent, setPanelIntent] = useState(contentOpen ? 1 : 0);
+  const gestureRef = useRef<ActiveTouchGesture>();
+  const messageTargetsRef = useRef(new WeakMap<HTMLElement, MobileSwipeTarget>());
+  const chatTargetsRef = useRef(new WeakMap<HTMLElement, MobileSwipeTarget>());
+  const settleAnimationRef = useRef<number>();
+  const programmaticTargetRef = useRef<number>();
 
-  const [roomArmed, setRoomArmed] = useState(isRoomRoute);
+  const setTrackPosition = useCallback((position: number) => {
+    positionRef.current = position;
+    if (trackRef.current) {
+      trackRef.current.style.transform = `translate3d(${position}px, 0, 0)`;
+    }
+  }, []);
+
+  const settleToPanel = useCallback(
+    (targetPosition: number, onComplete?: () => void) => {
+      if (!trackRef.current) return;
+
+      window.cancelAnimationFrame(settleAnimationRef.current ?? 0);
+      if (reduceMotion) {
+        setTrackPosition(targetPosition);
+        onComplete?.();
+        return;
+      }
+
+      const startPosition = positionRef.current;
+      const distance = targetPosition - startPosition;
+      if (Math.abs(distance) <= 1) {
+        setTrackPosition(targetPosition);
+        onComplete?.();
+        return;
+      }
+
+      const startTime = window.performance.now();
+      const tick = (time: number) => {
+        const progress = Math.min(1, (time - startTime) / DRAWER_TRANSITION_MS);
+        const eased = 1 - (1 - progress) ** 3;
+        setTrackPosition(startPosition + distance * eased);
+
+        if (progress < 1) {
+          settleAnimationRef.current = window.requestAnimationFrame(tick);
+        } else {
+          setTrackPosition(targetPosition);
+          settleAnimationRef.current = undefined;
+          onComplete?.();
+        }
+      };
+
+      settleAnimationRef.current = window.requestAnimationFrame(tick);
+    },
+    [reduceMotion, setTrackPosition]
+  );
+
+  const registerMessageSwipe = useCallback((element: HTMLElement, target: MobileSwipeTarget) => {
+    messageTargetsRef.current.set(element, target);
+    return () => {
+      if (messageTargetsRef.current.get(element) === target) {
+        messageTargetsRef.current.delete(element);
+      }
+    };
+  }, []);
+
+  const registerChatSwipe = useCallback((element: HTMLElement, target: MobileSwipeTarget) => {
+    chatTargetsRef.current.set(element, target);
+    return () => {
+      if (chatTargetsRef.current.get(element) === target) {
+        chatTargetsRef.current.delete(element);
+      }
+    };
+  }, []);
+
+  const [roomArmed, setRoomArmed] = useState(() => isRoomRoute || canOpenRoom);
   useEffect(() => {
-    if (isRoomRoute) {
+    if (isRoomRoute || canOpenRoom) {
       setRoomArmed(true);
       return undefined;
     }
@@ -90,36 +178,53 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
     const cic = window.cancelIdleCallback ?? window.clearTimeout;
     const handle = ric(() => setRoomArmed(true));
     return () => cic(handle as number);
-  }, [isRoomRoute, roomArmed]);
+  }, [isRoomRoute, canOpenRoom, roomArmed]);
 
-  const settle = useCallback(
-    (target: number) => {
-      settleAnimRef.current?.stop();
-      settleAnimRef.current = null;
-
-      if (reduceMotion) {
-        x.jump(target);
+  const openContent = useCallback(
+    (path: string) => {
+      const viewport = viewportRef.current;
+      if (!viewport || width === 0) {
+        startTransition(() => navigate(path));
         return;
       }
-      settleAnimRef.current = animate(x, target, {
-        type: 'spring',
-        stiffness: SETTLE_STIFFNESS,
-        damping: SETTLE_DAMPING,
-        velocity: 0,
+
+      setRoomArmed(true);
+      programmaticTargetRef.current = -width;
+
+      // Start the exact same settle used after a swipe immediately, while the
+      // selected room renders concurrently in the panel being revealed.
+      settleToPanel(-width, () => {
+        if (programmaticTargetRef.current === -width) {
+          programmaticTargetRef.current = undefined;
+        }
+        setPanelIntent(1);
       });
+      startTransition(() => navigate(path));
     },
-    [reduceMotion, x]
+    [navigate, settleToPanel, width]
   );
 
   useLayoutEffect(() => {
     const el = viewportRef.current;
     if (!el) return undefined;
-    const update = () => setWidth(el.clientWidth);
+    const update = () => {
+      const nextWidth = el.clientWidth;
+      const previousWidth = widthRef.current;
+      const nextPosition =
+        previousWidth > 0
+          ? (positionRef.current / previousWidth) * nextWidth
+          : contentOpen
+            ? -nextWidth
+            : 0;
+      widthRef.current = nextWidth;
+      setTrackPosition(nextPosition);
+      setWidth(nextWidth);
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [contentOpen, setTrackPosition]);
 
   useLayoutEffect(() => {
     navPanelRef.current?.toggleAttribute('inert', panelIntent === 1);
@@ -127,117 +232,231 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
   }, [panelIntent]);
 
   useLayoutEffect(() => {
-    const routePanel = contentOpen ? 1 : 0;
-    if (routePanel !== panelIntentRef.current) {
-      panelIntentRef.current = routePanel;
-      setPanelIntent(routePanel);
-      const target = routePanel === 1 ? -width : 0;
-      if (width > 0 && !reduceMotion) {
-        settle(target);
-      } else {
-        settleAnimRef.current?.stop();
-        settleAnimRef.current = null;
-        x.jump(target);
-      }
+    const el = viewportRef.current;
+    if (!el || width === 0) return;
+    const targetPosition = contentOpen ? -width : 0;
+
+    if (programmaticTargetRef.current === targetPosition) return;
+
+    if (Math.abs(positionRef.current - targetPosition) > 5) {
+      settleToPanel(targetPosition, () => setPanelIntent(contentOpen ? 1 : 0));
+    } else {
+      setPanelIntent(contentOpen ? 1 : 0);
     }
-  }, [contentOpen, width, x, settle, reduceMotion]);
+  }, [contentOpen, settleToPanel, width]);
 
-  useLayoutEffect(() => {
-    settleAnimRef.current?.stop();
-    settleAnimRef.current = null;
-    const target = panelIntentRef.current === 1 ? -width : 0;
-    x.jump(target);
-  }, [width, x]);
+  const commitPanel = useCallback(
+    (roomVisible: boolean) => {
+      if (width === 0) return;
 
-  return (
+      setTrackPosition(roomVisible ? -width : 0);
+      setPanelIntent(roomVisible ? 1 : 0);
+
+      if (roomVisible === contentOpen) return;
+
+      if (roomVisible) {
+        const section = resolveSection(location.pathname);
+        if (section?.getRoomPath) {
+          const lastRoomId = lastRoom?.[section.key];
+          if (lastRoomId) {
+            startTransition(() => navigate(section.getRoomPath!(lastRoomId)));
+            return;
+          }
+        }
+        settleToPanel(0);
+        setPanelIntent(0);
+        return;
+      }
+
+      const section = resolveSection(location.pathname);
+      if (!section) return;
+      if (section.getRoomPath && matchedRoomId && isRoomRoute) {
+        setLastRoom((prev) => ({ ...prev, [section.key]: matchedRoomId }));
+      }
+      startTransition(() => navigate(section.listPath));
+    },
+    [
+      contentOpen,
+      isRoomRoute,
+      lastRoom,
+      location.pathname,
+      matchedRoomId,
+      navigate,
+      settleToPanel,
+      setLastRoom,
+      setTrackPosition,
+      width,
+    ]
+  );
+
+  const finishGesture = useCallback(
+    (cancelled: boolean) => {
+      const gesture = gestureRef.current;
+      gestureRef.current = undefined;
+      if (!gesture) return;
+
+      const distanceX = gesture.lastX - gesture.startX;
+      if (gesture.mode === 'message') {
+        if (cancelled) gesture.message?.cancel();
+        else gesture.message?.end({ distanceX, velocityX: gesture.velocityX });
+        return;
+      }
+      if (gesture.mode === 'chat') {
+        if (cancelled) gesture.chat?.cancel();
+        else gesture.chat?.end({ distanceX, velocityX: gesture.velocityX });
+        return;
+      }
+      if (gesture.mode !== 'drawer' || width === 0) return;
+
+      const targetPosition = getDrawerSettlePosition({
+        startPosition: gesture.startPosition,
+        distanceX,
+        velocityX: gesture.velocityX,
+        width,
+        cancelled,
+      });
+
+      settleToPanel(targetPosition, () => commitPanel(targetPosition === -width));
+    },
+    [commitPanel, settleToPanel, width]
+  );
+
+  useEffect(() => {
+    return () => {
+      window.cancelAnimationFrame(settleAnimationRef.current ?? 0);
+      const gesture = gestureRef.current;
+      gestureRef.current = undefined;
+      gesture?.message?.cancel();
+      gesture?.chat?.cancel();
+    };
+  }, []);
+
+  const contextValue = useMemo(
+    () => ({ openContent, registerChatSwipe, registerMessageSwipe }),
+    [openContent, registerChatSwipe, registerMessageSwipe]
+  );
+
+  const drawer = (
     <div
-      onPointerDown={(event) => {
-        if (!mobileGestures || width === 0) return;
-        const target = event.target as HTMLElement | null;
-        if (target?.closest('[data-gestures="ignore"]')) return;
-        // On the list panel, only start drag tracking when a room is available to open.
-        if (panelIntentRef.current === 0 && !canOpenRoom) return;
-        dragControls.start(event);
-      }}
       ref={viewportRef}
+      className="no-scrollbar"
+      onTouchStartCapture={(event) => {
+        const viewport = viewportRef.current;
+        const touch = event.touches[0];
+        if (!mobileGestures || !viewport || !touch) return;
+        if (event.touches.length !== 1) {
+          finishGesture(true);
+          return;
+        }
+
+        const target = event.target instanceof Element ? event.target : event.currentTarget;
+        const messageElement = target.closest<HTMLElement>('[data-message-swipe]');
+        const chatElement = target.closest<HTMLElement>('[data-chat-swipe]');
+        const ignoredElement = target.closest<HTMLElement>('[data-gestures="ignore"]');
+        const message = messageElement ? messageTargetsRef.current.get(messageElement) : undefined;
+        const chat = chatElement ? chatTargetsRef.current.get(chatElement) : undefined;
+        const blocked = ignoredElement !== null && ignoredElement !== messageElement;
+
+        gestureRef.current = {
+          startX: touch.clientX,
+          startY: touch.clientY,
+          startPosition: positionRef.current,
+          lastX: touch.clientX,
+          lastTime: event.timeStamp,
+          velocityX: 0,
+          mode: blocked ? 'blocked' : 'pending',
+          message,
+          chat,
+        };
+        if (positionRef.current > -width && canOpenRoom) setRoomArmed(true);
+      }}
+      onTouchMoveCapture={(event) => {
+        const viewport = viewportRef.current;
+        const gesture = gestureRef.current;
+        const touch = event.touches[0];
+        if (!viewport || !gesture || !touch || gesture.mode === 'blocked') return;
+
+        const distanceX = touch.clientX - gesture.startX;
+        const distanceY = touch.clientY - gesture.startY;
+        const elapsed = event.timeStamp - gesture.lastTime;
+        if (elapsed > 0) {
+          gesture.velocityX = (touch.clientX - gesture.lastX) / elapsed;
+          gesture.lastX = touch.clientX;
+          gesture.lastTime = event.timeStamp;
+        }
+
+        if (gesture.mode === 'pending') {
+          gesture.mode = classifyMobileGesture({
+            distanceX,
+            distanceY,
+            startPosition: positionRef.current,
+            width,
+            canOpenRoom,
+            hasMessage: gesture.message !== undefined,
+            hasChat: gesture.chat !== undefined,
+          });
+          if (gesture.mode === 'drawer' || gesture.mode === 'message' || gesture.mode === 'chat') {
+            const animationActive = settleAnimationRef.current !== undefined;
+            window.cancelAnimationFrame(settleAnimationRef.current ?? 0);
+            settleAnimationRef.current = undefined;
+            programmaticTargetRef.current = undefined;
+            if (animationActive) gesture.startPosition = positionRef.current - distanceX;
+          }
+        }
+
+        if (gesture.mode === 'drawer') {
+          setTrackPosition(Math.max(-width, Math.min(0, gesture.startPosition + distanceX)));
+        } else if (gesture.mode === 'message') {
+          gesture.message?.move(distanceX);
+        } else if (gesture.mode === 'chat') {
+          gesture.chat?.move(distanceX);
+        }
+      }}
+      onTouchEndCapture={() => finishGesture(false)}
+      onTouchCancelCapture={() => finishGesture(true)}
       style={{
-        position: 'relative',
-        overflow: 'hidden',
         display: 'flex',
         flexGrow: 1,
         height: '100%',
         width: '100%',
-        touchAction: 'manipulation',
+        overflow: 'hidden',
+        overscrollBehaviorX: 'none',
+        touchAction: 'pan-y',
       }}
     >
-      <motion.div
-        drag={mobileGestures ? 'x' : false}
-        dragControls={dragControls}
-        dragListener={false}
-        dragConstraints={{ left: -width, right: 0 }}
-        dragDirectionLock
-        dragElastic={0.05}
-        dragMomentum={false}
-        onDragStart={() => {
-          x.stop();
-          settleAnimRef.current?.stop();
-          settleAnimRef.current = null;
-          if (panelIntentRef.current === 0 && !roomArmed) setRoomArmed(true);
+      <style>{`
+        .no-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .no-scrollbar {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+      `}</style>
+      <div
+        ref={trackRef}
+        style={{
+          display: 'flex',
+          width: '200%',
+          height: '100%',
+          flexShrink: 0,
+          transform: 'translate3d(0, 0, 0)',
+          willChange: 'transform',
         }}
-        onDragEnd={(_event, info) => {
-          const { offset, velocity } = info;
-
-          if (panelIntentRef.current === 1) {
-            // Room panel → swipe right to reveal the list.
-            const opened = offset.x > width * OPEN_FRACTION || velocity.x > VELOCITY_THRESHOLD;
-            if (opened) {
-              panelIntentRef.current = 0;
-              setPanelIntent(0);
-              settle(0);
-              const section = resolveSection(location.pathname);
-              if (section?.getRoomPath && matchedRoomId && isRoomRoute) {
-                setLastRoom((prev) => ({ ...prev, [section.key]: matchedRoomId }));
-              }
-              if (section) startTransition(() => navigate(section.listPath));
-            } else {
-              settle(-width);
-            }
-            return;
-          }
-
-          // List panel → swipe left to open the last visited room.
-          const wantRoom = -offset.x > width * OPEN_FRACTION || velocity.x < -VELOCITY_THRESHOLD;
-          if (wantRoom) {
-            const section = resolveSection(location.pathname);
-            if (section?.getRoomPath) {
-              const lastRoomId = lastRoom?.[section.key];
-              if (lastRoomId) {
-                const roomPath = section.getRoomPath(lastRoomId);
-                panelIntentRef.current = 1;
-                setPanelIntent(1);
-                settle(-width);
-                startTransition(() => navigate(roomPath));
-              } else {
-                settle(0);
-              }
-            } else {
-              settle(0);
-            }
-          } else {
-            settle(0);
-          }
-        }}
-        style={{ x, display: 'flex', height: '100%', willChange: 'transform' }}
       >
         <div
           ref={navPanelRef}
+          className="no-scrollbar"
           style={{
-            width,
+            width: '50%',
+            flexBasis: '50%',
             height: '100%',
             flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            transform: 'translateZ(0)',
+            backfaceVisibility: 'hidden',
           }}
         >
           <div
@@ -260,12 +479,16 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
         </div>
         <div
           ref={contentPanelRef}
+          className="no-scrollbar"
           style={{
-            width,
+            width: '50%',
+            flexBasis: '50%',
             height: '100%',
             flexShrink: 0,
             display: 'flex',
             overflow: 'hidden',
+            transform: 'translateZ(0)',
+            backfaceVisibility: 'hidden',
           }}
         >
           {isRoomRoute ? (
@@ -278,7 +501,11 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
             children
           )}
         </div>
-      </motion.div>
+      </div>
     </div>
+  );
+
+  return (
+    <MobileNavDrawerContext.Provider value={contextValue}>{drawer}</MobileNavDrawerContext.Provider>
   );
 }

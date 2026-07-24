@@ -139,6 +139,69 @@ const dividerIds = (processed: ProcessedEvent[]) =>
   processed.filter((e) => e.willRenderNewDivider).map((e) => e.id);
 
 describe('useProcessedTimeline new-messages divider', () => {
+  it('processes append-only messages without rebuilding existing rows', () => {
+    const events = [
+      createEvent({ id: '$a', ts: 1_000_000 }),
+      createEvent({ id: '$b', ts: 1_000_500 }),
+    ];
+    const timeline = createTimeline(events);
+    const ignoredUsersSet = new Set<string>();
+    const { result, rerender } = renderHook(
+      ({ count }: { count: number }) =>
+        useProcessedTimeline({
+          items: Array.from({ length: count }, (_, index) => index),
+          linkedTimelines: [timeline],
+          ignoredUsersSet,
+          hiddenEvents,
+          mxUserId: MY_USER,
+          readUptoEventId: undefined,
+          hideMembershipEvents: true,
+          hideNickAvatarEvents: true,
+          isReadOnly: false,
+          hideMemberInReadOnly: false,
+        }),
+      { initialProps: { count: events.length } }
+    );
+    const existingRows = [...result.current];
+
+    events.push(createEvent({ id: '$c', ts: 1_001_000 }));
+    rerender({ count: events.length });
+
+    expect(result.current.slice(0, 2)).toEqual(existingRows);
+    expect(result.current[0]).toBe(existingRows[0]);
+    expect(result.current[1]).toBe(existingRows[1]);
+    expect(result.current[2]).toMatchObject({ id: '$c', collapsed: true });
+  });
+
+  it('rebuilds relation state when an appended event can change an existing row', () => {
+    const events = [createEvent({ id: '$a' }), createEvent({ id: '$b' })];
+    const timeline = createTimeline(events);
+    const ignoredUsersSet = new Set<string>();
+    const { result, rerender } = renderHook(
+      ({ count }: { count: number }) =>
+        useProcessedTimeline({
+          items: Array.from({ length: count }, (_, index) => index),
+          linkedTimelines: [timeline],
+          ignoredUsersSet,
+          hiddenEvents,
+          mxUserId: MY_USER,
+          readUptoEventId: undefined,
+          hideMembershipEvents: true,
+          hideNickAvatarEvents: true,
+          isReadOnly: false,
+          hideMemberInReadOnly: false,
+        }),
+      { initialProps: { count: events.length } }
+    );
+    const firstRow = result.current[0];
+
+    events.push(createReaction('$reaction', '$a'));
+    rerender({ count: events.length });
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$b']);
+    expect(result.current[0]).not.toBe(firstRow);
+  });
+
   it('preserves absolute event order across linked timelines', () => {
     const first = [createEvent({ id: '$a' }), createEvent({ id: '$b' })];
     const second = [createEvent({ id: '$c' }), createEvent({ id: '$d' })];

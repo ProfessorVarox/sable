@@ -140,6 +140,11 @@ jobs:
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+      VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       NODE_OPTIONS: --max-old-space-size=8192
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -329,6 +334,11 @@ jobs:
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+      VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       NODE_OPTIONS: --max-old-space-size=8192
       ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -435,6 +445,11 @@ jobs:
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+      VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - name: Checkout repository

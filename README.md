@@ -15,14 +15,32 @@ You can also download our desktop app for Windows and Linux from [releases](http
 
 ## iOS (AltStore / SideStore)
 
-Sable iOS builds are distributed as unsigned IPAs through [AltStore](https://altstore.io) and [SideStore](https://sidestore.io). The nightly build publishes both the IPA and an `altstore-source.json` manifest to the [`nightly` GitHub release](https://github.com/SableClient/Sable/releases/tag/nightly).
+Sable iOS builds are distributed as unsigned IPAs through [AltStore](https://altstore.io) and [SideStore](https://sidestore.io). Each release publishes both the IPA and an `altstore-source.json` manifest — stable builds to the [latest GitHub release](https://github.com/SableClient/Sable/releases/latest), nightly builds to the [`nightly` GitHub release](https://github.com/SableClient/Sable/releases/tag/nightly).
 
-To install:
+### Stable Source
+
+<a href="https://intradeus.github.io/http-protocol-redirector?r=altstore://source?url=https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json"><img alt="Add to AltStore" src="https://img.shields.io/badge/Add_to_AltStore-7C3AED?style=for-the-badge"></a>
+&nbsp;
+<a href="https://intradeus.github.io/http-protocol-redirector?r=sidestore://source?url=https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json"><img alt="Add to SideStore" src="https://img.shields.io/badge/Add_to_SideStore-2563EB?style=for-the-badge"></a>
+&nbsp;
+<a href="https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json"><img alt="Direct URL" src="https://img.shields.io/badge/Direct_URL-6B7280?style=for-the-badge"></a>
+
+### Nightly Source
+
+<a href="https://intradeus.github.io/http-protocol-redirector?r=altstore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json"><img alt="Add to AltStore" src="https://img.shields.io/badge/Add_to_AltStore-7C3AED?style=for-the-badge"></a>
+&nbsp;
+<a href="https://intradeus.github.io/http-protocol-redirector?r=sidestore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json"><img alt="Add to SideStore" src="https://img.shields.io/badge/Add_to_SideStore-2563EB?style=for-the-badge"></a>
+&nbsp;
+<a href="https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json"><img alt="Direct URL" src="https://img.shields.io/badge/Direct_URL-6B7280?style=for-the-badge"></a>
+
+### Setup & install
 
 1. Set up [AltStore Classic](https://faq.altstore.io/altstore-classic/altserver) or [SideStore](https://docs.sidestore.io) on your device.
-2. Add the Sable source:
-   - AltStore: `altstore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json`
-   - SideStore: `sidestore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json`
+2. Add the Sable source (tap a button above), or add it manually:
+   - AltStore (stable): `altstore://source?url=https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json`
+   - SideStore (stable): `sidestore://source?url=https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json`
+   - AltStore (nightly): `altstore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json`
+   - SideStore (nightly): `sidestore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json`
 3. Install Sable from the source. The IPA is unsigned; AltStore/SideStore re-sign it with your personal development certificate at install time, so apps refresh every 7 days (the standard free-account limitation).
 
 iOS builds are produced by the `ios` job in [`tauri-build.yml`](.github/workflows/tauri-build.yml) and track the same `dev`/`v*` triggers as desktop builds.

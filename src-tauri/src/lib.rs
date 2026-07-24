@@ -7,6 +7,7 @@ mod ios;
 #[cfg(target_os = "android")]
 mod mobile;
 mod network;
+mod sentry;
 mod share_inbox;
 
 use tauri::{AppHandle, Manager};
@@ -243,6 +244,8 @@ pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> taur
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _sentry_guard = sentry::init();
+
     let builder = tauri::Builder::<BrowserEngine>::new();
 
     // macOS needs a standard menu (with the Edit submenu) for keyboard
@@ -379,6 +382,8 @@ pub fn run() {
             network::native_upload::abort_native_upload,
             network::media_protocol::set_media_session,
             network::media_protocol::clear_media_session,
+            network::media_protocol::set_media_encryption,
+            sentry::set_native_sentry_enabled,
             share_inbox::share_inbox_drain,
             share_inbox::share_inbox_read,
             share_inbox::share_inbox_clear,

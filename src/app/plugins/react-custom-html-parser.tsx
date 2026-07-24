@@ -866,7 +866,10 @@ export const getReactCustomHtmlParser = (
 
           const alt = attrString(props.alt);
           const title = attrString(props.title);
-          const htmlSrc = mxcUrlToHttp(mx, src, params.useAuthentication) ?? undefined;
+          const isEmoticon = 'data-mx-emoticon' in props;
+          const htmlSrc = isEmoticon
+            ? (mxcUrlToHttp(mx, src, params.useAuthentication) ?? undefined)
+            : (mxcUrlToHttp(mx, src, params.useAuthentication, 640, 480, 'scale') ?? undefined);
           const fallbackLabel = alt || title || '[media]';
           const failedToResolveMxc = src.startsWith('mxc://') && !htmlSrc;
 
@@ -886,7 +889,7 @@ export const getReactCustomHtmlParser = (
             return <span title={fallbackLabel}>{fallbackLabel}</span>;
           }
 
-          if ('data-mx-emoticon' in props) {
+          if (isEmoticon) {
             // When the mxc URL can't be resolved (e.g. federation unavailable),
             // fall back to rendering the shortcode text so the message stays readable.
             if (!htmlSrc) {

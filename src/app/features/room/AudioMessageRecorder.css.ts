@@ -26,7 +26,6 @@ export const Container = style([
     maxWidth: toRem(280),
     minWidth: 0,
     overflow: 'hidden',
-    touchAction: 'pan-y',
     userSelect: 'none',
   },
 ]);

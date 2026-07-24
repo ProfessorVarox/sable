@@ -7,6 +7,7 @@ import type {
   PushTransportOverrides,
 } from '$features/settings/notifications/NotificationTransport';
 import type { IImageInfo } from '$types/matrix/common';
+import { isLocalImportTweakUrl } from '../theme/localImportUrls';
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from '../keyboard/shortcuts';
 
 const STORAGE_KEY = 'settings';
@@ -42,6 +43,11 @@ export type PerRoomShowRoomIcon = {
 };
 
 export type JumboEmojiSize = 'none' | 'extraSmall' | 'small' | 'normal' | 'large' | 'extraLarge';
+
+/** Reorderable inline trigger buttons in the message composer. */
+export type EditorButtonId = 'gif' | 'sticker' | 'emoji';
+export const EDITOR_BUTTON_ORDER_DEFAULT: EditorButtonId[] = ['gif', 'sticker', 'emoji'];
+const EDITOR_BUTTON_ORDER_VALUES = new Set<EditorButtonId>(EDITOR_BUTTON_ORDER_DEFAULT);
 export const CALL_TONE_IDS = [
   'sable-default',
   'classic-soft',
@@ -66,6 +72,8 @@ export type ThemeRemoteTweakFavorite = {
   basename: string;
   pinned?: boolean;
   importedLocal?: boolean;
+  /** CSS for locally imported tweaks, replicated with settings for device restore. */
+  cssText?: string;
 };
 
 /** Custom profile card hero colors: which brightness schemes to honor. */
@@ -116,6 +124,11 @@ export interface Settings {
   enterForNewline: boolean;
   editorToolbar: boolean;
   editorOldAddFile: boolean;
+  editorMicButton: boolean;
+  editorEmojiButton: boolean;
+  editorGifButton: boolean;
+  editorStickerButton: boolean;
+  editorButtonOrder: EditorButtonId[];
   composerToolbarOpen: boolean;
   messageLayout: MessageLayout;
   messageSpacing: MessageSpacing;
@@ -151,6 +164,8 @@ export interface Settings {
   backgroundNotificationSounds: boolean;
   showMessageContentInNotifications: boolean;
   showMessageContentInEncryptedNotifications: boolean;
+  useRichPushPayloads: boolean;
+  pushNotifyUrlOverride?: string;
   clearNotificationsOnRead: boolean;
   backgroundPushEnabled: boolean;
   backgroundPushProvider: NotificationTransportProvider | null;
@@ -287,6 +302,11 @@ export const defaultSettings: Settings = {
   enterForNewline: mobileOrTablet(),
   editorToolbar: false,
   editorOldAddFile: false,
+  editorMicButton: true,
+  editorEmojiButton: true,
+  editorGifButton: false,
+  editorStickerButton: false,
+  editorButtonOrder: [...EDITOR_BUTTON_ORDER_DEFAULT],
   composerToolbarOpen: false,
   messageLayout: 0,
   messageSpacing: '400',
@@ -327,6 +347,8 @@ export const defaultSettings: Settings = {
   backgroundNotificationSounds: true,
   showMessageContentInNotifications: false,
   showMessageContentInEncryptedNotifications: false,
+  useRichPushPayloads: true,
+  pushNotifyUrlOverride: undefined,
   clearNotificationsOnRead: false,
   backgroundPushEnabled: mobileOrTablet(),
   backgroundPushProvider: null,
@@ -445,6 +467,7 @@ function cloneDefaultSettings(): Settings {
     })),
     themeRemoteTweakFavorites: defaultSettings.themeRemoteTweakFavorites.map((x) => ({ ...x })),
     themeRemoteEnabledTweakFullUrls: [...defaultSettings.themeRemoteEnabledTweakFullUrls],
+    editorButtonOrder: [...defaultSettings.editorButtonOrder],
   };
 }
 
@@ -564,6 +587,26 @@ function sanitizeStringArray(val: unknown): string[] | undefined {
   return out;
 }
 
+function sanitizeEditorButtonOrder(val: unknown): EditorButtonId[] | undefined {
+  if (!Array.isArray(val)) return undefined;
+  const out: EditorButtonId[] = [];
+  const seen = new Set<EditorButtonId>();
+  for (const x of val) {
+    if (typeof x === 'string' && EDITOR_BUTTON_ORDER_VALUES.has(x as EditorButtonId)) {
+      const id = x as EditorButtonId;
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+  }
+  // Append any missing buttons in default order so the array is always complete.
+  for (const id of EDITOR_BUTTON_ORDER_DEFAULT) {
+    if (!seen.has(id)) out.push(id);
+  }
+  return out;
+}
+
 function sanitizeThemeRemoteFavorites(val: unknown): ThemeRemoteFavorite[] | undefined {
   if (!Array.isArray(val)) return undefined;
   const out: ThemeRemoteFavorite[] = [];
@@ -589,7 +632,9 @@ function sanitizeThemeRemoteFavorites(val: unknown): ThemeRemoteFavorite[] | und
   return out;
 }
 
-function sanitizeThemeRemoteTweakFavorites(val: unknown): ThemeRemoteTweakFavorite[] | undefined {
+export function sanitizeThemeRemoteTweakFavorites(
+  val: unknown
+): ThemeRemoteTweakFavorite[] | undefined {
   if (!Array.isArray(val)) return undefined;
   const out: ThemeRemoteTweakFavorite[] = [];
   for (const item of val) {
@@ -600,12 +645,15 @@ function sanitizeThemeRemoteTweakFavorites(val: unknown): ThemeRemoteTweakFavori
       typeof o.displayName === 'string' &&
       typeof o.basename === 'string'
     ) {
+      const cssText =
+        isLocalImportTweakUrl(o.fullUrl) && typeof o.cssText === 'string' ? o.cssText : undefined;
       out.push({
         fullUrl: o.fullUrl,
         displayName: o.displayName,
         basename: o.basename,
         pinned: typeof o.pinned === 'boolean' ? o.pinned : undefined,
         importedLocal: typeof o.importedLocal === 'boolean' ? o.importedLocal : undefined,
+        cssText,
       });
     }
   }
@@ -684,6 +732,8 @@ function sanitizeSettingsKey(key: keyof Settings, val: unknown): unknown {
       return sanitizeThemeRemoteTweakFavorites(val);
     case 'themeRemoteEnabledTweakFullUrls':
       return sanitizeStringArray(val);
+    case 'editorButtonOrder':
+      return sanitizeEditorButtonOrder(val);
     default: {
       if (!(key in defaultSettings)) return undefined;
       const sample = defaultSettings[key];

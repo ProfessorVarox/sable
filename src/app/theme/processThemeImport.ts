@@ -35,6 +35,8 @@ export type ProcessedThemeImport =
       basename: string;
       description?: string;
       importedLocal: boolean;
+      /** Present for pasted/uploaded local tweaks so callers can persist it with the favorite. */
+      cssText?: string;
     }
   | { ok: false; error: string };
 
@@ -268,6 +270,7 @@ export async function processPastedOrUploadedCss(
       basename,
       description: tweakMeta.description?.trim(),
       importedLocal: true,
+      cssText: trimmed,
     };
   }
 

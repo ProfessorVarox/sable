@@ -39,7 +39,12 @@ import {
   type ThemePair,
   type TweakCatalogEntry,
 } from '../../../theme/catalog';
-import { isLocalImportBundledUrl, isLocalImportThemeUrl } from '../../../theme/localImportUrls';
+import {
+  isLocalImportBundledUrl,
+  isLocalImportThemeUrl,
+  isLocalImportTweakUrl,
+} from '../../../theme/localImportUrls';
+import { resolveSavedTweakCss } from '../../../theme/syncedTweakCss';
 import { isThirdPartyThemeUrl } from '../../../theme/themeApproval';
 import { themeCatalogListingBaseUrl } from '../../../theme/catalogDefaults';
 import {
@@ -579,14 +584,17 @@ export function ThemeCatalogSettings({
   });
 
   const localTweaksQuery = useQuery({
-    queryKey: ['theme-local-tweaks', tweakFavorites.map((f) => f.fullUrl).join('|')],
+    queryKey: [
+      'theme-local-tweaks',
+      tweakFavorites.map((f) => `${f.fullUrl}:${f.cssText ?? ''}`).join('|'),
+    ],
     enabled: showSavedLibrary && tweakFavorites.length > 0,
     staleTime: 10 * 60_000,
     queryFn: async (): Promise<LocalTweakRow[]> => {
       const rows = await Promise.all(
         tweakFavorites.map(async (fav) => {
           try {
-            let text = (await getCachedThemeCss(fav.fullUrl)) ?? '';
+            let text = await resolveSavedTweakCss(fav);
             if (!isLocalImportBundledUrl(fav.fullUrl)) {
               try {
                 const res = await fetch(fav.fullUrl, { mode: 'cors' });
@@ -616,6 +624,23 @@ export function ThemeCatalogSettings({
       return rows.filter((r): r is LocalTweakRow => Boolean(r));
     },
   });
+  const resolvedTweakUrls = new Set(
+    localTweaksQuery.isSuccess ? localTweaksQuery.data.map((row) => row.fullUrl) : []
+  );
+  const provisionalTweakCount = tweakFavorites.filter(
+    (favorite) => !isLocalImportTweakUrl(favorite.fullUrl) || Boolean(favorite.cssText)
+  ).length;
+  const savedTweakCount = localTweaksQuery.isSuccess
+    ? resolvedTweakUrls.size
+    : provisionalTweakCount;
+  const unresolvedLegacyTweakCount = localTweaksQuery.isSuccess
+    ? tweakFavorites.filter(
+        (favorite) =>
+          isLocalImportTweakUrl(favorite.fullUrl) &&
+          !favorite.cssText &&
+          !resolvedTweakUrls.has(favorite.fullUrl)
+      ).length
+    : 0;
 
   const removeFavorite = useCallback(
     (fullUrl: string) => {
@@ -1103,7 +1128,7 @@ export function ThemeCatalogSettings({
                   radii="Pill"
                   onClick={() => setSavedSection('tweaks')}
                 >
-                  <Text size="B300">Tweaks ({tweakFavorites.length})</Text>
+                  <Text size="B300">Tweaks ({savedTweakCount})</Text>
                 </Chip>
               </Box>
               <Box direction="Row" gap="100" alignItems="Center">
@@ -1263,9 +1288,17 @@ export function ThemeCatalogSettings({
                       paddingRight: toRem(4),
                     }}
                   >
+                    {localTweaksQuery.data.length > 0 && unresolvedLegacyTweakCount > 0 && (
+                      <Text size="T300" priority="300">
+                        {unresolvedLegacyTweakCount} saved local tweak
+                        {unresolvedLegacyTweakCount === 1 ? ' is' : 's are'} waiting to migrate.
+                      </Text>
+                    )}
                     {localTweaksQuery.data.length === 0 ? (
                       <Text size="T300" priority="300">
-                        Could not load tweak CSS. Check the URL or your connection.
+                        {unresolvedLegacyTweakCount === tweakFavorites.length
+                          ? 'Some saved local tweaks are waiting to migrate. Open Sable on a device that still has them to finish syncing.'
+                          : 'Could not load tweak CSS. Check the URL or your connection.'}
                       </Text>
                     ) : (
                       localTweaksQuery.data.map((row) => {

@@ -53,6 +53,9 @@ const tauriDevHost = process.env.TAURI_DEV_HOST;
 const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
 const isTauriDebug = process.env.TAURI_ENV_DEBUG === 'true';
 const tauriBuildMinify = !isTauriDebug ? 'esbuild' : false;
+const sentryUploadEnabled = Boolean(
+  process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
+);
 
 const isReleaseTag = (() => {
   const envVal = process.env.VITE_IS_RELEASE_TAG;
@@ -237,7 +240,7 @@ export default defineConfig(({ command }) => ({
         ]
       : []),
     // Sentry source map upload — only active when credentials are provided at build time
-    ...(process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
+    ...(sentryUploadEnabled
       ? [
           sentryVitePlugin({
             org: process.env.SENTRY_ORG,
@@ -288,7 +291,7 @@ export default defineConfig(({ command }) => ({
     // vite-plugin-top-level-await re-transpiles chunks (see vitejs/vite#22225).
     target: 'es2022',
     minify: isTauriBuild ? tauriBuildMinify : undefined,
-    sourcemap: isTauriBuild ? isTauriDebug : true,
+    sourcemap: isTauriBuild ? isTauriDebug || sentryUploadEnabled : true,
     outDir: 'dist',
     copyPublicDir: false,
     rollupOptions: {

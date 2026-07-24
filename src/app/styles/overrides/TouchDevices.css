@@ -12,7 +12,6 @@
   html body [class*='Chip']:active,
   html body [class*='MenuItem']:active {
     transform: none !important;
-    background-color: inherit !important;
   }
 
   html body button:hover,
@@ -21,7 +20,22 @@
   html body [class*='Chip']:hover,
   html body [class*='MenuItem']:hover {
     transform: none !important;
-    background-color: inherit !important;
+  }
+
+  html body input,
+  html body button,
+  html body label,
+  html body [role='button'],
+  html body [role='switch'],
+  html body [class*='Switch'] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html body label[htmlFor],
+  html body [role='switch'],
+  html body [class*='Switch'] {
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   html body [data-message-id][data-message-item]:hover {

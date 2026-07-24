@@ -23,7 +23,14 @@ import type { IThumbnailContent, IVideoInfo } from '$types/matrix/common';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { bytesToSize, millisecondsToMinutesAndSeconds } from '$utils/common';
-import { decryptFile, downloadEncryptedMedia, downloadMedia, mxcUrlToHttp } from '$utils/matrix';
+import {
+  decryptFile,
+  downloadEncryptedMedia,
+  downloadMedia,
+  mxcUrlToHttp,
+  rewriteAuthenticatedMediaUrl,
+} from '$utils/matrix';
+import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useRevokeObjectURL } from '$hooks/useObjectURL';
 import { validBlurHash } from '$utils/blurHash';
@@ -86,11 +93,17 @@ export const VideoContent = as<'div', VideoContentProps>(
         if (!mediaUrl) throw new Error('Invalid media URL');
         // Native media and service-worker-authenticated browser media can stream with Range requests.
         if (!encInfo && (isTauri() || hasControllingServiceWorker())) return mediaUrl;
-        const fileContent = encInfo
-          ? await downloadEncryptedMedia(mediaUrl, (encBuf) =>
-              decryptFile(encBuf, mimeType, encInfo)
-            )
-          : await downloadMedia(mediaUrl);
+        if (encInfo) {
+          if (isTauri()) {
+            await setMediaEncryption(mediaUrl, encInfo, mimeType);
+            return rewriteAuthenticatedMediaUrl(mediaUrl)!;
+          }
+          const fileContent = await downloadEncryptedMedia(mediaUrl, (encBuf) =>
+            decryptFile(encBuf, mimeType, encInfo)
+          );
+          return URL.createObjectURL(fileContent);
+        }
+        const fileContent = await downloadMedia(mediaUrl);
         return URL.createObjectURL(fileContent);
       }, [mx, url, useAuthentication, mimeType, encInfo])
     );

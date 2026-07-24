@@ -30,6 +30,7 @@ import { stopPropagation } from '$utils/keyboard';
 import { decryptFile, downloadEncryptedMedia, downloadMedia, mxcUrlToHttp } from '$utils/matrix';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useRevokeObjectURL } from '$hooks/useObjectURL';
+import { useDismissOnBack } from '$utils/androidBack';
 import { ModalWide } from '$styles/Modal.css';
 import { getDownloadFilename, saveFileToDevice } from '$utils/download';
 
@@ -79,6 +80,9 @@ export function ReadTextFile({ body, mimeType, url, encInfo, renderViewer }: Rea
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
   const [textViewer, setTextViewer] = useState(false);
+
+  // Android back closes the text viewer instead of navigating away.
+  useDismissOnBack(() => setTextViewer(false), textViewer);
 
   const [textState, loadText] = useAsyncCallback(
     useCallback(async () => {
@@ -170,6 +174,9 @@ export function ReadPdfFile({ body, mimeType, url, encInfo, renderViewer }: Read
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
   const [pdfViewer, setPdfViewer] = useState(false);
+
+  // Android back closes the PDF viewer instead of navigating away.
+  useDismissOnBack(() => setPdfViewer(false), pdfViewer);
 
   const [pdfState, loadPdf] = useAsyncCallback(
     useCallback(async () => {

@@ -46,7 +46,7 @@ export async function markAsRead(mx: MatrixClient, roomId: string, privateReceip
     try {
       const { clearRoomNotification } =
         await import('$features/settings/notifications/UnifiedPushNotifications');
-      await clearRoomNotification(roomId);
+      await clearRoomNotification(mx.getUserId() ?? '', roomId);
     } catch {
       // Notification plugin not available (desktop, web) — ignore.
     }

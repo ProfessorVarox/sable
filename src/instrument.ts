@@ -16,6 +16,8 @@ import {
   matchRoutes,
 } from 'react-router-dom';
 import { scrubMatrixIds, sanitizeSentryPayload, scrubMatrixUrl } from './app/utils/sentryScrubbers';
+import { isTauri } from '@tauri-apps/api/core';
+import { setNativeSentryEnabled } from './app/generated/tauri/commands';
 
 const dsn = import.meta.env.VITE_SENTRY_DSN;
 const environment = import.meta.env.VITE_SENTRY_ENVIRONMENT || import.meta.env.MODE;
@@ -291,6 +293,12 @@ if (dsn && sentryEnabled) {
   console.info('[Sentry] Disabled by user preference');
 } else {
   console.info('[Sentry] Disabled - no DSN provided');
+}
+
+if (isTauri()) {
+  setNativeSentryEnabled({ enabled: sentryEnabled }).catch((err) =>
+    console.warn('[Sentry] Failed to sync native crash capture consent', err)
+  );
 }
 
 // Export Sentry for use in other parts of the application

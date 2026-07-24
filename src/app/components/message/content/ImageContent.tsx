@@ -39,7 +39,14 @@ import { useMatrixClient } from '$hooks/useMatrixClient';
 import { bytesToSize } from '$utils/common';
 import { FALLBACK_MIMETYPE } from '$utils/mimeTypes';
 import { stopPropagation } from '$utils/keyboard';
-import { decryptFile, downloadEncryptedMedia, mxcUrlToHttp } from '$utils/matrix';
+import {
+  decryptFile,
+  downloadEncryptedMedia,
+  mxcUrlToHttp,
+  rewriteAuthenticatedMediaUrl,
+} from '$utils/matrix';
+import { setMediaEncryption } from '$utils/tauriMediaEncryption';
+import { isTauri } from '@tauri-apps/api/core';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { ModalWide } from '$styles/Modal.css';
 import { validBlurHash } from '$utils/blurHash';
@@ -147,8 +154,11 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const rawMediaUrl = useMemo(() => {
       if (url.startsWith('http')) return url;
-      return mxcUrlToHttp(mx, url, useAuthentication) ?? undefined;
-    }, [mx, url, useAuthentication]);
+      if (encInfo) {
+        return mxcUrlToHttp(mx, url, useAuthentication) ?? undefined;
+      }
+      return mxcUrlToHttp(mx, url, useAuthentication, 800, 600, 'scale') ?? undefined;
+    }, [mx, url, useAuthentication, encInfo]);
 
     const resolvedMediaUrl = useRenderableMediaUrl(encInfo ? undefined : rawMediaUrl);
 
@@ -156,6 +166,10 @@ export const ImageContent = as<'div', ImageContentProps>(
       useCallback(async () => {
         if (encInfo) {
           if (!rawMediaUrl) throw new Error('Invalid media URL');
+          if (isTauri()) {
+            await setMediaEncryption(rawMediaUrl, encInfo, mimeType ?? FALLBACK_MIMETYPE);
+            return rewriteAuthenticatedMediaUrl(rawMediaUrl)!;
+          }
           const fileContent = await downloadEncryptedMedia(rawMediaUrl, (encBuf) =>
             decryptFile(encBuf, mimeType ?? FALLBACK_MIMETYPE, encInfo)
           );

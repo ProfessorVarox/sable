@@ -25,6 +25,7 @@ import {
   useVerifierShowSas,
 } from '$hooks/useVerificationRequest';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import { useDismissOnBack } from '$utils/androidBack';
 import { ContainerColor } from '$styles/ContainerColor.css';
 
 const DialogHeaderStyles: CSSProperties = {
@@ -238,6 +239,9 @@ export function DeviceVerification({ request, onExit }: DeviceVerificationProps)
     }
     onExit();
   }, [request, onExit]);
+
+  // Android back cancels/dismisses the verification overlay instead of navigating away.
+  useDismissOnBack(handleCancel);
 
   const handleAccept = useCallback(() => request.accept(), [request]);
   const handleStart = useCallback(async () => {

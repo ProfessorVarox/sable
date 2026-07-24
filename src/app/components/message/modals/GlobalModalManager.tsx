@@ -2,6 +2,7 @@ import { useAtom } from 'jotai';
 import { Overlay, OverlayBackdrop, OverlayCenter, Box, Modal } from 'folds';
 import FocusTrap from 'focus-trap-react';
 import { stopPropagation } from '$utils/keyboard';
+import { useDismissOnBack } from '$utils/androidBack';
 import { modalAtom, ModalType } from '$state/modal';
 import { MessageReportInternal } from './MessageReport';
 import { MessageDeleteInternal } from './MessageDelete';
@@ -18,6 +19,12 @@ export function GlobalModalManager() {
   const close = () => {
     setModal(null);
   };
+
+  // Forward and MobileOptions render their own back handlers via their children.
+  useDismissOnBack(
+    close,
+    !!modal && modal.type !== ModalType.Forward && modal.type !== ModalType.MobileOptions
+  );
 
   if (!modal) return null;
 

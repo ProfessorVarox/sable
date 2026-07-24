@@ -119,5 +119,5 @@ const mountApp = () => {
   root.render(<App />);
 };
 
-await initTauriMediaSession();
 mountApp();
+void initTauriMediaSession();

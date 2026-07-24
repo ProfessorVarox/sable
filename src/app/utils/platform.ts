@@ -38,3 +38,12 @@ export function getAppOrigin(): string {
     ? `${window.location.protocol}//${window.location.host}`
     : window.location.origin;
 }
+
+// Runtime origin of the current window. getAppOrigin() returns the canonical
+// app URL on Tauri, which does not match the parent frame — use this for
+// widget parentUrl / postMessage targetOrigin.
+export function getWindowOrigin(): string {
+  return window.location.origin === 'null'
+    ? `${window.location.protocol}//${window.location.host}`
+    : window.location.origin;
+}

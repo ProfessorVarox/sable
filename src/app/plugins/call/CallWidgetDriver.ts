@@ -245,6 +245,13 @@ export class CallWidgetDriver extends WidgetDriver {
     limit: number,
     since: string | undefined
   ): Promise<IRoomEvent[]> {
+    if (stateKey !== undefined) {
+      return this.readRoomState(roomId, eventType, stateKey);
+    }
+
+    const stateEvents = await this.readRoomState(roomId, eventType, undefined);
+    if (stateEvents.length > 0) return stateEvents;
+
     const safeLimit =
       limit > 0 ? Math.min(limit, Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER; // relatively arbitrary
 

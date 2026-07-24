@@ -35,6 +35,7 @@ const matrixClient = vi.hoisted(() => ({
   getPushers: vi
     .fn<() => Promise<{ pushers: Array<unknown> }>>()
     .mockResolvedValue({ pushers: [] }),
+  getSafeUserId: vi.fn<() => string>(() => '@user:example.com'),
 }));
 
 vi.mock('./UnifiedPushTransport', () => unifiedPushTransport);

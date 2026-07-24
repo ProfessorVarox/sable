@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { animate, motion, useMotionValue } from 'framer-motion';
-import { useDrag } from '@use-gesture/react';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom, RightSwipeAction } from '$state/settings';
 import { haptic } from '$utils/haptics';
 import { mobileOrTablet } from '$utils/user-agent';
+import { useMobileNavDrawer } from '$components/page/MobileNavDrawerContext';
 
 interface SwipeableChatWrapperProps {
   children: ReactNode;
@@ -20,56 +20,51 @@ export function SwipeableChatWrapper({
   const [mobileGestures] = useSetting(settingsAtom, 'mobileGestures');
   const [rightSwipeAction] = useSetting(settingsAtom, 'rightSwipeAction');
   const x = useMotionValue(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const gestureActiveRef = useRef(false);
+  const drawer = useMobileNavDrawer();
 
-  const bind = useDrag(
-    ({ first, active, offset: [ox], velocity: [vx], direction: [dx], event: e, cancel }) => {
-      if (first && e && 'target' in e && e.target instanceof HTMLElement) {
-        if (e.target.closest('[data-gestures="ignore"]')) {
-          cancel();
-          return;
-        }
+  const move = useCallback(
+    (distanceX: number) => {
+      if (!gestureActiveRef.current) {
+        gestureActiveRef.current = true;
+        x.stop();
       }
-
-      if (!mobileGestures || !mobileOrTablet()) return;
-
-      let val = ox;
 
       const canSwipeLeft =
         rightSwipeAction === RightSwipeAction.Members ? !!onOpenMembers : !!onReply;
-
-      // The drawer owns the rightward reveal; this wrapper only handles leftward actions.
-      if (val > 0) val = 0;
-      if (!canSwipeLeft && val < 0) val = 0;
-
-      if (active) {
-        // Take over any settling spring; offset is seeded from the live position.
-        if (first) x.stop();
-        x.set(val);
-      } else {
-        const swipeThreshold = 120;
-        const velocityThreshold = 0.5;
-
-        if (val < -swipeThreshold || (vx > velocityThreshold && dx < 0 && val < 0)) {
-          haptic('light');
-          if (rightSwipeAction === RightSwipeAction.Members) {
-            onOpenMembers?.();
-          } else {
-            onReply?.();
-          }
-        }
-        animate(x, 0, { type: 'spring', stiffness: 400, damping: 40 });
-      }
+      x.set(canSwipeLeft ? Math.max(-200, Math.min(0, distanceX)) : 0);
     },
-    {
-      axis: 'x',
-      bounds: { left: -200, right: 200 },
-      rubberband: true,
-      filterTaps: true,
-      pointer: { capture: false },
-      eventOptions: { passive: true },
-      from: () => [x.get(), 0],
-    }
+    [onOpenMembers, onReply, rightSwipeAction, x]
   );
+
+  const finish = useCallback(
+    (commit: boolean, distanceX = 0, velocityX = 0) => {
+      if (commit && (distanceX < -120 || velocityX < -0.5)) {
+        haptic('light');
+        if (rightSwipeAction === RightSwipeAction.Members) {
+          onOpenMembers?.();
+        } else {
+          onReply?.();
+        }
+      }
+
+      gestureActiveRef.current = false;
+      animate(x, 0, { type: 'spring', stiffness: 400, damping: 40 });
+    },
+    [onOpenMembers, onReply, rightSwipeAction, x]
+  );
+
+  useLayoutEffect(() => {
+    const element = containerRef.current;
+    if (!drawer || !element || !mobileGestures || !mobileOrTablet()) return undefined;
+
+    return drawer.registerChatSwipe(element, {
+      move,
+      end: ({ distanceX, velocityX }) => finish(true, distanceX, velocityX),
+      cancel: () => finish(false),
+    });
+  }, [drawer, finish, mobileGestures, move]);
 
   if (!mobileGestures || !mobileOrTablet()) {
     return (
@@ -89,9 +84,9 @@ export function SwipeableChatWrapper({
 
   return (
     <div
-      {...bind()}
+      ref={containerRef}
+      data-chat-swipe
       style={{
-        touchAction: 'pan-y',
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',

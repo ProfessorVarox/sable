@@ -4,6 +4,7 @@ import FocusTrap from 'focus-trap-react';
 import { Modal, Overlay, OverlayBackdrop, OverlayCenter } from 'folds';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
 import { stopPropagation } from '$utils/keyboard';
+import { useDismissOnBack } from '$utils/androidBack';
 
 type Modal500Props = {
   requestClose: () => void;
@@ -12,6 +13,9 @@ type Modal500Props = {
 export function Modal500({ requestClose, children }: Modal500Props) {
   const modalRef = useRef<HTMLDivElement | null>(null);
   const screenSize = useScreenSizeContext();
+
+  // Android back closes the overlay instead of navigating away.
+  useDismissOnBack(requestClose);
 
   if (screenSize === ScreenSize.Mobile) {
     return (

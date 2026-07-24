@@ -10,7 +10,7 @@ import {
 } from 'matrix-widget-api';
 import { CallWidgetDriver } from './CallWidgetDriver';
 import { trimTrailingSlash } from '../../utils/common';
-import { getAppOrigin } from '../../utils/platform';
+import { getWindowOrigin } from '../../utils/platform';
 import type { ElementCallThemeKind, ElementMediaStateDetail } from './types';
 import { color, config } from 'folds';
 import { ElementCallIntent, ElementWidgetActions } from './types';
@@ -97,7 +97,7 @@ export class CallEmbed {
   ): Widget {
     const userId = mx.getSafeUserId();
     const deviceId = mx.getDeviceId() ?? '';
-    const clientOrigin = getAppOrigin();
+    const clientOrigin = getWindowOrigin();
     const widgetId = 'call-embed';
 
     const params = new URLSearchParams({
@@ -291,6 +291,43 @@ export class CallEmbed {
       if (!roomEvent) return; // force later code to think the room is fresh
       this.readUpToMap[room.roomId] = roomEvent.getId()!;
     });
+
+    // Feed the room's state to the widget after capabilities are negotiated;
+    // feedStateUpdate silently drops events before the widget is ready.
+    const feedInitialState = () => {
+      const myUserId = this.mx.getSafeUserId();
+      this.room.currentState.events.forEach((stateKeyMap) => {
+        stateKeyMap.forEach((ev) => {
+          const raw = ev.getEffectiveEvent() as IRoomEvent | undefined;
+          if (raw === undefined) return;
+          this.call.feedStateUpdate(raw).catch((e) => {
+            console.error('Error feeding initial state to widget: ', e);
+          });
+        });
+      });
+
+      // Sliding sync may not have delivered m.room.member yet.
+      if (!this.room.currentState.getStateEvents('m.room.member', myUserId)) {
+        const membership = this.room.getMyMembership();
+        if (membership) {
+          const memberRaw = {
+            type: 'm.room.member',
+            state_key: myUserId,
+            room_id: this.roomId,
+            sender: myUserId,
+            content: { membership },
+            event_id: `$sable:${Date.now()}`,
+            origin_server_ts: Date.now(),
+            unsigned: {},
+          } as unknown as IRoomEvent;
+          this.call.feedStateUpdate(memberRaw).catch((e) => {
+            console.error('Error feeding member state to widget: ', e);
+          });
+        }
+      }
+    };
+
+    this.disposables.push(this.onCapabilitiesNotified(feedInitialState));
 
     // Bind handlers once and route removal through `disposables` so listeners can be
     // cleanly torn down when the embed is recreated.

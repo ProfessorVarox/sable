@@ -58,6 +58,8 @@ export function NotificationTransportRuntimeFeature() {
     settingsAtom,
     'showMessageContentInEncryptedNotifications'
   );
+  const [useRichPushPayloads] = useSetting(settingsAtom, 'useRichPushPayloads');
+  const [pushNotifyUrlOverride] = useSetting(settingsAtom, 'pushNotifyUrlOverride');
 
   const runtimeRef = useRef<NotificationTransportRuntime>();
   if (!runtimeRef.current) runtimeRef.current = new NotificationTransportRuntime();
@@ -99,6 +101,8 @@ export function NotificationTransportRuntimeFeature() {
     vapidPublicKey?: string;
     webPushAppID?: string;
     pushNotifyUrl?: string;
+    useRichPushPayloads?: boolean;
+    pushNotifyUrlOverride?: string;
   }>({});
   upConfigRef.current = {
     unifiedPushAppID:
@@ -110,6 +114,8 @@ export function NotificationTransportRuntimeFeature() {
     vapidPublicKey: clientConfig.pushNotificationDetails?.vapidPublicKey,
     webPushAppID: clientConfig.pushNotificationDetails?.webPushAppID,
     pushNotifyUrl: clientConfig.pushNotificationDetails?.pushNotifyUrl,
+    useRichPushPayloads,
+    pushNotifyUrlOverride,
   };
 
   // Keep the pusher current: establish it when UnifiedPush becomes the active
@@ -149,7 +155,14 @@ export function NotificationTransportRuntimeFeature() {
     })();
 
     return () => {};
-  }, [provider, mx, setBackgroundPushEnabled, setBackgroundPushProvider]);
+  }, [
+    provider,
+    mx,
+    useRichPushPayloads,
+    pushNotifyUrlOverride,
+    setBackgroundPushEnabled,
+    setBackgroundPushProvider,
+  ]);
 
   useEffect(
     () => () => {

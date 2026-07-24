@@ -7,6 +7,7 @@ import {
   deserializeFromSync,
   exportSettingsAsJson,
   importSettingsFromJson,
+  prepareSettingsForSync,
 } from './settingsSync';
 
 // fixtures
@@ -181,6 +182,191 @@ describe('deserializeFromSync', () => {
     expect(result!.hour24Clock).toBe(true);
     // non-syncable comes from base, not tweaked (pageZoom etc. same anyway)
     expect(result!.settingsSyncEnabled).toBe(base.settingsSyncEnabled);
+  });
+
+  it('round-trips embedded local tweak CSS without changing the sync version', () => {
+    const tweakUrl = 'sable-import://tweak/restored/full.sable.css';
+    const tweaked = {
+      ...base,
+      themeRemoteTweakFavorites: [
+        { fullUrl: tweakUrl, displayName: 'Restored', basename: 'restored', cssText: 'body {}' },
+      ],
+    };
+    const payload = serializeForSync(tweaked);
+    expect(payload.v).toBe(SETTINGS_SYNC_VERSION);
+    expect(payload.settings.themeRemoteTweakFavorites?.[0]?.cssText).toBe('body {}');
+    expect(deserializeFromSync(payload, base)?.themeRemoteTweakFavorites[0]?.cssText).toBe(
+      'body {}'
+    );
+  });
+
+  it('atomically excludes local tweaks beyond the aggregate CSS budget and their enabled URLs', () => {
+    const firstUrl = 'sable-import://tweak/first/full.sable.css';
+    const secondUrl = 'sable-import://tweak/second/full.sable.css';
+    const prepared = prepareSettingsForSync({
+      ...base,
+      themeRemoteTweakFavorites: [
+        {
+          fullUrl: firstUrl,
+          displayName: 'First',
+          basename: 'first',
+          cssText: 'a'.repeat(256 * 1024),
+        },
+        { fullUrl: secondUrl, displayName: 'Second', basename: 'second', cssText: 'b' },
+      ],
+      themeRemoteEnabledTweakFullUrls: [firstUrl, secondUrl],
+    });
+    expect(prepared.excludedLocalTweakUrls).toEqual([secondUrl]);
+    expect(
+      prepared.content.settings.themeRemoteTweakFavorites?.map((favorite) => favorite.fullUrl)
+    ).toEqual([firstUrl]);
+    expect(prepared.content.settings.themeRemoteEnabledTweakFullUrls).toEqual([firstUrl]);
+  });
+
+  it('preserves locally excluded oversized tweaks and enabled URLs during a remote merge', () => {
+    const oversizedUrl = 'sable-import://tweak/oversized/full.sable.css';
+    const current = {
+      ...base,
+      themeRemoteTweakFavorites: [
+        {
+          fullUrl: oversizedUrl,
+          displayName: 'Oversized',
+          basename: 'oversized',
+          cssText: 'x'.repeat(256 * 1024 + 1),
+        },
+      ],
+      themeRemoteEnabledTweakFullUrls: [oversizedUrl],
+    };
+    const result = deserializeFromSync(
+      {
+        v: SETTINGS_SYNC_VERSION,
+        settings: {
+          themeRemoteTweakFavorites: [
+            {
+              fullUrl: 'https://example.test/remote.css',
+              displayName: 'Remote',
+              basename: 'remote',
+            },
+          ],
+          themeRemoteEnabledTweakFullUrls: ['https://example.test/remote.css'],
+        },
+      },
+      current
+    );
+    expect(result?.themeRemoteTweakFavorites.map((favorite) => favorite.fullUrl)).toEqual([
+      'https://example.test/remote.css',
+      oversizedUrl,
+    ]);
+    expect(result?.themeRemoteEnabledTweakFullUrls).toEqual([
+      'https://example.test/remote.css',
+      oversizedUrl,
+    ]);
+
+    const enabledOnlyResult = deserializeFromSync(
+      {
+        v: SETTINGS_SYNC_VERSION,
+        settings: { themeRemoteEnabledTweakFullUrls: ['https://example.test/remote.css'] },
+      },
+      current
+    );
+    expect(enabledOnlyResult?.themeRemoteEnabledTweakFullUrls).toEqual([
+      'https://example.test/remote.css',
+      oversizedUrl,
+    ]);
+  });
+
+  it('drops embedded CSS for remote tweak URLs without dropping local CSS', () => {
+    const remote = {
+      v: SETTINGS_SYNC_VERSION,
+      settings: {
+        themeRemoteTweakFavorites: [
+          {
+            fullUrl: 'https://example.test/tweak.sable.css',
+            displayName: 'Remote',
+            basename: 'remote',
+            cssText: 'body {}',
+          },
+          {
+            fullUrl: 'sable-import://tweak/local/full.sable.css',
+            displayName: 'Local',
+            basename: 'local',
+            cssText: 'body {}',
+          },
+        ],
+      },
+    };
+    expect(deserializeFromSync(remote, base)?.themeRemoteTweakFavorites).toEqual([
+      {
+        fullUrl: 'https://example.test/tweak.sable.css',
+        displayName: 'Remote',
+        basename: 'remote',
+      },
+      {
+        fullUrl: 'sable-import://tweak/local/full.sable.css',
+        displayName: 'Local',
+        basename: 'local',
+        cssText: 'body {}',
+      },
+    ]);
+  });
+
+  it('preserves body-less legacy local records for a source device to backfill later', () => {
+    const tweakUrl = 'sable-import://tweak/legacy/full.sable.css';
+    const remote = {
+      v: SETTINGS_SYNC_VERSION,
+      settings: {
+        themeRemoteTweakFavorites: [
+          { fullUrl: tweakUrl, displayName: 'Legacy', basename: 'legacy' },
+        ],
+        themeRemoteEnabledTweakFullUrls: [tweakUrl],
+      },
+    };
+    expect(
+      deserializeFromSync(remote, {
+        ...base,
+        themeRemoteTweakFavorites: [{ fullUrl: tweakUrl, displayName: 'Local', basename: 'local' }],
+      })?.themeRemoteTweakFavorites
+    ).toHaveLength(1);
+    const restored = deserializeFromSync(remote, base);
+    expect(restored?.themeRemoteTweakFavorites).toHaveLength(1);
+    expect(restored?.themeRemoteEnabledTweakFullUrls).toEqual([tweakUrl]);
+  });
+
+  it('preserves structured v1 settings during deserialization', () => {
+    const result = deserializeFromSync(
+      {
+        v: SETTINGS_SYNC_VERSION,
+        settings: { perRoomShowRoomIcon: { '!room:example': 'always' } },
+      },
+      base
+    );
+    expect(result?.perRoomShowRoomIcon).toEqual({ '!room:example': 'always' });
+  });
+
+  it('falls back safely for malformed tweak fields and sanitizes enabled URLs', () => {
+    const current = {
+      ...base,
+      themeRemoteTweakFavorites: [
+        { fullUrl: 'https://example.test/ok.css', displayName: 'Ok', basename: 'ok' },
+      ],
+    };
+    const result = deserializeFromSync(
+      {
+        v: SETTINGS_SYNC_VERSION,
+        settings: {
+          themeRemoteTweakFavorites: { bad: true },
+          themeRemoteEnabledTweakFullUrls: [
+            ' https://example.test/ok.css ',
+            4,
+            '',
+            'x'.repeat(8193),
+          ],
+        },
+      },
+      current
+    );
+    expect(result?.themeRemoteTweakFavorites).toEqual(current.themeRemoteTweakFavorites);
+    expect(result?.themeRemoteEnabledTweakFullUrls).toEqual(['https://example.test/ok.css']);
   });
 
   it('ignores extra unknown keys in the remote payload', () => {

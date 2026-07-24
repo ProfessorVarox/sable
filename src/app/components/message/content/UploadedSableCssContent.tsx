@@ -66,7 +66,13 @@ function UploadedTweakCard({ data }: { data: Extract<SuccessfulUpload, { role: '
       const existing = favorites.find((favorite) => favorite.fullUrl === data.fullUrl);
       if (existing) {
         return favorites.map((favorite) =>
-          favorite.fullUrl === data.fullUrl && pinned ? { ...favorite, pinned: true } : favorite
+          favorite.fullUrl === data.fullUrl
+            ? {
+                ...favorite,
+                pinned: pinned ? true : favorite.pinned,
+                cssText: favorite.cssText ?? data.cssText,
+              }
+            : favorite
         );
       }
       return [
@@ -77,6 +83,7 @@ function UploadedTweakCard({ data }: { data: Extract<SuccessfulUpload, { role: '
           basename: data.basename,
           pinned,
           importedLocal: true,
+          cssText: data.cssText,
         },
       ];
     },

@@ -17,6 +17,7 @@ import {
   getNotificationType,
   getUnreadInfo,
   getUnreadInfos,
+  getUnreadInfosForRooms,
   isNotificationEvent,
 } from '$utils/room';
 import { useSyncState } from '$hooks/useSyncState';
@@ -198,16 +199,20 @@ export const useBindRoomToUnreadAtom = (mx: MatrixClient, unreadAtom: typeof roo
   useEffect(() => {
     const manager = getSlidingSyncManager(mx);
     if (!manager) return undefined;
-    return manager.subscribeToResponseSettled(() => {
-      setUnreadAtom({
-        type: 'RESET',
-        unreadInfos: getUnreadInfos(mx, {
-          applyFixup: true,
-          mDirects,
-        }),
+    return manager.subscribeToResponseSettled((dirtyRoomIds) => {
+      if (dirtyRoomIds.size === 0) return;
+      const { unread, deleted } = getUnreadInfosForRooms(mx, dirtyRoomIds, {
+        applyFixup: true,
+        mDirects,
       });
+      for (const roomId of deleted) {
+        publishUnreadAction({ type: 'DELETE', roomId });
+      }
+      for (const unreadInfo of unread) {
+        publishUnreadAction({ type: 'PUT', unreadInfo });
+      }
     });
-  }, [mx, setUnreadAtom, mDirects]);
+  }, [mx, setUnreadAtom, publishUnreadAction, mDirects]);
 
   useEffect(() => {
     publishUnreadAction({

@@ -250,6 +250,15 @@ docker build \
 - Full debugging capabilities for testing
 - Configured in `.github/workflows/cloudflare-web-preview.yml`
 
+**Desktop & mobile (Tauri) builds (`.github/workflows/tauri-build.yml`):**
+
+- Tagged releases (`v*`) → `VITE_SENTRY_ENVIRONMENT=production` (10% sampling)
+- Nightly builds (from `dev`) → `VITE_SENTRY_ENVIRONMENT=preview` (100% sampling)
+- `VITE_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` are injected from repository secrets into the `build`, `android`, and `ios` jobs
+- Source maps are generated for release builds **only** when the Sentry upload credentials are present, then uploaded and deleted from the bundle via `filesToDeleteAfterUpload` — so no `.map` files ship inside the app bundle. Without credentials, no source maps are emitted
+- The `release` is `VITE_APP_VERSION` (the tag version, or the nightly version), matching the release the source maps are uploaded against so Sentry can un-minify stack traces
+- Native (Rust) panics are captured via the `sentry` crate, consent-gated to match the JS opt-in: the SDK initialises at startup but a `before_send` hook drops all events until the frontend calls `set_native_sentry_enabled(true)` after its `sable_sentry_enabled` check
+
 **Local development:**
 
 - `VITE_SENTRY_ENVIRONMENT` not set (defaults to `development` via Vite MODE)

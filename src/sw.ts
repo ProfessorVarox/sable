@@ -346,8 +346,7 @@ async function fetchRoomAvatar(
 
 /**
  * Convert an mxc:// URL to a legacy unauthenticated thumbnail URL.
- * Notification icons are fetched by the OS without auth headers, so we use
- * the pre-MSC3916 media endpoint which most homeservers still serve publicly.
+ * OS fetches notification icons without auth headers, so v1.11-strict servers will 404 here.
  */
 function mxcToNotificationUrl(mxcUrl: string, baseUrl: string): string | undefined {
   const match = mxcUrl.match(/^mxc:\/\/([^/]+)\/([^?#]+)/);
@@ -776,6 +775,16 @@ function respondWithInflightMedia(
   );
 }
 
+async function isUnknownTokenError(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  try {
+    const data = await response.clone().json();
+    return data?.errcode === 'M_UNKNOWN_TOKEN';
+  } catch {
+    return false;
+  }
+}
+
 async function respondWithMediaAuthRecovery(
   request: Request,
   session: SessionInfo,
@@ -784,6 +793,7 @@ async function respondWithMediaAuthRecovery(
 ): Promise<Response> {
   const response = await respondWithInflightMedia(request, session.accessToken, redirect);
   if ((response.status !== 401 && response.status !== 403) || !clientId) return response;
+  if (await isUnknownTokenError(response)) return response;
 
   // One exact-client retry; concurrent recoveries share this request.
   const refreshed = await requestSessionWithTimeout(clientId);

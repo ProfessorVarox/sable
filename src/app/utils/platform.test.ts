@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { getAppOrigin } from './platform';
+import { getAppOrigin, getWindowOrigin } from './platform';
 import { isTauri } from '@tauri-apps/api/core';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -42,5 +42,31 @@ describe('getAppOrigin', () => {
       host: 'app.sable.moe',
     });
     expect(getAppOrigin()).toBe('https://app.sable.moe');
+  });
+});
+
+describe('getWindowOrigin', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the real tauri:// origin when window.location.origin is the opaque "null"', () => {
+    vi.stubGlobal('location', {
+      origin: 'null',
+      hostname: 'localhost',
+      protocol: 'tauri:',
+      host: 'localhost',
+    });
+    expect(getWindowOrigin()).toBe('tauri://localhost');
+  });
+
+  it('returns window.location.origin in a normal web environment', () => {
+    vi.stubGlobal('location', {
+      origin: 'https://app.example.com',
+      hostname: 'app.example.com',
+      protocol: 'https:',
+      host: 'app.example.com',
+    });
+    expect(getWindowOrigin()).toBe('https://app.example.com');
   });
 });

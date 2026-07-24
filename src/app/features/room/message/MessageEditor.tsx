@@ -1,4 +1,4 @@
-import type { KeyboardEventHandler, MouseEventHandler } from 'react';
+import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import type { RectCords } from 'folds';
@@ -60,6 +60,7 @@ import { UseStateProvider } from '$components/UseStateProvider';
 import { EmojiBoard } from '$components/emoji-board';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { useDismissOnBack } from '$utils/androidBack';
 import { nicknamesAtom } from '$state/nicknames';
 import { getEditedEvent, getMentionContent, trimReplyFromFormattedBody } from '$utils/room';
 import { mobileOrTablet } from '$utils/user-agent';
@@ -80,6 +81,37 @@ import {
   readdAngleBracketsForHiddenPreviews,
   stripMarkdownEscapesForHiddenPreviews,
 } from './hiddenLinkPreviews';
+
+// Wraps the mobile emoji-board overlay so the Android back action closes it
+// instead of navigating away. Hooks can't run inside the UseStateProvider
+// render-prop below, so this component holds the back handler.
+function MobileEmojiOverlay({
+  open,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useDismissOnBack(onClose, open);
+  return (
+    <Overlay open={open} backdrop={<OverlayBackdrop />}>
+      <div
+        style={{
+          position: 'fixed',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          display: 'flex',
+          justifyContent: 'center',
+        }}
+      >
+        {children}
+      </div>
+    </Overlay>
+  );
+}
 
 type MessageEditorProps = {
   roomId: string;
@@ -628,20 +660,12 @@ export const MessageEditor = as<'div', MessageEditorProps>(
                             return (
                               <>
                                 {trigger}
-                                <Overlay open={anchor !== undefined} backdrop={<OverlayBackdrop />}>
-                                  <div
-                                    style={{
-                                      position: 'fixed',
-                                      left: 0,
-                                      right: 0,
-                                      bottom: 0,
-                                      display: 'flex',
-                                      justifyContent: 'center',
-                                    }}
-                                  >
-                                    {emojiBoard}
-                                  </div>
-                                </Overlay>
+                                <MobileEmojiOverlay
+                                  open={anchor !== undefined}
+                                  onClose={() => setAnchor(undefined)}
+                                >
+                                  {emojiBoard}
+                                </MobileEmojiOverlay>
                               </>
                             );
                           }

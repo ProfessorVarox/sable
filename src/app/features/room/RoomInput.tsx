@@ -1,5 +1,15 @@
-import type { KeyboardEventHandler, MouseEvent, RefObject } from 'react';
-import { forwardRef, useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import type { KeyboardEventHandler, MouseEvent, ReactElement, RefObject } from 'react';
+import {
+  forwardRef,
+  Fragment,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+} from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 
 import { isKeyHotkey } from 'is-hotkey';
@@ -35,6 +45,7 @@ import {
 } from 'folds';
 
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { useDismissOnBack } from '$utils/androidBack';
 import type { AutocompleteQuery } from '$components/editor';
 import {
   AutocompletePrefix,
@@ -65,6 +76,7 @@ import {
   replaceWithElement,
   BlockType,
 } from '$components/editor';
+import { stripMarkdownEscapesForHiddenPreviews } from './message/hiddenLinkPreviews';
 import { plainToEditorInput } from '$components/editor/input';
 import type { GifData } from '$components/emoji-board';
 import { EmojiBoard, EmojiBoardTab } from '$components/emoji-board';
@@ -99,7 +111,13 @@ import { fulfilledPromiseSettledResult } from '$utils/common';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
 import { matchesShortcut } from '../../keyboard/shortcuts';
-import { getMentionContent, isThreadRelationEvent, reactionOrEditEvent } from '$utils/room';
+import {
+  getEditedEvent,
+  getMentionContent,
+  isThreadRelationEvent,
+  reactionOrEditEvent,
+} from '$utils/room';
+import { htmlToMarkdown } from '$plugins/markdown';
 import { Command, SHRUG, TABLEFLIP, UNFLIP, useCommands } from '$hooks/useCommands';
 import { mobileOrTablet } from '$utils/user-agent';
 import { Reply, ThreadIndicator } from '$components/message';
@@ -145,15 +163,18 @@ import {
   composerIcon,
   dropzoneIcon,
   File as FileIcon,
+  Gif,
   Image as ImageIcon,
   ListBullets,
   MapPinPlusIcon,
   menuIcon,
   Microphone,
   PaperPlaneTilt,
+  PencilSimple,
   getPhosphorIconSize,
   PlusCircle,
   Smiley,
+  Sticker,
   Stop,
   X,
 } from '$components/icons/phosphor';
@@ -170,6 +191,7 @@ import {
 import { ImageUsage } from '$plugins/custom-emoji';
 import { SerializableMap } from '$types/wrapper/SerializableMap';
 import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
+import { AttachmentSheet } from '$components/attachment-sheet/AttachmentSheet';
 import { SchedulePickerDialog } from './schedule-send';
 import * as css from './schedule-send/SchedulePickerDialog.css';
 import {
@@ -191,9 +213,12 @@ import type {
 import { AudioMessageRecorder } from './AudioMessageRecorder';
 import * as prefix from '$unstable/prefixes';
 import { PollDialog } from './poll-modals';
-import { LocationDialog } from './location-modal';
 import { useClientConfig } from '$hooks/useClientConfig';
 import { PersonaPicker } from './persona-picker/PersonaPicker.tsx';
+
+const LocationDialog = lazy(() =>
+  import('./location-modal').then((module) => ({ default: module.LocationDialog }))
+);
 
 // Returns the event ID of the most recent non-reaction/non-edit event in a thread,
 // falling back to the thread root if no replies exist yet.
@@ -284,10 +309,24 @@ interface RoomInputProps {
   room: Room;
   threadRootId?: string;
   onEditLastMessage?: () => void;
+  editId?: string;
+  onCancelEdit?: () => void;
 }
 
 export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
-  ({ editor, fileDropContainerRef, roomId, room, threadRootId, onEditLastMessage }, ref) => {
+  (
+    {
+      editor,
+      fileDropContainerRef,
+      roomId,
+      room,
+      threadRootId,
+      onEditLastMessage,
+      editId,
+      onCancelEdit,
+    },
+    ref
+  ) => {
     // When in thread mode, isolate drafts by thread root ID so thread replies
     // don't clobber the main room draft (and vice versa).
     const draftKey = threadRootId ?? roomId;
@@ -296,6 +335,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const useAuthentication = useMediaAuthentication();
     const [enterForNewline] = useSetting(settingsAtom, 'enterForNewline');
     const [editorOldAddFile] = useSetting(settingsAtom, 'editorOldAddFile');
+    const [editorGifButton] = useSetting(settingsAtom, 'editorGifButton');
+    const [editorEmojiButton] = useSetting(settingsAtom, 'editorEmojiButton');
+    const [editorStickerButton] = useSetting(settingsAtom, 'editorStickerButton');
+    const [editorMicButton] = useSetting(settingsAtom, 'editorMicButton');
+    const [editorButtonOrder] = useSetting(settingsAtom, 'editorButtonOrder');
     const [shortcutOverrides] = useSetting(settingsAtom, 'shortcutOverrides');
 
     const [hideActivity] = useSetting(settingsAtom, 'hideActivity');
@@ -365,7 +409,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [showAudioRecorder, setShowAudioRecorder] = useState(false);
     const audioRecorderRef = useRef<AudioMessageRecorderHandle>(null);
     const micHoldStartRef = useRef(0);
+    const micHoldReleaseRef = useRef<(() => void) | null>(null);
     const HOLD_THRESHOLD_MS = 400;
+
+    useEffect(
+      () => () => {
+        micHoldReleaseRef.current?.();
+      },
+      []
+    );
     const [autocompleteQuery, setAutocompleteQuery] =
       useState<AutocompleteQuery<AutocompletePrefix>>();
     const [isQuickTextReact, setQuickTextReact] = useState(false);
@@ -474,6 +526,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       roomIdToEditingScheduledDelayIdAtomFamily(roomId)
     );
     const [AddMenuAnchor, setAddMenuAnchor] = useState<RectCords>();
+    const [showAttachmentSheet, setShowAttachmentSheet] = useState(false);
     const [showPollPicker, setShowPollPicker] = useState(false);
     const [showLocationPicker, setShowLocationPicker] = useState(false);
     const [scheduleMenuAnchor, setScheduleMenuAnchor] = useState<RectCords>();
@@ -484,6 +537,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [sendError, setSendError] = useState<string | undefined>();
     const isEncrypted = room.hasEncryptionStateEvent();
     const [emojiBoardTab, setEmojiBoardTab] = useState<EmojiBoardTab | undefined>(undefined);
+    // Android back closes the mobile emoji board instead of navigating away.
+    useDismissOnBack(() => setEmojiBoardTab(undefined), emojiBoardTab !== undefined);
     const [enableMediaGalleries] = useSetting(settingsAtom, 'enableMediaGalleries');
     const [sendIndividualAttachmentAsCaption] = useSetting(
       settingsAtom,
@@ -530,6 +585,138 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       [draftKey, editor, setMsgDraft]
     );
 
+    const editingEvent = editId ? room.findEventById(editId) : undefined;
+    const getEditingContent = useCallback(
+      (event: MatrixEvent): IContent => {
+        const eventId = event.getId();
+        const timeline = eventId ? room.getTimelineForEvent(eventId) : undefined;
+        const latestEdit =
+          eventId && timeline
+            ? getEditedEvent(eventId, event, timeline.getTimelineSet())
+            : undefined;
+        return latestEdit?.getContent()['m.new_content'] ?? event.getContent();
+      },
+      [room]
+    );
+
+    const prevEditingEventId = useRef<string>();
+    const preEditDraftRef = useRef<Editor['children']>();
+    useEffect(() => {
+      if (!mobileOrTablet()) {
+        prevEditingEventId.current = undefined;
+        preEditDraftRef.current = undefined;
+        return;
+      }
+
+      if (editingEvent) {
+        if (editingEvent.getId() !== prevEditingEventId.current) {
+          if (!prevEditingEventId.current) {
+            preEditDraftRef.current = structuredClone(editor.children);
+          }
+          prevEditingEventId.current = editingEvent.getId();
+
+          const content = getEditingContent(editingEvent);
+          let bodyText = (content.body as string | undefined) ?? '';
+          const customHtml = (content.formatted_body as string | undefined) ?? undefined;
+
+          const rawPmp = content['com.beeper.per_message_profile'];
+          const pmpDisplayname =
+            rawPmp !== null &&
+            typeof rawPmp === 'object' &&
+            'displayname' in rawPmp &&
+            typeof rawPmp.displayname === 'string' &&
+            rawPmp.displayname.length > 0
+              ? (rawPmp.displayname as string)
+              : undefined;
+
+          if (pmpDisplayname && typeof bodyText === 'string') {
+            const bodyPrefix = `${pmpDisplayname}: `;
+            if (bodyText.startsWith(bodyPrefix)) {
+              bodyText = bodyText.slice(bodyPrefix.length);
+            }
+          }
+          const editableHtml = pmpDisplayname
+            ? customHtml?.replace(/^<strong\s+data-mx-profile-fallback[^>]*>.*?<\/strong>/, '')
+            : customHtml;
+
+          const mentionOptions = {
+            room,
+            nicknames,
+            mxUserId: mx.getUserId() ?? undefined,
+          };
+
+          const initialValue = plainToEditorInput(
+            editableHtml
+              ? stripMarkdownEscapesForHiddenPreviews(htmlToMarkdown(editableHtml))
+              : typeof bodyText === 'string'
+                ? stripMarkdownEscapesForHiddenPreviews(bodyText)
+                : '',
+            mentionOptions
+          );
+
+          resetEditor(editor);
+          resetEditorHistory(editor);
+          Transforms.insertFragment(editor, initialValue);
+
+          requestAnimationFrame(() => {
+            try {
+              ReactEditor.focus(editor);
+              moveCursor(editor);
+            } catch {
+              // Ignore focus error
+            }
+          });
+        }
+      } else {
+        const previousDraft = preEditDraftRef.current;
+        if (prevEditingEventId.current && previousDraft) {
+          resetEditor(editor);
+          resetEditorHistory(editor);
+          Transforms.insertFragment(editor, previousDraft);
+        }
+        preEditDraftRef.current = undefined;
+        if (
+          prevEditingEventId.current &&
+          (!replyDraft?.eventId || replyDraft.eventId === threadRootId)
+        ) {
+          requestAnimationFrame(() => {
+            try {
+              const domNode = ReactEditor.toDOMNode(editor, editor);
+              domNode.blur();
+              (document.activeElement as HTMLElement)?.blur();
+            } catch {
+              // Ignore blur error
+            }
+          });
+        }
+        prevEditingEventId.current = undefined;
+      }
+    }, [
+      editingEvent,
+      editor,
+      getEditingContent,
+      mx,
+      nicknames,
+      room,
+      replyDraft?.eventId,
+      threadRootId,
+    ]);
+
+    useEffect(() => {
+      if (editId && replyDraft?.eventId && replyDraft.eventId !== threadRootId) {
+        if (threadRootId) {
+          setReplyDraft({
+            userId: mx.getUserId() ?? '',
+            eventId: threadRootId,
+            body: '',
+            relation: { rel_type: RelationType.Thread, event_id: threadRootId },
+          });
+        } else {
+          setReplyDraft(undefined);
+        }
+      }
+    }, [editId, threadRootId, setReplyDraft, mx, replyDraft?.eventId]);
+
     useEffect(() => {
       if (replyDraft !== undefined) {
         setSilentReply(replyDraft.userId === mx.getUserId() || !mentionInReplies);
@@ -538,10 +725,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
 
     const prevReplyEventId = useRef(replyDraft?.eventId);
     useEffect(() => {
-      if (replyDraft?.eventId !== prevReplyEventId.current) {
-        prevReplyEventId.current = replyDraft?.eventId;
+      const prevId = prevReplyEventId.current;
+      const newId = replyDraft?.eventId;
 
-        if (replyDraft?.eventId) {
+      if (newId !== prevId) {
+        prevReplyEventId.current = newId;
+
+        if (newId && newId !== threadRootId) {
           requestAnimationFrame(() => {
             try {
               ReactEditor.focus(editor);
@@ -550,9 +740,19 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
               // Ignore focus errors
             }
           });
+        } else if (!newId && prevId && prevId !== threadRootId && !editId) {
+          requestAnimationFrame(() => {
+            try {
+              const domNode = ReactEditor.toDOMNode(editor, editor);
+              domNode.blur();
+              (document.activeElement as HTMLElement)?.blur();
+            } catch {
+              // Ignore blur errors
+            }
+          });
         }
       }
-    }, [replyDraft?.eventId, editor]);
+    }, [replyDraft?.eventId, threadRootId, editId, editor]);
 
     const handleFileMetadata = useCallback(
       (fileItem: TUploadItem, metadata: TUploadMetadata) => {
@@ -846,6 +1046,116 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     );
 
     const submit = useCallback(async () => {
+      if (editingEvent && mobileOrTablet()) {
+        let plainText = toPlainText(editor.children).trim();
+        if (!plainText) {
+          onCancelEdit?.();
+          return;
+        }
+
+        let customHtml = trimCustomHtml(
+          toMatrixCustomHTML(editor.children, {
+            forEmote: editingEvent.getContent().msgtype === MsgType.Emote,
+            room,
+          })
+        );
+        const oldContent = editingEvent.getContent();
+        const currentContent = getEditingContent(editingEvent);
+        const eventId = editingEvent.getId();
+        if (!eventId) return;
+
+        const msgtype = oldContent.msgtype ?? MsgType.Text;
+        const newContent: IContent = {
+          msgtype,
+          body: plainText,
+        };
+
+        const rawPmp =
+          currentContent['com.beeper.per_message_profile'] ??
+          oldContent['com.beeper.per_message_profile'];
+        const pmpDisplayname =
+          rawPmp !== null &&
+          typeof rawPmp === 'object' &&
+          'displayname' in rawPmp &&
+          typeof rawPmp.displayname === 'string' &&
+          rawPmp.displayname.length > 0
+            ? rawPmp.displayname
+            : undefined;
+
+        if (pmpDisplayname) {
+          const bodyPrefix = `${pmpDisplayname}: `;
+          if (!plainText.startsWith(bodyPrefix)) plainText = bodyPrefix + plainText;
+
+          const htmlPrefix = `<strong data-mx-profile-fallback>${sanitizeText(pmpDisplayname)}: </strong>`;
+          if (!customHtml.startsWith(htmlPrefix)) customHtml = htmlPrefix + customHtml;
+          newContent.body = plainText;
+          newContent['com.beeper.per_message_profile'] = rawPmp;
+        }
+
+        const mentionData = getMentions(mx, roomId, editor);
+        const previousMentions = currentContent['m.mentions'];
+        if (
+          previousMentions &&
+          typeof previousMentions === 'object' &&
+          'user_ids' in previousMentions &&
+          Array.isArray(previousMentions.user_ids)
+        ) {
+          previousMentions.user_ids.forEach((userId) => {
+            if (typeof userId === 'string') mentionData.users.add(userId);
+          });
+        }
+        const mMentions = getMentionContent(Array.from(mentionData.users), mentionData.room);
+        newContent['m.mentions'] = mMentions;
+
+        const content: IContent = {
+          ...oldContent,
+          'm.relates_to': {
+            event_id: eventId,
+            rel_type: RelationType.Replace,
+          },
+          body: `* ${plainText}`,
+          'm.mentions': mMentions,
+          'm.new_content': newContent,
+        };
+
+        if (pmpDisplayname || !customHtmlEqualsPlainText(customHtml, plainText)) {
+          newContent.format = 'org.matrix.custom.html';
+          newContent.formatted_body = customHtml;
+          content.format = 'org.matrix.custom.html';
+          content.formatted_body = `* ${customHtml}`;
+        } else {
+          delete content.format;
+          delete content.formatted_body;
+        }
+
+        if (oldContent.info !== undefined && oldContent.msgtype !== MsgType.Text) {
+          const filename = 'filename' in oldContent ? oldContent.filename : oldContent.body;
+          content.filename = filename;
+          newContent.filename = filename;
+          content.info = oldContent.info;
+          newContent.info = oldContent.info;
+          if (oldContent.file !== undefined) newContent.file = oldContent.file;
+          if (oldContent.url !== undefined) newContent.url = oldContent.url;
+
+          const spoilerKey = 'page.codeberg.everypizza.msc4193.spoiler';
+          if (oldContent[spoilerKey] !== undefined) {
+            content[spoilerKey] = oldContent[spoilerKey];
+            newContent[spoilerKey] = oldContent[spoilerKey];
+          }
+        }
+
+        const linkPreviews = getLinks(editor.children)?.map((matchedUrl) => ({
+          matched_url: matchedUrl,
+        }));
+        content['com.beeper.linkpreviews'] = linkPreviews ?? [];
+        newContent['com.beeper.linkpreviews'] = linkPreviews ?? [];
+
+        await mx.sendMessage(roomId, content as RoomMessageEventContent);
+        onCancelEdit?.();
+        sendTypingStatus(false);
+        return;
+      }
+
       if (selectedFiles.some((f) => f.encrypting)) return;
       uploadBoardHandlers.current?.handleSend();
       if (
@@ -1249,6 +1559,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       selectedFiles,
       enableMediaGalleries,
       sendIndividualAttachmentAsCaption,
+      editingEvent,
+      getEditingContent,
+      onCancelEdit,
     ]);
 
     const handleKeyDown: KeyboardEventHandler = useCallback(
@@ -1306,6 +1619,12 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         }
         if (isKeyHotkey('escape', evt)) {
           evt.preventDefault();
+          if (editingEvent && mobileOrTablet()) {
+            onCancelEdit?.();
+            resetEditor(editor);
+            resetEditorHistory(editor);
+            return;
+          }
           if (showAudioRecorder) {
             audioRecorderRef.current?.cancel();
             return;
@@ -1334,6 +1653,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         onEditLastMessage,
         setEmojiBoardTab,
         shortcutOverrides,
+        editingEvent,
+        onCancelEdit,
       ]
     );
 
@@ -1633,6 +1954,45 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   </Box>
                 </div>
               )}
+              {editingEvent && mobileOrTablet() && (
+                <div>
+                  <Box
+                    alignItems="Center"
+                    gap="300"
+                    style={{
+                      padding: `${config.space.S200} ${config.space.S300} 0`,
+                    }}
+                  >
+                    <IconButton
+                      onClick={() => {
+                        onCancelEdit?.();
+                        resetEditor(editor);
+                        resetEditorHistory(editor);
+                      }}
+                      variant="SurfaceVariant"
+                      style={{ background: 'transparent' }}
+                      size="300"
+                      radii="300"
+                      aria-label="Cancel editing"
+                      title="Cancel editing"
+                    >
+                      {chipIcon(X)}
+                    </IconButton>
+                    <Box
+                      direction="Row"
+                      gap="200"
+                      alignItems="Center"
+                      grow="Yes"
+                      style={{ minWidth: 0 }}
+                    >
+                      {menuIcon(PencilSimple)}
+                      <Text size="T300" truncate>
+                        Editing message: {editingEvent.getContent().body as string}
+                      </Text>
+                    </Box>
+                  </Box>
+                </div>
+              )}
               {replyDraft && (!threadRootId || replyDraft.body) && (
                 <div>
                   <Box
@@ -1711,87 +2071,127 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           }
           before={
             <>
-              <PopOut
-                anchor={AddMenuAnchor}
-                position="Top"
-                align="Start"
-                offset={5}
-                content={
-                  <FocusTrap
-                    focusTrapOptions={{
-                      initialFocus: false,
-                      onDeactivate: () => setAddMenuAnchor(undefined),
-                      clickOutsideDeactivates: true,
-                      escapeDeactivates: stopPropagation,
-                    }}
+              {mobileOrTablet() ? (
+                <>
+                  <IconButton
+                    onClick={() => setShowAttachmentSheet(true)}
+                    onPointerDown={suppressEditorRefocus}
+                    variant="SurfaceVariant"
+                    size="300"
+                    radii="300"
+                    style={{ backgroundColor: 'transparent' }}
+                    title="Add"
+                    aria-label="Add new Item"
                   >
-                    <Menu>
-                      <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
-                        <MenuItem
-                          size="300"
-                          radii="300"
-                          onClick={() => {
-                            setAddMenuAnchor(undefined);
-                            setShowPollPicker(true);
-                          }}
-                          before={menuIcon(ListBullets)}
-                        >
-                          <Text size="B300">Create Poll</Text>
-                        </MenuItem>
-                        <MenuItem
-                          size="300"
-                          radii="300"
-                          onClick={() => {
-                            setAddMenuAnchor(undefined);
-                            setShowLocationPicker(true);
-                          }}
-                          before={menuIcon(MapPinPlusIcon)}
-                        >
-                          <Text size="B300">Add Location</Text>
-                        </MenuItem>
-                        <MenuItem
-                          size="300"
-                          radii="300"
-                          onClick={() => {
-                            pickFile('image/*');
-                            setAddMenuAnchor(undefined);
-                          }}
-                          before={menuIcon(ImageIcon)}
-                        >
-                          <Text size="B300">Photos</Text>
-                        </MenuItem>
-                        <MenuItem
-                          size="300"
-                          radii="300"
-                          onClick={() => {
-                            pickFile('*');
-                            setAddMenuAnchor(undefined);
-                          }}
-                          before={menuIcon(PlusCircle)}
-                        >
-                          <Text size="B300">Add File</Text>
-                        </MenuItem>
-                      </Box>
-                    </Menu>
-                  </FocusTrap>
-                }
-              />
-              <IconButton
-                onClick={(evt) =>
-                  editorOldAddFile
-                    ? pickFile('*')
-                    : setAddMenuAnchor(evt.currentTarget.getBoundingClientRect())
-                }
-                onPointerDown={suppressEditorRefocus}
-                variant="SurfaceVariant"
-                size="300"
-                radii="300"
-                style={{ backgroundColor: 'transparent' }}
-                title={editorOldAddFile ? 'Upload File' : 'Add'}
-                aria-label={editorOldAddFile ? 'Upload and attach a File' : 'Add new Item'}
-              >
-                {composerIcon(PlusCircle)}
-              </IconButton>
+                    {composerIcon(PlusCircle)}
+                  </IconButton>
+                  <AttachmentSheet
+                    open={showAttachmentSheet}
+                    onClose={() => setShowAttachmentSheet(false)}
+                    onPickPhotos={() => {
+                      pickFile('image/*');
+                      setShowAttachmentSheet(false);
+                    }}
+                    onPickFile={() => {
+                      pickFile('*');
+                      setShowAttachmentSheet(false);
+                    }}
+                    onPickPoll={() => {
+                      setShowAttachmentSheet(false);
+                      setShowPollPicker(true);
+                    }}
+                    onPickLocation={() => {
+                      setShowAttachmentSheet(false);
+                      setShowLocationPicker(true);
+                    }}
+                    containerRef={fileDropContainerRef}
+                  />
+                </>
+              ) : (
+                <>
+                  <PopOut
+                    anchor={AddMenuAnchor}
+                    position="Top"
+                    align="Start"
+                    offset={5}
+                    content={
+                      <FocusTrap
+                        focusTrapOptions={{
+                          initialFocus: false,
+                          onDeactivate: () => setAddMenuAnchor(undefined),
+                          clickOutsideDeactivates: true,
+                          escapeDeactivates: stopPropagation,
+                        }}
+                      >
+                        <Menu>
+                          <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
+                            <MenuItem
+                              size="300"
+                              radii="300"
+                              onClick={() => {
+                                setAddMenuAnchor(undefined);
+                                setShowPollPicker(true);
+                              }}
+                              before={menuIcon(ListBullets)}
+                            >
+                              <Text size="B300">Create Poll</Text>
+                            </MenuItem>
+                            <MenuItem
+                              size="300"
+                              radii="300"
+                              onClick={() => {
+                                setAddMenuAnchor(undefined);
+                                setShowLocationPicker(true);
+                              }}
+                              before={menuIcon(MapPinPlusIcon)}
+                            >
+                              <Text size="B300">Add Location</Text>
+                            </MenuItem>
+                            <MenuItem
+                              size="300"
+                              radii="300"
+                              onClick={() => {
+                                pickFile('image/*');
+                                setAddMenuAnchor(undefined);
+                              }}
+                              before={menuIcon(ImageIcon)}
+                            >
+                              <Text size="B300">Photos</Text>
+                            </MenuItem>
+                            <MenuItem
+                              size="300"
+                              radii="300"
+                              onClick={() => {
+                                pickFile('*');
+                                setAddMenuAnchor(undefined);
+                              }}
+                              before={menuIcon(PlusCircle)}
+                            >
+                              <Text size="B300">Add File</Text>
+                            </MenuItem>
+                          </Box>
+                        </Menu>
+                      </FocusTrap>
+                    }
+                  />
+                  <IconButton
+                    onClick={(evt) =>
+                      editorOldAddFile
+                        ? pickFile('*')
+                        : setAddMenuAnchor(evt.currentTarget.getBoundingClientRect())
+                    }
+                    onPointerDown={suppressEditorRefocus}
+                    variant="SurfaceVariant"
+                    size="300"
+                    radii="300"
+                    style={{ backgroundColor: 'transparent' }}
+                    title={editorOldAddFile ? 'Upload File' : 'Add'}
+                    aria-label={editorOldAddFile ? 'Upload and attach a File' : 'Add new Item'}
+                  >
+                    {composerIcon(PlusCircle)}
+                  </IconButton>
+                </>
+              )}
               {pmpPickerEnable && (
                 <PersonaPicker
                   mx={mx}
@@ -1828,22 +2228,69 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     />
                   );
                   const triggers = (
-                    <IconButton
-                      ref={emojiBtnRef}
-                      aria-pressed={emojiBoardTab !== undefined}
-                      onClick={() => setEmojiBoardTab(EmojiBoardTab.Emoji)}
-                      onPointerDown={suppressEditorRefocus}
-                      variant="SurfaceVariant"
-                      size="300"
-                      radii="300"
-                      style={{ backgroundColor: 'transparent' }}
-                      title="open emoji board"
-                      aria-label="Open emoji board"
-                    >
-                      {composerIcon(Smiley, {
-                        weight: emojiBoardTab !== undefined ? 'fill' : 'regular',
+                    <>
+                      {editorButtonOrder.map((id) => {
+                        let button: ReactElement | null = null;
+                        if (id === 'gif' && editorGifButton) {
+                          button = (
+                            <IconButton
+                              aria-pressed={emojiBoardTab === EmojiBoardTab.Gif}
+                              onClick={() => setEmojiBoardTab(EmojiBoardTab.Gif)}
+                              onPointerDown={suppressEditorRefocus}
+                              variant="SurfaceVariant"
+                              size="300"
+                              radii="300"
+                              style={{ backgroundColor: 'transparent' }}
+                              title="open gif picker"
+                              aria-label="Open gif picker"
+                            >
+                              {composerIcon(Gif, {
+                                weight: emojiBoardTab === EmojiBoardTab.Gif ? 'fill' : 'regular',
+                              })}
+                            </IconButton>
+                          );
+                        } else if (id === 'sticker' && editorStickerButton) {
+                          button = (
+                            <IconButton
+                              aria-pressed={emojiBoardTab === EmojiBoardTab.Sticker}
+                              onClick={() => setEmojiBoardTab(EmojiBoardTab.Sticker)}
+                              onPointerDown={suppressEditorRefocus}
+                              variant="SurfaceVariant"
+                              size="300"
+                              radii="300"
+                              style={{ backgroundColor: 'transparent' }}
+                              title="open sticker picker"
+                              aria-label="Open sticker picker"
+                            >
+                              {composerIcon(Sticker, {
+                                weight:
+                                  emojiBoardTab === EmojiBoardTab.Sticker ? 'fill' : 'regular',
+                              })}
+                            </IconButton>
+                          );
+                        } else if (id === 'emoji' && editorEmojiButton) {
+                          button = (
+                            <IconButton
+                              ref={emojiBtnRef}
+                              aria-pressed={emojiBoardTab !== undefined}
+                              onClick={() => setEmojiBoardTab(EmojiBoardTab.Emoji)}
+                              onPointerDown={suppressEditorRefocus}
+                              variant="SurfaceVariant"
+                              size="300"
+                              radii="300"
+                              style={{ backgroundColor: 'transparent' }}
+                              title="open emoji board"
+                              aria-label="Open emoji board"
+                            >
+                              {composerIcon(Smiley, {
+                                weight: emojiBoardTab !== undefined ? 'fill' : 'regular',
+                              })}
+                            </IconButton>
+                          );
+                        }
+                        return <Fragment key={id}>{button}</Fragment>;
                       })}
-                    </IconButton>
+                    </>
                   );
                   if (mobileOrTablet()) {
                     return (
@@ -1893,23 +2340,23 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   showAudioRecorder ? 'Critical' : scheduledTime ? 'Primary' : 'SurfaceVariant'
                 }
                 size="300"
-                radii={hasContent || showAudioRecorder ? '0' : '300'}
+                radii={hasContent || showAudioRecorder || !editorMicButton ? '0' : '300'}
                 title={
                   showAudioRecorder
                     ? 'Stop recording'
-                    : hasContent
+                    : hasContent || !editorMicButton
                       ? 'Send Message'
                       : 'Record audio message'
                 }
                 aria-label={
                   showAudioRecorder
                     ? 'Stop recording'
-                    : hasContent
+                    : hasContent || !editorMicButton
                       ? 'Send your composed Message'
                       : 'Record audio message'
                 }
                 style={{ backgroundColor: 'transparent' }}
-                aria-pressed={!hasContent ? showAudioRecorder : undefined}
+                aria-pressed={!hasContent && editorMicButton ? showAudioRecorder : undefined}
                 onClick={() => {
                   if (showAudioRecorder) {
                     audioRecorderRef.current?.stop();
@@ -1923,6 +2370,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     submit();
                     return;
                   }
+                  if (!editorMicButton) return;
                   if (mobileOrTablet()) return;
                   setShowAudioRecorder(true);
                 }}
@@ -1941,29 +2389,36 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     }
                     return;
                   }
+                  if (!editorMicButton) return;
                   if (!mobileOrTablet()) return;
                   micHoldStartRef.current = Date.now();
                   setShowAudioRecorder(true);
 
+                  function discardRecording() {
+                    releaseListeners();
+                    setTimeout(() => {
+                      audioRecorderRef.current?.cancel();
+                    }, 50);
+                  }
                   function onUp() {
-                    cleanup();
                     const held = Date.now() - micHoldStartRef.current;
                     if (held >= HOLD_THRESHOLD_MS) {
+                      releaseListeners();
                       setTimeout(() => {
                         audioRecorderRef.current?.stop();
                       }, 50);
                     } else {
-                      setTimeout(() => {
-                        audioRecorderRef.current?.cancel();
-                      }, 50);
+                      discardRecording();
                     }
                   }
-                  function cleanup() {
+                  function releaseListeners() {
+                    micHoldReleaseRef.current = null;
                     window.removeEventListener('pointerup', onUp);
-                    window.removeEventListener('pointercancel', cleanup);
+                    window.removeEventListener('pointercancel', discardRecording);
                   }
+                  micHoldReleaseRef.current = releaseListeners;
                   window.addEventListener('pointerup', onUp);
-                  window.addEventListener('pointercancel', cleanup);
+                  window.addEventListener('pointercancel', discardRecording);
                 }}
                 onPointerUp={() => {
                   if (longPressTimer.current !== null) {
@@ -1986,7 +2441,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     weight="fill"
                     style={{ color: color.Critical.Main }}
                   />
-                ) : hasContent ? (
+                ) : hasContent || !editorMicButton ? (
                   sendBusy ? (
                     <Spinner size="300" variant="Secondary" />
                   ) : scheduledTime ? (
@@ -2083,13 +2538,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           />
         )}
         {showLocationPicker && (
-          <LocationDialog
-            onCancel={() => setShowLocationPicker(false)}
-            mx={mx}
-            room={room}
-            replyDraft={replyDraft}
-            clearReplyDraft={() => setReplyDraft(replyDraftBase)}
-          />
+          <Suspense fallback={null}>
+            <LocationDialog
+              onCancel={() => setShowLocationPicker(false)}
+              mx={mx}
+              room={room}
+              replyDraft={replyDraft}
+              clearReplyDraft={() => setReplyDraft(replyDraftBase)}
+            />
+          </Suspense>
         )}
       </div>
     );

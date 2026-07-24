@@ -114,7 +114,7 @@ describe('Desktop', () => {
         'Show a system tray icon while Sable is running. Disable this if you want Sable to stay available without a tray icon.'
       )
     ).toBeInTheDocument();
-    expect(container.getElementsByClassName(SequenceCardStyle)).toHaveLength(3);
+    expect(container.getElementsByClassName(SequenceCardStyle)).toHaveLength(4);
   });
 
   it('updates the custom title bar setting from the Window switch', () => {

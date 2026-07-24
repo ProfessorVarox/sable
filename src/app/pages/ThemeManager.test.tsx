@@ -10,6 +10,12 @@ const settings = {
   underlineLinks: false,
   reducedMotion: false,
   themeRemoteEnabledTweakFullUrls: [] as string[],
+  themeRemoteTweakFavorites: [] as {
+    fullUrl: string;
+    displayName: string;
+    basename: string;
+    cssText?: string;
+  }[],
 };
 
 let systemThemeKind = ThemeKind.Light;
@@ -87,6 +93,7 @@ beforeEach(() => {
   settings.underlineLinks = false;
   settings.reducedMotion = false;
   settings.themeRemoteEnabledTweakFullUrls = [];
+  settings.themeRemoteTweakFavorites = [];
   cachedCss = '';
   cacheUpdateListener = undefined;
   document.body.className = '';
@@ -148,6 +155,29 @@ describe('ThemeManager', () => {
     cacheUpdateListener?.({ url: themeUrl, contentHash: 'new-hash' });
     await waitFor(() =>
       expect(document.getElementById('sable-remote-theme-style')).toHaveTextContent('blue')
+    );
+  });
+
+  it('applies embedded CSS for a restored local tweak when the cache is unavailable', async () => {
+    const tweakUrl = 'sable-import://tweak/restored/full.sable.css';
+    settings.themeRemoteEnabledTweakFullUrls = [tweakUrl];
+    settings.themeRemoteTweakFavorites = [
+      {
+        fullUrl: tweakUrl,
+        displayName: 'Restored',
+        basename: 'restored',
+        cssText: '.restored { color: red; }',
+      },
+    ];
+
+    render(
+      <AuthRouteThemeManager>
+        <div>child</div>
+      </AuthRouteThemeManager>
+    );
+
+    await waitFor(() =>
+      expect(document.getElementById('sable-remote-tweaks-style')).toHaveTextContent('color: red')
     );
   });
 });

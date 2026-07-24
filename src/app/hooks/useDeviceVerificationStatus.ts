@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { CryptoApi } from '$types/matrix-sdk';
+import { type CryptoApi, type CryptoEventHandlerMap, CryptoEvent } from '$types/matrix-sdk';
 import { verifiedDevice } from '$utils/matrix-crypto';
 import { fulfilledPromiseSettledResult } from '$utils/common';
 import { useAlive } from './useAlive';
 import { useMatrixClient } from './useMatrixClient';
 import { useDeviceListChange } from './useDeviceList';
+
+export const useCrossSigningKeysChange = (
+  onChange: CryptoEventHandlerMap[CryptoEvent.KeysChanged]
+) => {
+  const mx = useMatrixClient();
+  useEffect(() => {
+    mx.on(CryptoEvent.KeysChanged, onChange);
+    return () => {
+      mx.removeListener(CryptoEvent.KeysChanged, onChange);
+    };
+  }, [mx, onChange]);
+};
 
 export enum VerificationStatus {
   Unknown,
@@ -48,6 +60,8 @@ export const useDeviceVerificationDetect = (
       [userId, updateStatus]
     )
   );
+
+  useCrossSigningKeysChange(useCallback(() => updateStatus(), [updateStatus]));
 };
 
 export const useDeviceVerificationStatus = (
@@ -97,6 +111,8 @@ export const useUnverifiedDeviceCount = (
       [userId, updateCount]
     )
   );
+
+  useCrossSigningKeysChange(useCallback(() => updateCount(), [updateCount]));
 
   useEffect(() => {
     updateCount();

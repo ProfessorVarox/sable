@@ -35,7 +35,7 @@ import { MatrixClientProvider } from '$hooks/useMatrixClient';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useSyncState } from '$hooks/useSyncState';
 import { stopPropagation } from '$utils/keyboard';
-import { AuthMetadataProvider } from '$hooks/useAuthMetadata';
+import { AuthMetadataProvider, getSessionAuthMetadata } from '$hooks/useAuthMetadata';
 import {
   sessionsAtom,
   activeSessionIdAtom,
@@ -480,7 +480,9 @@ export function ClientRoot({ children }: ClientRootProps) {
                 {(serverConfigs) => (
                   <CapabilitiesProvider value={serverConfigs.capabilities ?? {}}>
                     <MediaConfigProvider value={serverConfigs.mediaConfig ?? {}}>
-                      <AuthMetadataProvider value={serverConfigs.authMetadata}>
+                      <AuthMetadataProvider
+                        value={getSessionAuthMetadata(serverConfigs.authMetadata, activeSession)}
+                      >
                         {children}
                       </AuthMetadataProvider>
                     </MediaConfigProvider>

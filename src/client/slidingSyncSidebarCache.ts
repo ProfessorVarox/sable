@@ -9,6 +9,12 @@ const CACHE_WRITE_DELAY_MS = 500;
 const MAX_CACHED_ROOMS = 2000;
 const HYDRATION_BATCH_SIZE = 50;
 
+type IdleWindow = Window &
+  typeof globalThis & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  };
+
 type StateEvent = MSC3575RoomData['required_state'][number];
 
 type SidebarCacheData = {
@@ -138,6 +144,8 @@ export class SlidingSyncSidebarCache {
 
   private writeTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
+  private idleWriteHandle: number | undefined;
+
   public constructor(private readonly userId: string) {
     this.storageKey = `${CACHE_KEY_PREFIX}${encodeURIComponent(userId)}`;
     let stored: string | null = null;
@@ -193,17 +201,35 @@ export class SlidingSyncSidebarCache {
   }
 
   public dispose(): void {
+    let shouldWrite = false;
     if (this.writeTimer !== undefined) {
       globalThis.clearTimeout(this.writeTimer);
       this.writeTimer = undefined;
-      this.write();
+      shouldWrite = true;
     }
+    if (this.idleWriteHandle !== undefined) {
+      (globalThis as IdleWindow).cancelIdleCallback?.(this.idleWriteHandle);
+      this.idleWriteHandle = undefined;
+      shouldWrite = true;
+    }
+    if (shouldWrite) this.write();
   }
 
   private scheduleWrite(): void {
-    if (this.writeTimer !== undefined) return;
+    if (this.writeTimer !== undefined || this.idleWriteHandle !== undefined) return;
     this.writeTimer = globalThis.setTimeout(() => {
       this.writeTimer = undefined;
+      const idleWindow = globalThis as IdleWindow;
+      if (typeof idleWindow.requestIdleCallback === 'function') {
+        this.idleWriteHandle = idleWindow.requestIdleCallback(
+          () => {
+            this.idleWriteHandle = undefined;
+            this.write();
+          },
+          { timeout: 2000 }
+        );
+        return;
+      }
       this.write();
     }, CACHE_WRITE_DELAY_MS);
   }

@@ -27,6 +27,7 @@ import { sizedIcon, Smiley } from '$components/icons/phosphor';
 import { useRelations } from '$hooks/useRelations';
 import { stopPropagation } from '$utils/keyboard';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
+import { useDismissOnBack } from '$utils/androidBack';
 import { ReactionViewer } from '$features/room/reaction-viewer';
 import * as css from './styles.css';
 
@@ -58,6 +59,8 @@ export const Reactions = as<'div', ReactionsProps>(
     const useAuthentication = useMediaAuthentication();
     const [viewer, setViewer] = useState<boolean | string>(false);
     const [emojiBoardAnchor, setEmojiBoardAnchor] = useState<RectCords>();
+    // Android back closes the mobile emoji board instead of navigating away.
+    useDismissOnBack(() => setEmojiBoardAnchor(undefined), emojiBoardAnchor !== undefined);
     const myUserId = mx.getUserId();
     const reactions = useRelations(
       relations,

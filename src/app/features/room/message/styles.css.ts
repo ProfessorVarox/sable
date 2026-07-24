@@ -1,4 +1,4 @@
-import { keyframes, style } from '@vanilla-extract/css';
+import { style } from '@vanilla-extract/css';
 import { DefaultReset, FocusOutline, color, config, toRem } from 'folds';
 
 export const MessageBase = style({
@@ -11,6 +11,14 @@ export const MessageBaseBubbleCollapsed = style({
 
 export const MessageForceHover = style({
   backgroundColor: `${color.Surface.ContainerHover} !important`,
+});
+
+export const MessageSwipeReply = style({
+  backgroundColor: color.Surface.ContainerHover,
+});
+
+export const MessageSwipeEdit = style({
+  backgroundColor: color.Primary.Container,
 });
 
 export const MessageOptionsBase = style([
@@ -106,15 +114,6 @@ export const MessageMobileOptionsContainer = style({
   flexDirection: 'column',
   justifyContent: 'flex-end',
   overflow: 'visible',
-  animation: `${keyframes({
-    from: { transform: 'translateY(100%)' },
-    to: { transform: 'translateY(0)' },
-  })} 250ms cubic-bezier(0.32, 0.72, 0, 1)`,
-  '@media': {
-    '(prefers-reduced-motion: reduce)': {
-      animation: 'none',
-    },
-  },
 });
 
 export const MessageMobileDragHandle = style({

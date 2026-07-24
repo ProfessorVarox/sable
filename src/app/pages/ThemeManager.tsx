@@ -16,6 +16,7 @@ import { useOptionalClientConfig } from '$hooks/useClientConfig';
 import { getCachedThemeCss, putCachedThemeCss, subscribeThemeCacheUpdates } from '../theme/cache';
 import { applyCspNonce } from '$utils/cspNonce';
 import { isLocalImportBundledUrl } from '../theme/localImportUrls';
+import { getEmbeddedLocalTweakCss } from '../theme/syncedTweakCss';
 import { themeCatalogListingBaseUrl } from '../theme/catalogDefaults';
 import { fetch } from '$utils/fetch';
 import {
@@ -138,6 +139,7 @@ export function AuthRouteThemeManager({ children }: { children: ReactNode }) {
   const [underlineLinks] = useSetting(settingsAtom, 'underlineLinks');
   const [reducedMotion] = useSetting(settingsAtom, 'reducedMotion');
   const [enabledTweakUrls] = useSetting(settingsAtom, 'themeRemoteEnabledTweakFullUrls');
+  const [tweakFavorites] = useSetting(settingsAtom, 'themeRemoteTweakFavorites');
 
   useEffect(() => {
     document.body.className = '';
@@ -213,7 +215,15 @@ export function AuthRouteThemeManager({ children }: { children: ReactNode }) {
     }
 
     const applyTweakCss = async () => {
-      const texts = await Promise.all(urls.map((url) => loadRemoteThemeCssText(url.trim())));
+      const texts = await Promise.all(
+        urls.map(async (url) => {
+          const trimmedUrl = url.trim();
+          const embeddedCss = getEmbeddedLocalTweakCss(
+            tweakFavorites?.find((favorite) => favorite.fullUrl === trimmedUrl)
+          );
+          return embeddedCss ?? loadRemoteThemeCssText(trimmedUrl);
+        })
+      );
       if (cancelled) return;
       const chunks = texts.filter((text): text is string => Boolean(text));
       let node = document.getElementById(REMOTE_TWEAKS_STYLE_ID) as HTMLStyleElement | null;
@@ -235,7 +245,7 @@ export function AuthRouteThemeManager({ children }: { children: ReactNode }) {
       cancelled = true;
       unsubscribe();
     };
-  }, [enabledTweakUrls]);
+  }, [enabledTweakUrls, tweakFavorites]);
 
   return (
     <>
