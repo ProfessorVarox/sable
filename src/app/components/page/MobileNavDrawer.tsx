@@ -10,8 +10,6 @@ import {
 } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
-import { useSetting } from '$state/hooks/settings';
-import { settingsAtom } from '$state/settings';
 import { lastVisitedRoomAtom } from '$state/room/lastRoom';
 import { useReducedMotion } from 'framer-motion';
 import {
@@ -57,7 +55,6 @@ type ActiveTouchGesture = {
 
 /** Sliding mobile drawer with one touch coordinator and a GPU-transformed panel track. */
 export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDrawerProps) {
-  const [mobileGestures] = useSetting(settingsAtom, 'mobileGestures');
   const reduceMotion = useReducedMotion();
   const location = useLocation();
   const navigate = useNavigate();
@@ -340,10 +337,11 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
     <div
       ref={viewportRef}
       className="no-scrollbar"
+      data-testid="mobile-nav-drawer-viewport"
       onTouchStartCapture={(event) => {
         const viewport = viewportRef.current;
         const touch = event.touches[0];
-        if (!mobileGestures || !viewport || !touch) return;
+        if (!viewport || !touch) return;
         if (event.touches.length !== 1) {
           finishGesture(true);
           return;
@@ -419,7 +417,9 @@ export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDra
         flexGrow: 1,
         height: '100%',
         width: '100%',
-        overflow: 'hidden',
+        // `clip`, not `hidden`: hidden keeps a scrollport, so a focus or scrollIntoView on
+        // the revealed panel scrolls it a full panel width out of frame, permanently.
+        overflow: 'clip',
         overscrollBehaviorX: 'none',
         touchAction: 'pan-y',
       }}

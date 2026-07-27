@@ -5,7 +5,47 @@ import {
   scrubDataObject,
   sanitizeSentryPayload,
   scrubMatrixUrl,
+  scrubExternalHosts,
 } from './sentryScrubbers';
+
+// ─── scrubExternalHosts ───────────────────────────────────────────────────────
+
+describe('scrubExternalHosts', () => {
+  it('replaces an external https origin with [HOMESERVER]', () => {
+    expect(scrubExternalHosts('https://matrix.example.org/_matrix/client/v3/sync')).toBe(
+      'https://[HOMESERVER]/_matrix/client/v3/sync'
+    );
+  });
+
+  it('replaces an external http origin and drops the port', () => {
+    expect(scrubExternalHosts('http://hs.corp.local:8448/_matrix/')).toBe(
+      'http://[HOMESERVER]/_matrix/'
+    );
+  });
+
+  it('preserves localhost origins', () => {
+    const dev = 'http://localhost:1420/index.html#/home';
+    expect(scrubExternalHosts(dev)).toBe(dev);
+  });
+
+  it('preserves the tauri.localhost app origin', () => {
+    const app = 'https://tauri.localhost/index.html';
+    expect(scrubExternalHosts(app)).toBe(app);
+  });
+
+  it('leaves tauri:// scheme URLs untouched (non-http)', () => {
+    expect(scrubExternalHosts('tauri://localhost/index.html')).toBe('tauri://localhost/index.html');
+  });
+
+  it('leaves plain paths with no origin untouched', () => {
+    expect(scrubExternalHosts('/_matrix/client/v3/sync')).toBe('/_matrix/client/v3/sync');
+  });
+
+  it('scrubs multiple URLs in one string', () => {
+    const result = scrubExternalHosts('fetch https://hs.one/sync then https://hs.two/media');
+    expect(result).toBe('fetch https://[HOMESERVER]/sync then https://[HOMESERVER]/media');
+  });
+});
 
 // ─── scrubMatrixIds ───────────────────────────────────────────────────────────
 
@@ -186,6 +226,12 @@ describe('scrubMatrixUrl – Matrix C-S API paths', () => {
       '/_matrix/media/v3/download/[SERVER]/[MEDIA_ID]'
     );
   });
+
+  it('scrubs both the homeserver host and the room-id path of a full URL', () => {
+    expect(
+      scrubMatrixUrl('https://matrix.example.org/_matrix/client/v3/rooms/!abc:example.com/messages')
+    ).toBe('https://[HOMESERVER]/_matrix/client/v3/rooms/![ROOM_ID]/messages');
+  });
 });
 
 describe('scrubMatrixUrl – app route path segments', () => {
@@ -240,15 +286,15 @@ describe('scrubMatrixUrl – preview_url', () => {
 });
 
 describe('scrubMatrixUrl – auth callback credentials', () => {
-  it('redacts OAuth code and state query params', () => {
+  it('redacts OAuth code and state query params (and scrubs the external host)', () => {
     expect(scrubMatrixUrl('https://app.example/login/hs?code=abc123&state=xyz789')).toBe(
-      'https://app.example/login/hs?code=[REDACTED]&state=[REDACTED]'
+      'https://[HOMESERVER]/login/hs?code=[REDACTED]&state=[REDACTED]'
     );
   });
 
-  it('redacts params inside a hash-router fragment', () => {
+  it('redacts params inside a hash-router fragment (and scrubs the external host)', () => {
     expect(scrubMatrixUrl('https://app.example/#/login/hs?code=abc123')).toBe(
-      'https://app.example/#/login/hs?code=[REDACTED]'
+      'https://[HOMESERVER]/#/login/hs?code=[REDACTED]'
     );
   });
 

@@ -241,7 +241,7 @@ docker build \
 - Set `VITE_SENTRY_ENVIRONMENT=production`
 - Gets 10% sampling for traces and session replay
 - Cost-effective for production usage
-- Configured in `.github/workflows/cloudflare-web-deploy.yml`
+- Configured in `.github/workflows/cloudflare-web.yml`
 
 **Preview deployments (PR previews, Cloudflare Pages):**
 

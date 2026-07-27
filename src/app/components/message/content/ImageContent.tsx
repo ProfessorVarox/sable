@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge,
@@ -8,9 +8,6 @@ import {
   Menu,
   MenuItem,
   Modal,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
   Spinner,
   Text,
   Tooltip,
@@ -31,14 +28,12 @@ import {
 } from '$components/icons/phosphor';
 import classNames from 'classnames';
 import { BlurhashCanvas } from 'react-blurhash';
-import FocusTrap from 'focus-trap-react';
 import type { EncryptedAttachmentInfo } from 'browser-encrypt-attachment';
 import type { IImageInfo } from '$types/matrix/common';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { bytesToSize } from '$utils/common';
 import { FALLBACK_MIMETYPE } from '$utils/mimeTypes';
-import { stopPropagation } from '$utils/keyboard';
 import {
   decryptFile,
   downloadEncryptedMedia,
@@ -57,7 +52,8 @@ import {
 } from '../../../../unstable/prefixes';
 import { useFavoriteGifs } from '$hooks/useFavoriteGifs';
 import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
-import { useRevokeObjectURL } from '$hooks/useObjectURL';
+import { useCreateObjectURL } from '$hooks/useObjectURL';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 
 export function checkIfGif(url: string, mimetype?: string, body?: string) {
   return (
@@ -88,10 +84,14 @@ type RenderImageProps = {
   alt: string;
   title: string;
   src: string;
+  info?: IImageInfo;
   onLoad: () => void;
   onError: () => void;
+  onLottieLoad: () => void;
+  onLottieError: () => void;
   onClick: () => void;
   tabIndex: number;
+  style?: CSSProperties;
 };
 export type ImageContentProps = {
   body?: string;
@@ -154,13 +154,12 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const rawMediaUrl = useMemo(() => {
       if (url.startsWith('http')) return url;
-      if (encInfo) {
-        return mxcUrlToHttp(mx, url, useAuthentication) ?? undefined;
-      }
-      return mxcUrlToHttp(mx, url, useAuthentication, 800, 600, 'scale') ?? undefined;
-    }, [mx, url, useAuthentication, encInfo]);
+      return mxcUrlToHttp(mx, url, useAuthentication) ?? undefined;
+    }, [mx, url, useAuthentication]);
 
     const resolvedMediaUrl = useRenderableMediaUrl(encInfo ? undefined : rawMediaUrl);
+
+    const createObjectURL = useCreateObjectURL();
 
     const [srcState, loadSrc] = useAsyncCallback(
       useCallback(async () => {
@@ -170,13 +169,14 @@ export const ImageContent = as<'div', ImageContentProps>(
             await setMediaEncryption(rawMediaUrl, encInfo, mimeType ?? FALLBACK_MIMETYPE);
             return rewriteAuthenticatedMediaUrl(rawMediaUrl)!;
           }
-          const fileContent = await downloadEncryptedMedia(rawMediaUrl, (encBuf) =>
-            decryptFile(encBuf, mimeType ?? FALLBACK_MIMETYPE, encInfo)
+          return createObjectURL(
+            downloadEncryptedMedia(rawMediaUrl, (encBuf) =>
+              decryptFile(encBuf, mimeType ?? FALLBACK_MIMETYPE, encInfo)
+            )
           );
-          return URL.createObjectURL(fileContent);
         }
         return resolvedMediaUrl ?? rawMediaUrl ?? url;
-      }, [rawMediaUrl, resolvedMediaUrl, url, mimeType, encInfo])
+      }, [rawMediaUrl, resolvedMediaUrl, url, mimeType, encInfo, createObjectURL])
     );
 
     useEffect(() => {
@@ -213,16 +213,12 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const handleRetry = () => {
       setError(false);
-      loadSrc();
+      loadSrc().catch(() => undefined);
     };
 
     useEffect(() => {
-      if (autoPlay) loadSrc();
+      if (autoPlay) loadSrc().catch(() => undefined);
     }, [autoPlay, loadSrc]);
-
-    useRevokeObjectURL(
-      encInfo && srcState.status === AsyncStatus.Success ? srcState.data : undefined
-    );
 
     const imageW = info?.w;
     const imageH = info?.h;
@@ -265,32 +261,21 @@ export const ImageContent = as<'div', ImageContentProps>(
         onPointerLeave={() => setIsHovered(false)}
       >
         {srcState.status === AsyncStatus.Success && (
-          <Overlay open={viewer} backdrop={<OverlayBackdrop />}>
-            <OverlayCenter>
-              <FocusTrap
-                focusTrapOptions={{
-                  initialFocus: false,
-                  onDeactivate: () => setViewer(false),
-                  clickOutsideDeactivates: true,
-                  escapeDeactivates: stopPropagation,
-                }}
-              >
-                <Modal
-                  className={ModalWide}
-                  size="500"
-                  onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
-                >
-                  {renderViewer({
-                    src: viewerFullSrc ?? srcState.data,
-                    alt: body ?? '',
-                    filename,
-                    requestClose: () => setViewer(false),
-                    info: info,
-                  })}
-                </Modal>
-              </FocusTrap>
-            </OverlayCenter>
-          </Overlay>
+          <ModalOverlay open={viewer} requestClose={() => setViewer(false)}>
+            <Modal
+              className={ModalWide}
+              size="500"
+              onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
+            >
+              {renderViewer({
+                src: viewerFullSrc ?? srcState.data,
+                alt: body ?? '',
+                filename,
+                requestClose: () => setViewer(false),
+                info: info,
+              })}
+            </Modal>
+          </ModalOverlay>
         )}
         {typeof blurHash === 'string' && !load && (
           <BlurhashCanvas
@@ -332,8 +317,12 @@ export const ImageContent = as<'div', ImageContentProps>(
               alt: body ?? '',
               title: body ?? '',
               src: srcState.data,
+              info,
+              style: { objectFit: isContained ? 'contain' : undefined },
               onLoad: handleLoad,
               onError: handleError,
+              onLottieLoad: handleLoad,
+              onLottieError: handleError,
               onClick: () => {
                 setIsHovered(false);
                 setViewer(true);
@@ -350,7 +339,7 @@ export const ImageContent = as<'div', ImageContentProps>(
             onClick={() => {
               setBlurred(false);
               if (srcState.status === AsyncStatus.Idle) {
-                loadSrc();
+                loadSrc().catch(() => undefined);
               }
             }}
           >
@@ -362,7 +351,7 @@ export const ImageContent = as<'div', ImageContentProps>(
               onClick={() => {
                 setBlurred(false);
                 if (srcState.status === AsyncStatus.Idle) {
-                  loadSrc();
+                  loadSrc().catch(() => undefined);
                 }
               }}
             >
@@ -427,7 +416,7 @@ export const ImageContent = as<'div', ImageContentProps>(
                   onClick={(e) => {
                     e.preventDefault();
                     if (srcState.status === AsyncStatus.Idle) {
-                      loadSrc();
+                      loadSrc().catch(() => undefined);
                       setBlurred(false);
                     } else setBlurred(!blurred);
                   }}

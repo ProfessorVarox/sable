@@ -22,7 +22,7 @@ import { useRoomEvent } from '$hooks/useRoomEvent';
 import { DefaultPlaceholder } from '$components/message';
 import { dropzoneIcon, menuIcon, composerIcon, PushPin, X } from '$components/icons/phosphor';
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import { getStateEvent } from '$utils/room';
+import { getStateEvent } from '$utils/room/hierarchy';
 import type { StateEvents } from '$types/matrix-sdk';
 
 import { useSetting } from '$state/hooks/settings';
@@ -39,6 +39,8 @@ import type { PinReadMarker } from '$features/room/RoomViewHeader';
 import * as css from './RoomPinMenu.css';
 import { CustomAccountDataEvent } from '$types/matrix/accountData';
 import { EventType } from '$types/matrix-sdk';
+import { ScreenSize, useScreenSizeOptionally } from '$hooks/useScreenSize';
+import { useMobileSheetClose } from '$components/MobileSwipeDownModal';
 
 const log = createLogger('RoomPinMenu');
 
@@ -172,6 +174,8 @@ type RoomPinMenuProps = {
 
 export const RoomPinMenu = forwardRef<HTMLDivElement, RoomPinMenuProps>(
   ({ room, requestClose, currentHash }, ref) => {
+    const isMobile = useScreenSizeOptionally() === ScreenSize.Mobile;
+    const mobileSheetClose = useMobileSheetClose();
     const mx = useMatrixClient();
     const userId = mx.getUserId()!;
     const powerLevels = usePowerLevelsContext();
@@ -221,13 +225,25 @@ export const RoomPinMenu = forwardRef<HTMLDivElement, RoomPinMenuProps>(
               <Text size="H5">Pinned Messages</Text>
             </Box>
             <Box shrink="No">
-              <IconButton size="300" onClick={requestClose} radii="300">
+              <IconButton size="300" onClick={mobileSheetClose ?? requestClose} radii="300">
                 {composerIcon(X)}
               </IconButton>
             </Box>
           </Header>
           <Box grow="Yes">
-            <Scroll ref={scrollRef} size="300" hideTrack visibility="Hover">
+            <Scroll
+              ref={scrollRef}
+              size="300"
+              hideTrack
+              visibility="Hover"
+              style={{
+                minHeight: 0,
+                flex: isMobile ? '0 1 auto' : 1,
+                maxHeight: isMobile ? 'calc(85vh - 4rem)' : undefined,
+                overflowY: 'auto',
+                touchAction: 'pan-y',
+              }}
+            >
               <Box className={css.PinMenuContent} direction="Column" gap="100">
                 {sortedPinnedEvent.length > 0 ? (
                   <div

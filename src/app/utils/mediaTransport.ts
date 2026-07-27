@@ -88,7 +88,7 @@ function isMatrixMediaPath(pathname: string): boolean {
   return MATRIX_MEDIA_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function isTrustedMatrixMediaUrl(url: string, baseUrl: string | undefined): boolean {
+function isTrustedMatrixMediaUrl(url: string, baseUrl: string | undefined): boolean {
   if (!baseUrl) return false;
 
   try {
@@ -125,17 +125,23 @@ function getStoredAccessToken(url: string): string | undefined {
   return undefined;
 }
 
-export function getActiveMediaSession(): { baseUrl: string; accessToken: string } | undefined {
+export function getActiveMediaSession():
+  | { baseUrl: string; accessToken: string; userId: string }
+  | undefined {
   const activeSession = getActiveStoredSession();
   if (activeSession?.baseUrl && activeSession.accessToken) {
-    return { baseUrl: activeSession.baseUrl, accessToken: activeSession.accessToken };
+    return {
+      baseUrl: activeSession.baseUrl,
+      accessToken: activeSession.accessToken,
+      userId: activeSession.userId,
+    };
   }
   return undefined;
 }
 
 let cachedSessionScope: string | undefined;
 
-export const invalidateMediaSessionScope = (): void => {
+const invalidateMediaSessionScope = (): void => {
   cachedSessionScope = undefined;
 };
 

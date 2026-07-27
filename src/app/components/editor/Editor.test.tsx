@@ -1,13 +1,25 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { Transforms } from 'slate';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Node, Transforms } from 'slate';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditor, CustomEditor } from './Editor';
 import { BlockType } from './types';
 import * as css from './Editor.css';
 
 let shouldWrapToggleHarness = false;
 let measurementCacheScrollHeightReads = 0;
+let isIosApp = false;
+let nativeClipboardText = '';
+
+vi.mock(import('$utils/platform'), async (importOriginal) => ({
+  ...(await importOriginal()),
+  iosApp: () => isIosApp,
+}));
+
+vi.mock(import('$utils/dom'), async (importOriginal) => ({
+  ...(await importOriginal()),
+  readClipboardText: () => Promise.resolve(nativeClipboardText),
+}));
 
 function EditorHarness() {
   const editor = useEditor();
@@ -177,6 +189,29 @@ function MeasurementCacheHarness() {
   );
 }
 
+let pasteFallbackEditor: ReturnType<typeof useEditor> | undefined;
+
+function PasteFallbackHarness() {
+  const editor = useEditor();
+  pasteFallbackEditor = editor;
+
+  return <CustomEditor editableName="PasteFallbackHarness" editor={editor} />;
+}
+
+const pastedLines = () => (pasteFallbackEditor?.children ?? []).map((node) => Node.string(node));
+
+const pasteIntoFallbackHarness = () => {
+  render(<PasteFallbackHarness />);
+  const editable = document.querySelector('[data-editable-name="PasteFallbackHarness"]');
+  const editor = pasteFallbackEditor;
+  if (!editable || !editor) throw new Error('paste fallback harness did not mount');
+
+  act(() => {
+    Transforms.select(editor, { path: [0, 0], offset: 0 });
+  });
+  fireEvent.paste(editable, { clipboardData: { files: [], getData: () => '' } });
+};
+
 const createResizeObserverStub = (
   observedElements: Set<Element>,
   onCreate: (callback: ResizeObserverCallback) => void
@@ -197,6 +232,10 @@ const createResizeObserverStub = (
     };
   } as unknown as typeof ResizeObserver;
 
+const nativeIsContentEditable = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  'isContentEditable'
+);
 const nativeScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
 const nativeOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
 const nativeClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
@@ -209,6 +248,16 @@ const nativeResizeObserver = globalThis.ResizeObserver;
 beforeEach(() => {
   shouldWrapToggleHarness = false;
   measurementCacheScrollHeightReads = 0;
+  isIosApp = false;
+  nativeClipboardText = '';
+  pasteFallbackEditor = undefined;
+
+  Object.defineProperty(HTMLElement.prototype, 'isContentEditable', {
+    configurable: true,
+    get(): boolean {
+      return (this as HTMLElement).getAttribute('contenteditable') === 'true';
+    },
+  });
 
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
     configurable: true,
@@ -289,6 +338,12 @@ afterEach(() => {
   globalThis.requestAnimationFrame = nativeGlobalRequestAnimationFrame;
   globalThis.cancelAnimationFrame = nativeGlobalCancelAnimationFrame;
   globalThis.ResizeObserver = nativeResizeObserver;
+  if (nativeIsContentEditable) {
+    Object.defineProperty(HTMLElement.prototype, 'isContentEditable', nativeIsContentEditable);
+  } else {
+    Reflect.deleteProperty(HTMLElement.prototype, 'isContentEditable');
+  }
+
   if (nativeScrollHeight) {
     Object.defineProperty(HTMLElement.prototype, 'scrollHeight', nativeScrollHeight);
   } else {
@@ -479,6 +534,27 @@ describe('CustomEditor', () => {
 
     expect(queuedFrames.size).toBe(0);
     expect(scroll).not.toHaveClass(css.EditorTextareaScrollMultiline);
+  });
+
+  it('reads the native clipboard when the ios webview delivers an empty paste event', async () => {
+    isIosApp = true;
+    nativeClipboardText = 'first line\nsecond line';
+
+    pasteIntoFallbackHarness();
+
+    await waitFor(() => {
+      expect(pastedLines()).toEqual(['first line', 'second line']);
+    });
+  });
+
+  it('leaves an empty paste event alone outside the ios webview', async () => {
+    nativeClipboardText = 'should not be pasted';
+
+    pasteIntoFallbackHarness();
+
+    await waitFor(() => {
+      expect(pastedLines()).toEqual(['']);
+    });
   });
 
   it('reuses the cached measurement when resize observer fires without changing the single-line width', async () => {

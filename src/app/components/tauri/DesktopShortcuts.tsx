@@ -36,6 +36,8 @@ export function DesktopShortcuts() {
         if (key === ',') {
           event.preventDefault();
           openSettings();
+        } else if (key === 't') {
+          event.preventDefault();
         } else if (key === 'w') {
           event.preventDefault();
           getCurrentWindow()

@@ -24,6 +24,7 @@ export async function getUnifiedPushTransportApi(): Promise<UnifiedPushTransport
     registerForPushNotifications: (vapid?: string) =>
       invoke<UnifiedPushRegistration>('plugin:notifications|register_for_push_notifications', {
         vapid,
+        provider: 'unifiedpush',
       }),
     unregisterForPushNotifications: notificationsApi.unregisterForPushNotifications,
     listDistributors: notificationsApi.listDistributors,

@@ -96,8 +96,9 @@ export const UrlPreviewCard = as<
         const cached = clientCache.get(url);
         if (cached !== undefined) return cached;
         const previewResult = mx?.getUrlPreview(url, ts);
+        if (!previewResult) return Promise.resolve(null);
         clientCache.set(url, previewResult);
-        previewResult.finally(() => clientCache.delete(url));
+        previewResult.finally(() => clientCache.delete(url)).catch(() => {});
         return previewResult;
       }
       return Promise.resolve(bundle);
@@ -105,7 +106,9 @@ export const UrlPreviewCard = as<
   );
 
   useEffect(() => {
-    loadPreview();
+    // A homeserver refusing to preview a URL is an ordinary answer and the card already
+    // renders nothing on error, so the rejection must not reach the global handler.
+    loadPreview().catch(() => undefined);
   }, [url, loadPreview]);
 
   if (previewStatus.status === AsyncStatus.Error) return null;

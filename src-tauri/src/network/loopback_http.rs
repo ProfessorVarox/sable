@@ -7,7 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri_plugin_http::reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
-    Client, ClientBuilder, Method, Url,
+    redirect, Client, ClientBuilder, Method, Url,
 };
 use tokio::sync::watch;
 
@@ -17,6 +17,8 @@ static LOOPBACK_ABORT_SENDERS: LazyLock<Mutex<HashMap<String, watch::Sender<bool
 static LOOPBACK_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     ClientBuilder::new()
         .no_proxy()
+        // A followed 302 would escape validate_loopback_url.
+        .redirect(redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .build()
@@ -162,8 +164,26 @@ pub async fn loopback_fetch(
 
 #[cfg(test)]
 mod tests {
-    use super::{abort_loopback_fetch, register_abort_sender, validate_loopback_url};
+    use super::{
+        abort_loopback_fetch, loopback_fetch, register_abort_sender, validate_loopback_url,
+        LoopbackFetchRequest,
+    };
+    use std::io::{Read, Write};
     use tokio::time::{timeout, Duration};
+
+    /// One-shot loopback server that answers with `response`, then closes.
+    fn spawn_once(response: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        format!("http://127.0.0.1:{port}/")
+    }
 
     #[test]
     fn allows_loopback_http_hosts() {
@@ -182,6 +202,25 @@ mod tests {
         assert!(validate_loopback_url("https://matrix.example.org").is_err());
         assert!(validate_loopback_url("http://localhost.evil.example.org").is_err());
         assert!(validate_loopback_url("http://localhost:8008@evil.example.org").is_err());
+    }
+
+    #[test]
+    fn does_not_follow_redirects_off_loopback() {
+        let url = spawn_once(
+            "HTTP/1.1 302 Found\r\nLocation: http://example.org/\r\nContent-Length: 0\r\n\r\n",
+        );
+
+        let response = tauri::async_runtime::block_on(loopback_fetch(LoopbackFetchRequest {
+            request_id: "redirect-1".into(),
+            method: "GET".into(),
+            url,
+            headers: Vec::new(),
+            body: None,
+        }))
+        .expect("loopback_fetch failed");
+
+        assert_eq!(response.status, 302);
+        assert!(response.body.is_empty());
     }
 
     #[test]

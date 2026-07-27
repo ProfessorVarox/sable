@@ -4,9 +4,10 @@ import { sizedIcon, Warning } from '$components/icons/phosphor';
 import classNames from 'classnames';
 import type { MatrixClient, MatrixEvent, Room } from '$types/matrix-sdk';
 import { getHexcodeForEmoji, getShortcodeFor } from '$plugins/emoji';
-import { getMemberDisplayName } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
 import { eventWithShortcode, getMxIdLocalPart, mxcUrlToHttp } from '$utils/matrix';
 import { useAtomValue } from 'jotai';
+import { Image as MediaImage } from '$components/media';
 import { nicknamesAtom } from '$state/nicknames';
 import * as css from './Reaction.css';
 
@@ -44,7 +45,7 @@ export const Reaction = as<
                 </span>
               );
             return (
-              <img
+              <MediaImage
                 className={css.ReactionImg}
                 src={mxcUrlToHttp(mx, reaction, useAuthentication) ?? undefined}
                 alt={reaction}

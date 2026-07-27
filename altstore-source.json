@@ -1,5 +1,6 @@
 {
   "name": "Sable",
+  "identifier": "moe.sable.client.source",
   "subtitle": "Sable for iOS",
   "description": "Sable iOS nightly builds for AltStore and SideStore.",
   "iconURL": "https://raw.githubusercontent.com/SableClient/Sable/dev/src-tauri/icons/icon.png",

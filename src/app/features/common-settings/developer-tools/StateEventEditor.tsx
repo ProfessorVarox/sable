@@ -9,13 +9,11 @@ import {
   config,
   TextArea as TextAreaComponent,
   color,
-  Spinner,
-  Button,
 } from 'folds';
 import { ArrowLeft, composerIcon, menuIcon, X } from '$components/icons/phosphor';
 import type { MatrixError, StateEvents } from '$types/matrix-sdk';
 import { Page, PageHeader } from '$components/page';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { TextViewerContent } from '$components/text-viewer';
 import { useStateEvent } from '$hooks/useStateEvent';
 import { useRoom } from '$hooks/useRoom';
@@ -24,13 +22,14 @@ import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useAlive } from '$hooks/useAlive';
 import { Cursor } from '$plugins/text-area';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import { AsyncError } from '$components/AsyncError';
 import { syntaxErrorPosition } from '$utils/dom';
 import { SettingTile } from '$components/setting-tile';
 import { usePowerLevels } from '$hooks/usePowerLevels';
 import { useTextAreaCodeEditor } from '$hooks/useTextAreaCodeEditor';
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
-import { SequenceCardStyle } from '$features/common-settings/styles.css';
+import { Button } from '$components/button';
 
 const EDITOR_INTENT_SPACE_COUNT = 2;
 
@@ -135,8 +134,10 @@ function StateEventEdit({ type, stateKey, content, requestClose }: StateEventEdi
                   size="300"
                   radii="300"
                   type="submit"
-                  disabled={submitting}
-                  before={submitting && <Spinner variant="Primary" fill="Solid" size="300" />}
+                  loading={submitting}
+                  spinnerSize="300"
+                  spinnerVariant="Primary"
+                  spinnerFill="Solid"
                 >
                   <Text size="B300">Save</Text>
                 </Button>
@@ -155,11 +156,7 @@ function StateEventEdit({ type, stateKey, content, requestClose }: StateEventEdi
           />
         </SequenceCard>
 
-        {submitState.status === AsyncStatus.Error && (
-          <Text size="T200" style={{ color: color.Critical.Main }}>
-            <b>{submitState.error.message}</b>
-          </Text>
-        )}
+        <AsyncError state={submitState} bold />
       </Box>
       <Box grow="Yes" direction="Column" gap="100">
         <Box shrink="No">

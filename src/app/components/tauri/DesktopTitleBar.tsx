@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow, type Window } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -8,6 +7,7 @@ import { useAtomValue } from 'jotai';
 import { createLogger } from '$utils/debug';
 import { titlebarStatusAtom } from '$state/titlebarStatus';
 import { SyncConnectionStatusTitlebar } from '$components/SyncConnectionStatus';
+import { DesktopUpdatePill } from './DesktopUpdatePill';
 import {
   hideSnapOverlay as hideSnapOverlayCommand,
   showSnapOverlay as showSnapOverlayCommand,
@@ -111,8 +111,12 @@ export function DesktopTitleBar() {
     }
   }, [isWindows]);
 
+  const title = SABLE_PRODUCT_NAME;
+
   useEffect(() => {
     if (!isDesktopTitleBar) return undefined;
+
+    setWindowTitle(title);
 
     const appWindow = getCurrentWindow();
     appWindowRef.current = appWindow;
@@ -120,14 +124,6 @@ export function DesktopTitleBar() {
     let mounted = true;
     let unlistenResize: (() => void) | undefined;
     let unlistenTracking: (() => void) | undefined;
-
-    getVersion()
-      .then((version) => {
-        if (mounted) setWindowTitle(version.includes('-nightly.') ? 'Sable Nightly' : 'Sable');
-      })
-      .catch((error) => {
-        log.warn('Failed to read app version for window title:', error);
-      });
 
     const syncMaximized = async () => {
       try {
@@ -181,7 +177,7 @@ export function DesktopTitleBar() {
       unlistenResize?.();
       unlistenTracking?.();
     };
-  }, [isDesktopTitleBar, isWindows, hideSnapOverlay]);
+  }, [isDesktopTitleBar, isWindows, hideSnapOverlay, title]);
 
   if (!isDesktopTitleBar) return null;
 
@@ -271,6 +267,9 @@ export function DesktopTitleBar() {
         <SyncConnectionStatusTitlebar status={titlebarStatus} />
       </div>
 
+      <div className="tauri-titlebar__update">
+        <DesktopUpdatePill />
+      </div>
       <div className="tauri-titlebar__controls">
         <button
           type="button"

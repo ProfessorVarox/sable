@@ -1,6 +1,6 @@
 import { addPluginListener, invoke, isTauri } from '@tauri-apps/api/core';
 import { type as osType } from '@tauri-apps/plugin-os';
-
+import { isDesktopTauri, isMobileTauri, isAndroidTauri } from '$utils/platform';
 export type NotificationPluginListener = {
   unregister: () => Promise<void> | void;
 };
@@ -65,7 +65,7 @@ const transitionActionListener = (invokeFn: typeof invoke, active: boolean): Pro
   return actionListenerTransition;
 };
 
-export async function subscribeToNativeNotificationActions(
+async function subscribeToNativeNotificationActions(
   listener: (event: NotificationActionEvent) => void,
   dependencies: ActionListenerDependencies = { addListener: addPluginListener, invoke }
 ): Promise<NotificationPluginListener> {
@@ -115,7 +115,7 @@ export async function getTauriNotificationsApi(): Promise<TauriNotificationsApi>
 
 let permissionPromise: Promise<boolean> | null = null;
 
-export async function ensureTauriNotificationPermission(): Promise<boolean> {
+async function ensureTauriNotificationPermission(): Promise<boolean> {
   if (!permissionPromise) {
     permissionPromise = (async () => {
       const api = await getTauriNotificationsApi();
@@ -135,14 +135,10 @@ export async function ensureTauriNotificationPermission(): Promise<boolean> {
   return permissionPromise;
 }
 
-// Desktop webviews can't show web notifications (WKWebView lacks the API; the
-// Linux CEF runtime never grants it), so desktop routes through the native plugin.
-const DESKTOP_TAURI_OS = new Set(['linux', 'macos', 'windows']);
-export const isDesktopTauri = (): boolean => isTauri() && DESKTOP_TAURI_OS.has(osType());
-export const isIosTauri = (): boolean => isTauri() && osType() === 'ios';
-export const isAndroidTauri = (): boolean => isTauri() && osType() === 'android';
 // Platforms where OS notifications go through the native plugin instead of web APIs.
-export const isNativeNotificationTauri = (): boolean => isDesktopTauri() || isIosTauri();
+export const isNativeNotificationTauri = (): boolean => isDesktopTauri() || isMobileTauri();
+
+export const isIosTauri = (): boolean => isTauri() && osType() === 'ios';
 
 let nativeNotificationSeq = 1;
 const nextNativeNotificationId = (): number => {
@@ -151,10 +147,15 @@ const nextNativeNotificationId = (): number => {
   return id;
 };
 
+// Bundled at the app bundle root by ios-project.yml, where UNNotificationSound looks.
+export const IOS_NOTIFICATION_SOUND = 'notification.caf';
+export const IOS_INVITE_SOUND = 'invite.caf';
+
 export type NativeTauriNotification = {
   title: string;
   body?: string;
   silent?: boolean;
+  sound?: string;
   extra?: Record<string, string>;
   actionTypeId?: string;
   group?: string;
@@ -165,6 +166,7 @@ export async function sendNativeTauriNotification({
   title,
   body,
   silent,
+  sound,
   extra,
   actionTypeId,
   group,
@@ -178,8 +180,11 @@ export async function sendNativeTauriNotification({
     body,
     silent: silent ?? false,
     extra,
+    ...(sound ? { sound } : {}),
     ...(actionTypeId ? { actionTypeId } : {}),
     ...(group ? { group } : {}),
     ...(icon ? { icon } : {}),
   });
 }
+
+export { isDesktopTauri, isMobileTauri, isAndroidTauri };

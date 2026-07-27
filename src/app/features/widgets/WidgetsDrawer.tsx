@@ -41,7 +41,7 @@ import * as css from './WidgetsDrawer.css';
 import { IntegrationManager } from './IntegrationManager';
 import { CustomStateEvent } from '$types/matrix/room';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 
 type WidgetsDrawerHeaderProps = {
   activeWidget: RoomWidget | null;
@@ -268,10 +268,10 @@ export function WidgetsDrawer({ room }: WidgetsDrawerProps) {
       direction="Column"
       style={{
         position: 'relative',
-        width: !mobileOrTablet() ? toRem(curWidth) : 'inherit',
+        width: !isMobileOrTablet() ? toRem(curWidth) : 'inherit',
       }}
     >
-      {!mobileOrTablet() && (
+      {!isMobileOrTablet() && (
         <SidebarResizer
           setCurWidth={setCurWidth}
           sidebarWidth={widgetSidebarWidth}

@@ -31,9 +31,10 @@ export default defineConfig({
     },
   },
   define: {
+    SABLE_PRODUCT_NAME: JSON.stringify('Sable'),
+    SABLE_BUILD_FLAVOR: JSON.stringify('stable'),
     APP_VERSION: JSON.stringify('test'),
     BUILD_HASH: JSON.stringify(''),
-    IS_RELEASE_TAG: JSON.stringify(false),
   },
   test: {
     environment: 'jsdom',

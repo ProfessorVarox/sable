@@ -1,12 +1,11 @@
 [package]
 name = "sable"
-version = "0.1.0"
+version = "1.20.0"
 description = "Yet another matrix client but better"
-authors = ["you"]
-license = ""
-repository = ""
+authors = ["Sable Maintainers"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/SableClient/Sable"
 edition = "2021"
-rust-version = "1.88.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,6 +14,7 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+serde_json = "1.0"
 tauri-build = { version = "2.6.3", features = [] }
 tauri-typegen = "0.5"
 
@@ -36,7 +36,11 @@ ts-rs = "12.0.0"
 sha2 = "0.10"
 aes = "0.8"
 ctr = "0.9"
+infer = { version = "0.22", default-features = false }
 percent-encoding = "2"
+# Enables `stream` (for native_upload's `Body::wrap_stream`) on the reqwest that
+# tauri-plugin-http pulls in without it. default-features = false keeps
+# openssl-sys out of the Android cross-compile.
 reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 async-stream = "0.3"
 base64 = "0.22"
@@ -58,7 +62,7 @@ tauri-plugin-opener = "2.5.4"
 tauri-plugin-os = "2"
 tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-http = "2.5.9"
-tauri-plugin-store = "2.4.3"
+tauri-plugin-store = "2.4.4"
 tauri-plugin-clipboard-manager = "2.3.2"
 
 # Debug-only in practice: only initialized under #[cfg(debug_assertions)] in
@@ -69,7 +73,7 @@ tauri-plugin-clipboard-manager = "2.3.2"
 # wry/tauri-runtime-wry/webkit2gtk.
 # Pinned to =2.0.0 because 2.1.0+ introduced an unconditional call to
 # tauri::webview_version() which is gated behind tauri's `wry` feature.
-tauri-plugin-devtools = { version = "=2.0.0", default-features = false }
+tauri-plugin-devtools = { version = "=2.0.0", default-features = false, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 enigo = "0.5.0"
@@ -84,12 +88,12 @@ windows = { version = "0.61", features = [
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "cc3a468263db75e40a8a4751f3dae9bce5bc4234" }
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "87e452fab17711a82422a97ab9541ebf647fa28a" }
 
 # default-features = false drops notify-rust so macOS uses the native
 # UNUserNotificationCenter backend (needs a signed .app to deliver).
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "cc3a468263db75e40a8a4751f3dae9bce5bc4234", default-features = false }
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "87e452fab17711a82422a97ab9541ebf647fa28a", default-features = false }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = { version = "2", optional = true }
@@ -113,7 +117,7 @@ cef = { version = "=148.0.0", optional = true }
 libloading = "0.8"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "cc3a468263db75e40a8a4751f3dae9bce5bc4234", features = [
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "87e452fab17711a82422a97ab9541ebf647fa28a", features = [
   "push-notifications",
 ] }
 tauri-plugin-edge-to-edge = { git = "https://github.com/SableClient/tauri-plugin-edge-to-edge.git", rev = "33c6116c27be28c06df5a9d02231ecc5fdeb93c5" }
@@ -135,6 +139,9 @@ wry = ["tauri/wry", "dep:webkit2gtk"]
 updater = ["dep:tauri-plugin-updater"]
 # CEF (Chromium) runtime. Build with --no-default-features --features cef.
 cef = ["dep:tauri-runtime-cef", "dep:cef"]
+# CrabNebula devtools. Off by default: its aggregator retains every metadata record for the
+# session, which costs hundreds of MB per minute once tauri-plugin-log feeds it.
+devtools = ["dep:tauri-plugin-devtools"]
 [patch.crates-io]
 tauri-typegen = { git = "https://github.com/SableClient/tauri-typegen", branch = "fix/nondeterministic-generation-cache" }
 

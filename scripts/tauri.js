@@ -1,15 +1,22 @@
 #!/usr/bin/env node
+//MISE description="Run Tauri CLI"
+//MISE depends="tauri:setup"
+//MISE raw_args=true
 
 /**
- * Script to run tauri commands for a given runtime (wry or cef) with prepended CLI args.
+ * Passes through to the Tauri CLI. When the first argument is a desktop runtime
+ * (`wry` or `cef`) and the second is `dev` or `build`, injects the appropriate
+ * Cargo feature flags (`--features <runtime>,updater --no-default-features`).
+ * Everything else is forwarded to `tauri` as-is.
  *
- * Usage:
- *   script/tauri <runtime> <command> [prepended-args...]
- *
- * Examples:
  *   script/tauri cef dev --verbose
- *   script/tauri cef dev -- --verbose
- *   Both will run: tauri dev --features cef -- --verbose --no-default-features
+ *     → tauri dev --features cef,updater -- --verbose --no-default-features
+ *
+ * Pass `--no-updater` to omit the bundled auto-updater, for distro packagers and
+ * anyone building from source who updates through their own channel:
+ *
+ *   script/tauri wry build --no-updater
+ *     → tauri build --features wry -- --no-default-features
  */
 
 import { run } from '@tauri-apps/cli';
@@ -25,45 +32,59 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const cmdlineArgs = process.argv.slice(2);
-
-if (cmdlineArgs.length < 2) {
-  logger.error('Usage: node scripts/tauri <runtime> <command> [prepended-args...]');
-  logger.error(`  ${dim('command:')} dev or build`);
-  logger.error(`  ${dim('runtime:')} wry or cef`);
-  logger.error(
-    `  ${dim('prepended-args:')} Arguments to prepend to the cargo args (-- separator is optional)`
-  );
-  process.exit(1);
-}
-
-const [runtime, cmd, ...tauriArgs] = cmdlineArgs;
-
-if (!['wry', 'cef'].includes(runtime)) {
-  logger.error(`Invalid runtime: ${runtime}. Must be 'wry' or 'cef'`);
-  process.exit(1);
-}
-if (!['dev', 'build'].includes(cmd)) {
-  logger.error(`Invalid command: ${cmd}. Must be 'dev' or 'build'`);
-  process.exit(1);
-}
-
-tauriArgs.unshift('--features', `${runtime},updater`);
-// tauri's Linux bundler can't package CEF; scripts/cef-package.sh does that.
-if (runtime === 'cef' && cmd === 'build' && !tauriArgs.includes('--no-bundle')) {
-  tauriArgs.unshift('--no-bundle');
-}
-if (!tauriArgs.includes('--')) {
-  tauriArgs.push('--');
-}
-tauriArgs.push('--no-default-features');
-
-const args = [cmd, ...tauriArgs];
-
 process.chdir(join(__dirname, '..'));
 
-logger.info(`${dim('Running:')} tauri ${args.join(' ')}`);
+const DESKTOP = new Set(['wry', 'cef']);
 
-run(args, 'tauri').catch((error) => {
-  logger.error(`Failed to run tauri: ${error?.message ?? error}`);
-  process.exit(1);
-});
+async function runTauri(args) {
+  logger.info(`${dim('Running:')} tauri ${args.join(' ')}`);
+  try {
+    await run(args, 'tauri');
+  } catch (error) {
+    logger.error(`Failed to run tauri: ${error?.message ?? error}`);
+    process.exit(1);
+  }
+}
+
+async function main() {
+  if (cmdlineArgs.length === 0 || !DESKTOP.has(cmdlineArgs[0])) {
+    return runTauri(cmdlineArgs);
+  }
+
+  const [platform, cmd, ...rawTauriArgs] = cmdlineArgs;
+
+  if (!cmd) {
+    return runTauri(cmdlineArgs);
+  }
+
+  if (!['dev', 'build'].includes(cmd)) {
+    return runTauri([cmd, ...rawTauriArgs]);
+  }
+
+  // Consumed here, not forwarded: the tauri CLI does not know this flag.
+  const noUpdater = rawTauriArgs.includes('--no-updater');
+  const tauriArgs = rawTauriArgs.filter((arg) => arg !== '--no-updater');
+  if (noUpdater) {
+    logger.info('Building without the auto-updater (--no-updater)');
+  }
+
+  const features = noUpdater ? platform : `${platform},updater`;
+  const args = [cmd, '--features', features, ...tauriArgs];
+  if (!tauriArgs.includes('--')) {
+    args.push('--');
+  }
+  args.push('--no-default-features');
+
+  if (noUpdater && cmd === 'build') {
+    // Signed updater artifacts would otherwise demand TAURI_SIGNING_PRIVATE_KEY.
+    args.splice(1, 0, '--config', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }));
+  }
+
+  if (platform === 'cef' && cmd === 'build' && !tauriArgs.includes('--no-bundle')) {
+    args.splice(1, 0, '--no-bundle');
+  }
+
+  return runTauri(args);
+}
+
+main();

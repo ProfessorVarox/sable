@@ -5,7 +5,7 @@ import { sanitizeText } from '$utils/sanitize';
 import { markdownToHtml, injectDataMd } from '$plugins/markdown';
 import { sanitizeForRegex } from '$utils/regex';
 import { getMxIdLocalPart, isUserId } from '$utils/matrix';
-import { getMemberDisplayName } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
 import type { CustomElement } from './slate';
 import { BlockType } from './types';
 import { getMarkdownCodeSpanRanges, isInsideMarkdownCodeSpan } from './utils';
@@ -170,15 +170,20 @@ const SPOILEREDLINKDIRECTREGEX = new RegExp(`\\|\\|(${LINK_URL})\\|\\|`, 'g');
 export const toPlainText = (
   node: Descendant | Descendant[],
   stripNickname = false,
+  stripSpoilers = true,
   nickNameReplacement?: Map<RegExp, string>
 ): string => {
   if (Array.isArray(node))
-    return node.map((n) => toPlainText(n, stripNickname, nickNameReplacement)).join('');
+    return node
+      .map((n) => toPlainText(n, stripNickname, stripSpoilers, nickNameReplacement))
+      .join('');
   if (Text.isText(node)) {
     let { text } = node;
 
-    text = text.replaceAll(SPOILERINPUTREGEX, '[Spoiler]');
-    text = text.replaceAll(SPOILEREDLINKINPUTREGEX, '$1');
+    if (stripSpoilers) {
+      text = text.replaceAll(SPOILERINPUTREGEX, '[Spoiler]');
+      text = text.replaceAll(SPOILEREDLINKINPUTREGEX, '$1');
+    }
 
     if (stripNickname && nickNameReplacement) {
       for (const [key, replacement] of nickNameReplacement) {
@@ -189,7 +194,7 @@ export const toPlainText = (
   }
 
   const children = node.children
-    .map((n) => toPlainText(n, stripNickname, nickNameReplacement))
+    .map((n) => toPlainText(n, stripNickname, stripSpoilers, nickNameReplacement))
     .join('');
   return elementToPlainText(node, children);
 };
@@ -198,7 +203,7 @@ export const toPlainText = (
  * Convert slate internal representation to a raw plain text string without any replacements.
  * This is used for link extraction to ensure we have the full context for markdown blocks.
  */
-export const toRawText = (node: Descendant | Descendant[]): string => {
+const toRawText = (node: Descendant | Descendant[]): string => {
   if (Array.isArray(node)) return node.map(toRawText).join('');
   if (Text.isText(node)) return node.text;
 

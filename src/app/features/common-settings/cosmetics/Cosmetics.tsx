@@ -1,5 +1,5 @@
 import type { ChangeEvent, ChangeEventHandler, FormEventHandler } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Box,
   Text,
@@ -11,16 +11,10 @@ import {
   config,
   Button,
   Spinner,
-  OverlayBackdrop,
-  Overlay,
-  OverlayCenter,
-  Modal,
-  Dialog,
-  Header,
 } from 'folds';
-import { composerIcon, menuIcon, X } from '$components/icons/phosphor';
+import { menuIcon, X } from '$components/icons/phosphor';
 import { PageContent, SettingsSectionPage } from '$components/page';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { SettingTile } from '$components/setting-tile';
 import { useRoom } from '$hooks/useRoom';
 import { usePowerLevels } from '$hooks/usePowerLevels';
@@ -30,7 +24,6 @@ import { useStateEvent } from '$hooks/useStateEvent';
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
 import { createLogger } from '$utils/debug';
-import { SequenceCardStyle } from '$features/common-settings/styles.css';
 import { UserAvatar } from '$components/user-avatar';
 import { nameInitials } from '$utils/common';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
@@ -41,41 +34,35 @@ import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import type { Room, RoomMember, StateEvents } from '$types/matrix-sdk';
 import { Command, useCommands } from '$hooks/useCommands';
 import { useCapabilities } from '$hooks/useCapabilities';
-import { useObjectURL } from '$hooks/useObjectURL';
-import type { UploadSuccess } from '$state/upload';
-import { createUploadAtom } from '$state/upload';
-import { useFilePicker } from '$hooks/useFilePicker';
-import { CompactUploadCardRenderer } from '$components/upload-card';
-import FocusTrap from 'focus-trap-react';
-import { ImageEditor } from '$components/image-editor';
-import { stopPropagation } from '$utils/keyboard';
-import { ModalWide } from '$styles/Modal.css';
 import { NameColorEditor } from '$features/settings/account/NameColorEditor';
 import { PronounEditor } from '$features/settings/account/PronounEditor';
 import type { PronounSet } from '$utils/pronouns';
 import { EventType } from '$types/matrix-sdk';
 import { CustomStateEvent } from '$types/matrix/room';
+import { AvatarUploadTile } from '$components/avatar-upload-tile/AvatarUploadTile';
 
 const log = createLogger('Cosmetics');
 
+// Members load lazily under sliding sync, so `room.getMember` can be null here.
+const fallbackDisplayName = (userId: string): string => getMxIdLocalPart(userId) ?? userId;
+
 type CosmeticsSettingProps = {
   profile: UserProfile;
-  member: RoomMember;
+  member: RoomMember | null;
   userId: string;
   room: Room;
 };
-export function CosmeticsAvatar({ profile, member, userId, room }: CosmeticsSettingProps) {
+function CosmeticsAvatar({ profile, member, userId, room }: CosmeticsSettingProps) {
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
   const capabilities = useCapabilities();
-  const [alertRemove, setAlertRemove] = useState(false);
   const disableSetAvatar = capabilities['m.set_avatar_url']?.enabled === false;
   const memberStateEvent = useStateEvent(room, EventType.RoomMember, userId);
   const memberStateContent = memberStateEvent?.getContent<{ avatar_url?: string }>();
   const globalAvatarMxc = mx.getUser(userId)?.avatarUrl ?? profile.avatarUrl;
   const roomAvatarMxc = memberStateEvent
     ? memberStateContent?.avatar_url
-    : member.getMxcAvatarUrl();
+    : member?.getMxcAvatarUrl();
   const avatarMxc = roomAvatarMxc ?? globalAvatarMxc;
   const hasRoomAvatarOverride =
     memberStateEvent !== undefined &&
@@ -84,156 +71,38 @@ export function CosmeticsAvatar({ profile, member, userId, room }: CosmeticsSett
   const avatarUrl =
     avatarMxc && (mxcUrlToHttp(mx, avatarMxc, useAuthentication, 96, 96, 'crop') ?? undefined);
 
-  const [imageFile, setImageFile] = useState<File>();
-  const imageFileURL = useObjectURL(imageFile);
-  const uploadAtom = useMemo(() => {
-    if (imageFile) return createUploadAtom(imageFile);
-    return undefined;
-  }, [imageFile]);
-
-  const pickFile = useFilePicker(setImageFile, false);
-
-  const handleRemoveUpload = useCallback(() => {
-    setImageFile(undefined);
-  }, []);
-
   const myRoomAvatar = useCommands(mx, room)[Command.MyRoomAvatar];
-  const handleUploaded = useCallback(
-    (upload: UploadSuccess) => {
-      const { mxc } = upload;
-      myRoomAvatar.exe(mxc).finally(() => {
-        handleRemoveUpload();
-      });
-    },
-    [myRoomAvatar, handleRemoveUpload]
-  );
-
-  const handleRemoveAvatar = () => {
-    myRoomAvatar.exe('').finally(() => {
-      setAlertRemove(false);
-    });
-  };
 
   return (
-    <SettingTile
+    <AvatarUploadTile
       title="Room Avatar"
+      disableSetAvatar={disableSetAvatar}
+      removeDisabled={!hasRoomAvatarOverride}
+      onUpload={(mxc) => myRoomAvatar.exe(mxc)}
+      onRemove={() => myRoomAvatar.exe('')}
+      confirmTitle="Remove Room Avatar"
+      confirmDescription="Are you sure you want to remove room avatar?"
       after={
         <Avatar size="500" radii="300">
           <UserAvatar
             userId={userId}
             src={avatarUrl}
             renderFallback={() => (
-              <Text size="H4">{nameInitials(room.getMember(userId)!.rawDisplayName)}</Text>
+              <Text size="H4">
+                {nameInitials(member?.rawDisplayName ?? fallbackDisplayName(userId))}
+              </Text>
             )}
           />
         </Avatar>
       }
-    >
-      {uploadAtom ? (
-        <Box gap="200" direction="Column">
-          <CompactUploadCardRenderer
-            uploadAtom={uploadAtom}
-            onRemove={handleRemoveUpload}
-            onComplete={handleUploaded}
-          />
-        </Box>
-      ) : (
-        <Box gap="200">
-          <Button
-            onClick={() => pickFile('image/*')}
-            size="300"
-            variant="Secondary"
-            fill="Soft"
-            outlined
-            radii="300"
-            disabled={disableSetAvatar}
-          >
-            <Text size="B300">Upload</Text>
-          </Button>
-          {hasRoomAvatarOverride && (
-            <Button
-              size="300"
-              variant="Critical"
-              fill="None"
-              radii="300"
-              disabled={disableSetAvatar}
-              onClick={() => setAlertRemove(true)}
-            >
-              <Text size="B300">Remove</Text>
-            </Button>
-          )}
-        </Box>
-      )}
-
-      {imageFileURL && (
-        <Overlay open={false} backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                onDeactivate: handleRemoveUpload,
-                clickOutsideDeactivates: true,
-                escapeDeactivates: stopPropagation,
-              }}
-            >
-              <Modal className={ModalWide} variant="Surface" size="500">
-                <ImageEditor
-                  name={imageFile?.name ?? 'Unnamed'}
-                  url={imageFileURL}
-                  requestClose={handleRemoveUpload}
-                />
-              </Modal>
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
-      )}
-
-      <Overlay open={alertRemove} backdrop={<OverlayBackdrop />}>
-        <OverlayCenter>
-          <FocusTrap
-            focusTrapOptions={{
-              initialFocus: false,
-              onDeactivate: () => setAlertRemove(false),
-              clickOutsideDeactivates: true,
-              escapeDeactivates: stopPropagation,
-            }}
-          >
-            <Dialog variant="Surface">
-              <Header
-                style={{
-                  padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
-                  borderBottomWidth: config.borderWidth.B300,
-                }}
-                variant="Surface"
-                size="500"
-              >
-                <Box grow="Yes">
-                  <Text size="H4">Remove Room Avatar</Text>
-                </Box>
-                <IconButton size="300" onClick={() => setAlertRemove(false)} radii="300">
-                  {composerIcon(X)}
-                </IconButton>
-              </Header>
-              <Box style={{ padding: config.space.S400 }} direction="Column" gap="400">
-                <Box direction="Column" gap="200">
-                  <Text priority="400">Are you sure you want to remove room avatar?</Text>
-                </Box>
-                <Button variant="Critical" onClick={handleRemoveAvatar}>
-                  <Text size="B400">Remove</Text>
-                </Button>
-              </Box>
-            </Dialog>
-          </FocusTrap>
-        </OverlayCenter>
-      </Overlay>
-    </SettingTile>
+    />
   );
 }
 
-export function CosmeticsNickname({ profile, member, userId, room }: CosmeticsSettingProps) {
+function CosmeticsNickname({ profile, member, userId, room }: CosmeticsSettingProps) {
   const mx = useMatrixClient();
 
-  const defaultDisplayName = member.rawDisplayName;
+  const defaultDisplayName = member?.rawDisplayName ?? fallbackDisplayName(userId);
   const [displayName, setDisplayName] = useState<string>(defaultDisplayName);
   const hasChanges = displayName !== defaultDisplayName;
 
@@ -316,7 +185,7 @@ export function CosmeticsNickname({ profile, member, userId, room }: CosmeticsSe
   );
 }
 
-export function CosmeticsFont({
+function CosmeticsFont({
   room,
   isSpace,
   font,
@@ -377,7 +246,7 @@ export function Cosmetics({ requestBack, requestClose }: CosmeticsProps) {
   const room = useRoom();
   const roomProfile = useUserProfile(userId, room);
   const creators = useRoomCreators(room);
-  const member = room.getMember(userId)!;
+  const member = room.getMember(userId);
   const powerLevels = usePowerLevels(room);
   const isSpace = room.isSpaceRoom();
 

@@ -4,7 +4,6 @@
   "platforms": ["android", "iOS"],
   "windows": ["main"],
   "permissions": [
-    "core:default",
     "core:window:allow-set-badge-count",
     "deep-link:default",
     "edge-to-edge:default",

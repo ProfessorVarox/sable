@@ -22,7 +22,7 @@ import { useMatrixClient } from '$hooks/useMatrixClient';
 import { factoryEventSentBy } from '$utils/matrix';
 import { Reaction, ReactionTooltipMsg } from '$components/message';
 import { EmojiBoard } from '$components/emoji-board';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { sizedIcon, Smiley } from '$components/icons/phosphor';
 import { useRelations } from '$hooks/useRelations';
 import { stopPropagation } from '$utils/keyboard';
@@ -134,7 +134,7 @@ export const Reactions = as<'div', ReactionsProps>(
                 imagePackRooms={imagePackRooms ?? []}
                 returnFocusOnDeactivate={false}
                 allowTextCustomEmoji
-                isFullWidth={mobileOrTablet()}
+                isFullWidth={isMobileOrTablet()}
                 onEmojiSelect={(key) => {
                   onReactionToggle(mEventId, key);
                   setEmojiBoardAnchor(undefined);
@@ -170,7 +170,7 @@ export const Reactions = as<'div', ReactionsProps>(
                 )}
               </TooltipProvider>
             );
-            if (mobileOrTablet()) {
+            if (isMobileOrTablet()) {
               return (
                 <>
                   {trigger}

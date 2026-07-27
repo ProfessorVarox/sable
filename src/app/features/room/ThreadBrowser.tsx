@@ -9,7 +9,8 @@ import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { nicknamesAtom } from '$state/nicknames';
 import { profilesCacheAtom } from '$state/userRoomProfile';
 import { useRoomMemberHydration } from '$hooks/useRoomMemberHydration';
-import { getMemberDisplayName, reactionOrEditEvent } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
+import { reactionOrEditEvent } from '$utils/room/relations';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { Chats, chipIcon, composerIcon, MagnifyingGlass, X } from '$components/icons/phosphor';
 import { settingsAtom } from '$state/settings';
@@ -18,7 +19,8 @@ import { MessagePreview, useRoomMessagePreviewRenderer } from '$components/messa
 import { UnreadBadge, UnreadBadgeCenter } from '$components/unread-badge';
 import * as css from './ThreadDrawer.css';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
+import { useMatrixEvent } from '$hooks/useMatrixEvent';
 
 type ThreadPreviewProps = {
   room: Room;
@@ -45,15 +47,13 @@ function ThreadPreview({ room, thread, onClick, onJump }: ThreadPreviewProps) {
   );
 
   const [, forceUnread] = useState(0);
-  useEffect(() => {
-    const onUnread = (_count: unknown, threadId?: string) => {
+  const onUnread = useCallback(
+    (_count: unknown, threadId?: string) => {
       if (!threadId || threadId === thread.id) forceUnread((n) => n + 1);
-    };
-    room.on(RoomEvent.UnreadNotifications, onUnread);
-    return () => {
-      room.off(RoomEvent.UnreadNotifications, onUnread);
-    };
-  }, [room, thread.id]);
+    },
+    [thread.id]
+  );
+  useMatrixEvent(room, RoomEvent.UnreadNotifications, onUnread);
   const unreadTotal = room.getThreadUnreadNotificationCount(thread.id, NotificationCountType.Total);
   const unreadHighlight = room.getThreadUnreadNotificationCount(
     thread.id,
@@ -315,7 +315,7 @@ export function ThreadBrowser({ room, onOpenThread, onClose, overlay }: ThreadBr
         width: overlay ? '100%' : toRem(curWidth),
       }}
     >
-      {!mobileOrTablet() && (
+      {!isMobileOrTablet() && (
         <SidebarResizer
           setCurWidth={setCurWidth}
           sidebarWidth={threadSidebarWidth}

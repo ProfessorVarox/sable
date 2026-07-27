@@ -1,7 +1,4 @@
-import type { MouseEventHandler } from 'react';
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import FocusTrap from 'focus-trap-react';
-import type { RectCords } from 'folds';
 import {
   Box,
   Button,
@@ -11,17 +8,15 @@ import {
   IconButton,
   Icons,
   Input,
-  Menu,
-  MenuItem,
-  PopOut,
   Spinner,
   Switch,
   Text,
 } from 'folds';
 import type { IPusherRequest } from '$types/matrix-sdk';
 import { useAtom } from 'jotai';
-import { SequenceCard } from '$components/sequence-card';
-import { SettingTile } from '$components/setting-tile';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
+import { SettingTile, SettingToggle } from '$components/setting-tile';
+import { SettingMenuSelector } from '$components/setting-menu-selector';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
 import { getNotificationState, usePermissionState } from '$hooks/usePermission';
@@ -29,12 +24,10 @@ import { useEmailNotifications } from '$hooks/useEmailNotifications';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useClientConfig } from '$hooks/useClientConfig';
-import { SequenceCardStyle } from '$features/settings/styles.css';
 import { pushSubscriptionAtom } from '$state/pushSubscription';
 import { unifiedPushEndpointAtom, type UnifiedPushState } from '$state/unifiedPushEndpoint';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { isIosTauri } from '$features/settings/notifications/TauriNotificationsApiClient';
-import { stopPropagation } from '$utils/keyboard';
 import { isTauri } from '@tauri-apps/api/core';
 import { type as osType } from '@tauri-apps/plugin-os';
 import {
@@ -83,43 +76,35 @@ function getBackgroundPushPlatform(isTauriRuntime: boolean): BackgroundPushPlatf
   return 'desktop';
 }
 
-export function deriveLegacyPushSync(input: {
-  enabled: boolean;
-  provider: BackgroundPushKind | null;
-}): {
+function deriveLegacyPushSync(input: { enabled: boolean; provider: BackgroundPushKind | null }): {
   usePushNotifications: boolean;
   useUnifiedPush: boolean;
 } {
   return deriveLegacyPushFlags(input.enabled, input.provider);
 }
 
-export function shouldRefreshBackgroundPushTransport(
-  previousKind: BackgroundPushKind | null,
-  nextKind: BackgroundPushKind | null
-): boolean {
-  return previousKind !== nextKind;
-}
-
 export async function switchBackgroundPushTransport(params: {
   previousKind: BackgroundPushKind | null;
   activate: () => Promise<BackgroundPushKind | null>;
   deactivate: (kind: BackgroundPushKind | null) => Promise<void>;
+  reactivate?: (kind: BackgroundPushKind) => Promise<void>;
 }): Promise<BackgroundPushKind | null> {
-  const { previousKind, activate, deactivate } = params;
-  const nextKind = await activate();
+  const { previousKind, activate, deactivate, reactivate } = params;
 
-  if (!shouldRefreshBackgroundPushTransport(previousKind, nextKind)) {
-    return nextKind;
+  if (previousKind) {
+    await deactivate(previousKind);
   }
 
   try {
-    await deactivate(previousKind);
+    return await activate();
   } catch (error) {
-    await deactivate(nextKind).catch(() => undefined);
+    // The old transport is already torn down, so restore it rather than
+    // leaving the user with no push delivery.
+    if (previousKind && reactivate) {
+      await reactivate(previousKind);
+    }
     throw error;
   }
-
-  return nextKind;
 }
 
 function getNativePushConfigError(clientConfig: ReturnType<typeof useClientConfig>): string | null {
@@ -248,99 +233,6 @@ function cleanPushTransportOverrides(overrides: PushTransportOverrides): PushTra
     next.unifiedPushDistributor = overrides.unifiedPushDistributor.trim();
   }
   return next;
-}
-
-type SettingMenuOption<T extends string> = {
-  value: T;
-  label: string;
-};
-
-function SettingMenuSelector<T extends string>({
-  value,
-  options,
-  onSelect,
-  disabled,
-  loading,
-}: {
-  value: T;
-  options: SettingMenuOption<T>[];
-  onSelect: (value: T) => void;
-  disabled?: boolean;
-  loading?: boolean;
-}) {
-  const [menuCords, setMenuCords] = useState<RectCords>();
-  const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
-
-  const handleMenu: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    setMenuCords(evt.currentTarget.getBoundingClientRect());
-  };
-
-  const handleSelect = (nextValue: T) => {
-    setMenuCords(undefined);
-    onSelect(nextValue);
-  };
-
-  return (
-    <>
-      <Button
-        size="300"
-        variant="Secondary"
-        outlined
-        fill="Soft"
-        radii="300"
-        after={
-          loading ? (
-            <Spinner variant="Secondary" size="300" />
-          ) : (
-            <Icon size="300" src={Icons.ChevronBottom} />
-          )
-        }
-        onClick={handleMenu}
-        disabled={disabled || loading}
-      >
-        <Text size="T300">{selectedLabel}</Text>
-      </Button>
-      <PopOut
-        anchor={menuCords}
-        offset={5}
-        position="Bottom"
-        align="End"
-        content={
-          <FocusTrap
-            focusTrapOptions={{
-              initialFocus: false,
-              onDeactivate: () => setMenuCords(undefined),
-              clickOutsideDeactivates: true,
-              isKeyForward: (evt: KeyboardEvent) =>
-                evt.key === 'ArrowDown' || evt.key === 'ArrowRight',
-              isKeyBackward: (evt: KeyboardEvent) =>
-                evt.key === 'ArrowUp' || evt.key === 'ArrowLeft',
-              escapeDeactivates: stopPropagation,
-            }}
-          >
-            <Menu>
-              <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
-                {options.map((option) => (
-                  <MenuItem
-                    key={option.value}
-                    size="300"
-                    variant="Surface"
-                    aria-selected={option.value === value}
-                    radii="300"
-                    onClick={() => handleSelect(option.value)}
-                  >
-                    <Box grow="Yes">
-                      <Text size="T300">{option.label}</Text>
-                    </Box>
-                  </MenuItem>
-                ))}
-              </Box>
-            </Menu>
-          </FocusTrap>
-        }
-      />
-    </>
-  );
 }
 
 function NotificationTransportOverrideInput({
@@ -699,17 +591,11 @@ function BackgroundPushNotificationSetting() {
     await disableNativePush(mx, clientConfig);
   };
 
-  const activateAndroidAutoTransport = async (
-    currentKind: BackgroundPushKind | null
-  ): Promise<BackgroundPushKind> => {
+  const activateAndroidAutoTransport = async (): Promise<BackgroundPushKind> => {
     const nativeFallback = async (failureReason: string): Promise<BackgroundPushKind> => {
       const configError = getNativePushConfigError(clientConfig);
       if (configError) {
         throw new Error(`${failureReason} Native push fallback is unavailable: ${configError}`);
-      }
-
-      if (currentKind === 'native') {
-        return 'native';
       }
 
       await activateTransport('native');
@@ -752,7 +638,7 @@ function BackgroundPushNotificationSetting() {
       if (currentKind === 'unifiedpush') {
         return 'unifiedpush';
       }
-      return activateAndroidAutoTransport(currentKind);
+      return activateAndroidAutoTransport();
     }
 
     if (currentKind === nextPreferredKind) {
@@ -793,12 +679,19 @@ function BackgroundPushNotificationSetting() {
 
     try {
       if (backgroundPushEnabled) {
-        const nextKind = await switchBackgroundPushTransport({
-          previousKind,
-          activate: () => activateMode(nextMode, previousKind),
-          deactivate: deactivateTransport,
-        });
-        setBackgroundPushProvider(nextKind);
+        const plannedKind = resolvePreferredNotificationTransportProvider(
+          normalizeNotificationTransportMode(nextMode, runtimePlatform),
+          runtimePlatform
+        );
+        if (plannedKind !== previousKind) {
+          const nextKind = await switchBackgroundPushTransport({
+            previousKind,
+            activate: () => activateMode(nextMode, previousKind),
+            deactivate: deactivateTransport,
+            reactivate: activateTransport,
+          });
+          setBackgroundPushProvider(nextKind);
+        }
       } else {
         setBackgroundPushProvider(null);
       }
@@ -1053,20 +946,14 @@ export function SystemNotification() {
   return (
     <Box direction="Column" gap="100">
       <Text size="L400">System & Notifications</Text>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="In-App Notifications"
-          focusId="in-app-notifications"
-          description="Show a notification banner inside the app when a message arrives."
-          after={<Switch value={showInAppNotifs} onChange={setShowInAppNotifs} />}
-        />
-      </SequenceCard>
-      {(!mobileOrTablet() || isIosTauri()) && (
+      <SettingToggle
+        title="In-App Notifications"
+        focusId="in-app-notifications"
+        description="Show a notification banner inside the app when a message arrives."
+        value={showInAppNotifs}
+        onChange={setShowInAppNotifs}
+      />
+      {(!isMobileOrTablet() || isIosTauri()) && (
         <SequenceCard
           className={SequenceCardStyle}
           variant="SurfaceVariant"
@@ -1089,77 +976,42 @@ export function SystemNotification() {
       >
         <BackgroundPushNotificationSetting />
       </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="In-App Notification Sound"
-          focusId="in-app-notification-sound"
-          description="Play a sound inside the app when a new message arrives."
-          after={<Switch value={isNotificationSounds} onChange={setIsNotificationSounds} />}
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Show Message Content"
-          focusId="show-message-content"
-          description="Include message text in notification bodies."
-          after={<Switch value={showMessageContent} onChange={setShowMessageContent} />}
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Show Encrypted Message Content"
-          focusId="show-encrypted-message-content"
-          description="Allow message text from encrypted rooms in notification bodies. May not work on some platforms due to technical limitations."
-          after={
-            <Switch
-              value={showEncryptedMessageContent}
-              onChange={setShowEncryptedMessageContent}
-              disabled={!showMessageContent}
-            />
-          }
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Rich Push Payloads"
-          focusId="rich-push-payloads"
-          description="Include message content in push payloads for faster notifications. Your push gateway can see unencrypted message text."
-          after={<Switch value={useRichPushPayloads} onChange={setUseRichPushPayloads} />}
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Clear Notifications When Read Elsewhere"
-          focusId="clear-notifications-when-read-elsewhere"
-          description="Automatically dismiss notifications on this device when you read messages on another device."
-          after={<Switch value={clearNotificationsOnRead} onChange={setClearNotificationsOnRead} />}
-        />
-      </SequenceCard>
+      <SettingToggle
+        title="In-App Notification Sound"
+        focusId="in-app-notification-sound"
+        description="Play a sound inside the app when a new message arrives."
+        value={isNotificationSounds}
+        onChange={setIsNotificationSounds}
+      />
+      <SettingToggle
+        title="Show Message Content"
+        focusId="show-message-content"
+        description="Include message text in notification bodies."
+        value={showMessageContent}
+        onChange={setShowMessageContent}
+      />
+      <SettingToggle
+        title="Show Encrypted Message Content"
+        focusId="show-encrypted-message-content"
+        description="Allow message text from encrypted rooms in notification bodies. May not work on some platforms due to technical limitations."
+        value={showEncryptedMessageContent}
+        onChange={setShowEncryptedMessageContent}
+        disabled={!showMessageContent}
+      />
+      <SettingToggle
+        title="Rich Push Payloads"
+        focusId="rich-push-payloads"
+        description="Include message content in push payloads for faster notifications. Your push gateway can see unencrypted message text."
+        value={useRichPushPayloads}
+        onChange={setUseRichPushPayloads}
+      />
+      <SettingToggle
+        title="Clear Notifications When Read Elsewhere"
+        focusId="clear-notifications-when-read-elsewhere"
+        description="Automatically dismiss notifications on this device when you read messages on another device."
+        value={clearNotificationsOnRead}
+        onChange={setClearNotificationsOnRead}
+      />
       <SequenceCard
         className={SequenceCardStyle}
         variant="SurfaceVariant"
@@ -1184,83 +1036,41 @@ export function SystemNotification() {
       <Text size="T300" style={{ opacity: 0.7 }}>
         {badgeBehaviourSummary()}
       </Text>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Favicon Dot: Mentions Only"
-          focusId="favicon-dot-mentions-only"
-          description="Only change the browser tab favicon when you have mentions or keywords. Unreads without mentions won't affect the favicon."
-          after={
-            <Switch
-              variant="Primary"
-              value={faviconForMentionsOnly}
-              onChange={setFaviconForMentionsOnly}
-            />
-          }
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Show Room Counts"
-          focusId="show-room-counts"
-          description="Displays a number for unread activity in Rooms and Spaces."
-          after={
-            <Switch variant="Primary" value={showUnreadCounts} onChange={setShowUnreadCounts} />
-          }
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Show DM Counts"
-          focusId="show-dm-counts"
-          description="Displays a number for unread Direct Messages."
-          after={
-            <Switch variant="Primary" value={badgeCountDMsOnly} onChange={setBadgeCountDMsOnly} />
-          }
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Show Mention Counts"
-          focusId="show-mention-counts"
-          description="Displays a number for mentions and keyword alerts."
-          after={<Switch variant="Primary" value={showPingCounts} onChange={setShowPingCounts} />}
-        />
-      </SequenceCard>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Highlight Mentions"
-          focusId="highlight-mentions"
-          description="Highlight the full background message when it contains a mention/keyword."
-          after={
-            <Switch variant="Primary" value={highlightMentions} onChange={setHighlightMentions} />
-          }
-        />
-      </SequenceCard>
+      <SettingToggle
+        title="Favicon Dot: Mentions Only"
+        focusId="favicon-dot-mentions-only"
+        description="Only change the browser tab favicon when you have mentions or keywords. Unreads without mentions won't affect the favicon."
+        value={faviconForMentionsOnly}
+        onChange={setFaviconForMentionsOnly}
+      />
+      <SettingToggle
+        title="Show Room Counts"
+        focusId="show-room-counts"
+        description="Displays a number for unread activity in Rooms and Spaces."
+        value={showUnreadCounts}
+        onChange={setShowUnreadCounts}
+      />
+      <SettingToggle
+        title="Show DM Counts"
+        focusId="show-dm-counts"
+        description="Displays a number for unread Direct Messages."
+        value={badgeCountDMsOnly}
+        onChange={setBadgeCountDMsOnly}
+      />
+      <SettingToggle
+        title="Show Mention Counts"
+        focusId="show-mention-counts"
+        description="Displays a number for mentions and keyword alerts."
+        value={showPingCounts}
+        onChange={setShowPingCounts}
+      />
+      <SettingToggle
+        title="Highlight Mentions"
+        focusId="highlight-mentions"
+        description="Highlight the full background message when it contains a mention/keyword."
+        value={highlightMentions}
+        onChange={setHighlightMentions}
+      />
     </Box>
   );
 }

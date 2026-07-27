@@ -9,7 +9,6 @@
     "store:default",
     "notifications:default",
     "process:default",
-    "updater:default",
     "dialog:default"
   ]
 }

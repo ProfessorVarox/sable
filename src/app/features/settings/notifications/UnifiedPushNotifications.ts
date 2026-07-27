@@ -10,13 +10,11 @@ import {
   ENCRYPTED_MESSAGE_PREVIEW,
 } from '$utils/notificationStyle';
 import { getMxIdLocalPart } from '$utils/matrix';
-import { getStateEvent, getMemberAvatarMxc } from '$utils/room';
+import { getStateEvent } from '$utils/room/hierarchy';
+import { getMemberAvatarMxc } from '$utils/room/display';
 import { createDebugLogger } from '$utils/debugLogger';
 import {
-  getUnifiedPushDistributor,
-  getUnifiedPushDistributors,
   registerUnifiedPushTransport,
-  saveUnifiedPushDistributor,
   type UnifiedPushRegistrationResult,
   unregisterUnifiedPushTransport,
 } from './UnifiedPushTransport';
@@ -26,18 +24,12 @@ import {
 } from './UnifiedPushMessageListener';
 import { addPluginListener } from '@tauri-apps/api/core';
 import type { PushTransportConfig } from './NotificationTransport';
-import {
-  getTauriNotificationsApi,
-  isAndroidTauri,
-  isIosTauri,
-} from './TauriNotificationsApiClient';
+import { getTauriNotificationsApi, isMobileTauri } from './TauriNotificationsApiClient';
 import {
   resolvePushNotifyUrl,
   withPushPayloadFormat,
   type PushPusherSettings,
 } from './PushPusherConfig';
-
-export { getUnifiedPushDistributors, getUnifiedPushDistributor, saveUnifiedPushDistributor };
 
 const UP_PUBLIC_GATEWAY = 'https://matrix.gateway.unifiedpush.org/_matrix/push/v1/notify';
 export const DEFAULT_UNIFIED_PUSH_APP_ID = 'moe.sable.up';
@@ -312,6 +304,7 @@ type NotificationSettings = {
 
 const NOTIF_GROUP_KEY = 'matrix_messages';
 const MAX_MESSAGES = 10;
+const MAX_SEEN_EVENT_IDS = 200;
 
 type NotifPerson = {
   name: string;
@@ -389,11 +382,11 @@ const roomNotifId = (userId: string, roomId: string) => hashCode(`${userId}\u000
 const summaryNotifId = (userId: string) => hashCode(`sable-group-summary\u0000${userId}`);
 
 type RoomNotifCache = {
+  key: string;
   roomName: string;
   messages: NotifMessage[];
   seenEventIds: Set<string>;
   isGroupConversation: boolean;
-  latestEventId?: string;
 };
 
 const roomNotifCaches = new Map<string, RoomNotifCache>();
@@ -410,7 +403,7 @@ function getOrCreateRoomCache(userId: string, roomId: string, roomName: string):
   const key = `${userId}\u0000${roomId}`;
   let cache = roomNotifCaches.get(key);
   if (!cache) {
-    cache = { roomName, messages: [], seenEventIds: new Set(), isGroupConversation: false };
+    cache = { key, roomName, messages: [], seenEventIds: new Set(), isGroupConversation: false };
     roomNotifCaches.set(key, cache);
   }
   cache.roomName = roomName;
@@ -463,7 +456,7 @@ async function postRoomNotification(
     silent: isSilent,
     autoCancel: true,
     extra,
-    ...(isAndroidTauri() || isIosTauri() ? { actionTypeId: 'sable-message' } : {}),
+    ...(isMobileTauri() ? { actionTypeId: 'sable-message' } : {}),
     inboxLines: inboxLines.length > 1 ? inboxLines : undefined,
     largeBody: inboxLines.length > 1 ? undefined : latestBody,
   });
@@ -605,7 +598,6 @@ async function handleRichPushPayload(
       if (cache.messages.length > MAX_MESSAGES) {
         cache.messages = cache.messages.slice(-MAX_MESSAGES);
       }
-      cache.latestEventId = eventId;
 
       const room = settings.mx.getRoom(roomId);
       if (room) {
@@ -701,29 +693,7 @@ async function handleMinimalPushPayload(
     }
   }
 
-  if (
-    !previewText &&
-    eventId &&
-    settings.showMessageContent &&
-    (!isEncryptedRoom || settings.showEncryptedMessageContent)
-  ) {
-    const fetched = await resolvePreviewEvent(settings.mx, roomId, eventId);
-    if (fetched) {
-      const sender = fetched.getSender();
-      if (sender) {
-        senderName = room?.getMember(sender)?.name ?? getMxIdLocalPart(sender) ?? sender;
-        senderId = sender;
-      }
-      previewText = resolveNotificationPreviewText({
-        content: fetched.getContent(),
-        eventType: fetched.getType(),
-        isEncryptedRoom,
-        showMessageContent: settings.showMessageContent,
-        showEncryptedMessageContent: settings.showEncryptedMessageContent,
-      });
-    }
-  }
-
+  const hasInMemoryPreview = Boolean(previewText);
   if (!previewText) {
     previewText = isEncryptedRoom ? 'Encrypted message' : 'New message';
   }
@@ -745,13 +715,18 @@ async function handleMinimalPushPayload(
   const cache = getOrCreateRoomCache(userId, roomId, roomName);
 
   if (eventId && cache.seenEventIds.has(eventId)) return;
-  if (eventId) cache.seenEventIds.add(eventId);
+  if (eventId) {
+    cache.seenEventIds.add(eventId);
+    if (cache.seenEventIds.size > MAX_SEEN_EVENT_IDS) {
+      const oldest = cache.seenEventIds.values().next().value;
+      if (oldest !== undefined) cache.seenEventIds.delete(oldest);
+    }
+  }
 
   cache.messages.push(message);
   if (cache.messages.length > MAX_MESSAGES) {
     cache.messages = cache.messages.slice(-MAX_MESSAGES);
   }
-  cache.latestEventId = eventId;
 
   if (room) {
     cache.isGroupConversation = (room.getJoinedMemberCount() ?? 0) > 2;
@@ -762,6 +737,62 @@ async function handleMinimalPushPayload(
     event_id: eventId,
     user_id: pushData?.user_id,
   });
+
+  if (
+    !hasInMemoryPreview &&
+    eventId &&
+    settings.showMessageContent &&
+    (!isEncryptedRoom || settings.showEncryptedMessageContent)
+  ) {
+    resolvePreviewEvent(settings.mx, roomId, eventId)
+      .then(async (fetched) => {
+        // Skip if the notification was dismissed/replaced or the message evicted while fetching.
+        if (!fetched || roomNotifCaches.get(cache.key) !== cache) return;
+        if (!cache.messages.includes(message)) return;
+
+        // Trust the fetched event's own encryption, not the (possibly-absent) room.
+        const eventEncrypted = isEncryptedRoom || fetched.isEncrypted();
+        const enrichedPreview = resolveNotificationPreviewText({
+          content: fetched.getContent(),
+          eventType: fetched.getType(),
+          isEncryptedRoom: eventEncrypted,
+          showMessageContent: settings.showMessageContent,
+          showEncryptedMessageContent: settings.showEncryptedMessageContent,
+        });
+        if (!enrichedPreview) return;
+
+        const fetchedSender = fetched.getSender();
+        if (fetchedSender) {
+          senderName =
+            room?.getMember(fetchedSender)?.name ??
+            getMxIdLocalPart(fetchedSender) ??
+            fetchedSender;
+          senderId = fetchedSender;
+        }
+        message.text = enrichedPreview;
+        message.sender = senderName
+          ? {
+              name: senderName,
+              key: senderId,
+              iconUrl:
+                senderId && roomId ? resolveAvatarUrl(settings.mx, roomId, senderId) : undefined,
+            }
+          : sender;
+
+        await postRoomNotification(userId, roomId, cache, true, {
+          room_id: roomId,
+          event_id: eventId,
+          user_id: pushData?.user_id,
+        });
+      })
+      .catch((error) => {
+        unifiedPushLog.warn(
+          'notification',
+          'Background preview fetch failed',
+          error instanceof Error ? error : new Error(String(error))
+        );
+      });
+  }
 }
 
 async function handleUnifiedPushPayload(

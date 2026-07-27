@@ -28,12 +28,9 @@ import { SlidingSyncSidebarCache } from './slidingSyncSidebarCache';
 const log = createLogger('slidingSync');
 const debugLog = createDebugLogger('slidingSync');
 
-export const LIST_JOINED = 'joined';
-export const LIST_INVITES = 'invites';
-export const LIST_UPDATES = 'updates';
-export const LIST_SEARCH = 'search';
-export const LIST_ROOM_SEARCH = 'room_search';
-export const LIST_SPACE = 'space';
+const LIST_JOINED = 'joined';
+const LIST_INVITES = 'invites';
+const LIST_UPDATES = 'updates';
 const LIST_TIMELINE_LIMIT = 1;
 const LIST_PAGE_SIZE = 30;
 const STEADY_STATE_DETAILED_ROOMS = 3;
@@ -579,7 +576,6 @@ export class SlidingSyncManager {
 
   public attach(): void {
     debugLog.info('sync', 'Attaching sliding sync listeners', {
-      baseUrl: this.baseUrl,
       roomTimelineLimit: this.roomTimelineLimit,
       lists: this.listKeys,
     });
@@ -590,7 +586,6 @@ export class SlidingSyncManager {
       op: 'matrix.sync',
       attributes: {
         'sync.transport': 'sliding',
-        'sync.base_url': this.baseUrl,
       },
     });
 
@@ -690,6 +685,15 @@ export class SlidingSyncManager {
       this.sidebarCacheReconciled = true;
 
       const validRoomIds = new Set([...this.serverMembershipRoomIds, ...joinedRoomIds]);
+
+      this.sidebarCache.clearInviteStateForRooms(joinedRoomIds);
+
+      joinedRoomIds.forEach((roomId) => {
+        const room = this.mx.getRoom(roomId);
+        if (room?.getMyMembership() === (KnownMembership.Invite as string)) {
+          room.updateMyMembership(KnownMembership.Join);
+        }
+      });
 
       const removedRoomIds = this.sidebarCache.reconcileRooms(validRoomIds);
       removedRoomIds.forEach((roomId) => {
@@ -954,29 +958,6 @@ export class SlidingSyncManager {
       });
     }
     return this.slidingSync.getListParams(listKey) ?? list;
-  }
-
-  public setRoomNameSearch(query: string | null): void {
-    if (this.disposed) return;
-    const trimmed = query?.trim() ?? '';
-    const filters: MSC3575List['filters'] = trimmed ? { room_name_like: trimmed } : {};
-    this.ensureListRegistered(LIST_ROOM_SEARCH, {
-      filters,
-      ranges: [[0, 19]],
-      sort: LIST_SORT_ORDER,
-    });
-  }
-
-  public setSpaceScope(spaceId: string | null): void {
-    if (this.disposed) return;
-    const filters: MSC3575List['filters'] = spaceId
-      ? { is_invite: false, spaces: [spaceId] }
-      : { is_invite: false };
-    this.ensureListRegistered(LIST_SPACE, {
-      filters,
-      ranges: spaceId ? [[0, LIST_PAGE_SIZE - 1]] : [[0, 0]],
-      sort: LIST_SORT_ORDER,
-    });
   }
 
   public isRoomActive(roomId: string): boolean {

@@ -11,6 +11,7 @@ import type { TUploadAtom } from '$state/upload';
 import { createUploadAtom } from '$state/upload';
 import { replaceSpaceWithDash } from '$utils/common';
 import { SettingTile } from '$components/setting-tile';
+import { Image as MediaImage } from '$components/media';
 import * as css from './style.css';
 import { UsageSwitcher, useUsageStr } from './UsageSwitcher';
 
@@ -40,7 +41,7 @@ export function ImageTile({
   return (
     <SettingTile
       before={
-        <img
+        <MediaImage
           className={css.ImagePackImage}
           src={mxcUrlToHttp(mx, image.url, useAuthentication) ?? undefined}
           alt={image.shortcode}
@@ -102,7 +103,7 @@ export function ImageTileUpload({ file, children }: ImageTileUploadProps) {
   const uploadAtom = useMemo(() => createUploadAtom(file), [file]);
 
   return (
-    <SettingTile before={<img className={css.ImagePackImage} src={url} alt={file.name} />}>
+    <SettingTile before={<MediaImage className={css.ImagePackImage} src={url} alt={file.name} />}>
       {children(uploadAtom)}
     </SettingTile>
   );
@@ -164,7 +165,7 @@ export function ImageTileEdit({
   return (
     <SettingTile
       before={
-        <img
+        <MediaImage
           className={css.ImagePackImage}
           src={mxcUrlToHttp(mx, image.url, useAuthentication) ?? undefined}
           alt={image.shortcode}

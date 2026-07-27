@@ -17,6 +17,7 @@ import {
 import type { HTMLReactParserOptions } from 'html-react-parser';
 import { Play, Pause } from '@phosphor-icons/react';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
+import { Image as MediaImage } from '$components/media';
 import type { Opts as LinkifyOpts } from 'linkifyjs';
 import { getReactCustomHtmlParser, LINKIFY_OPTS } from '$plugins/react-custom-html-parser';
 import { useSpoilerClickHandler } from '$hooks/useSpoilerClickHandler';
@@ -25,6 +26,7 @@ import type { UploadSuccess } from '$state/upload';
 import { UploadStatus, useBindUploadAtom } from '$state/upload';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import type { TUploadContent } from '$utils/matrix';
+import { isImageMimeType } from '$utils/mimeTypes';
 import { bytesToSize } from '$utils/common';
 import type { TUploadItem, TUploadMetadata } from '$state/room/roomInputDrafts';
 import { roomUploadAtomFamily } from '$state/room/roomInputDrafts';
@@ -41,7 +43,7 @@ function getFileTypeIconComponent(fileType: string): PhosphorIcon {
   const type = fileType.toLowerCase();
   if (type.startsWith('audio')) return Play;
   if (type.startsWith('video')) return VideoCamera;
-  if (type.startsWith('image')) return Image;
+  if (isImageMimeType(type)) return Image;
   return File;
 }
 
@@ -53,7 +55,7 @@ function PreviewImage({ fileItem }: Readonly<PreviewImageProps>) {
   const fileUrl = useObjectURL(originalFile);
 
   return (
-    <img
+    <MediaImage
       style={{
         objectFit: 'contain',
         width: '100%',
@@ -503,7 +505,7 @@ export function UploadCardRenderer({
       }
       bottom={
         <>
-          {fileItem.originalFile.type.startsWith('image') && (
+          {isImageMimeType(fileItem.originalFile.type) && (
             <MediaPreview fileItem={fileItem} onSpoiler={handleSpoiler}>
               <PreviewImage fileItem={fileItem} />
             </MediaPreview>

@@ -1,9 +1,10 @@
 import classNames from 'classnames';
 import { Box, Chip, Header, IconButton, Text, as } from 'folds';
 import { ArrowLeft, sizedIcon } from '$components/icons/phosphor';
+import { Image as MediaImage } from '$components/media';
 import * as css from './ImageEditor.css';
 
-export type ImageEditorProps = {
+type ImageEditorProps = {
   name: string;
   url: string;
   requestClose: () => void;
@@ -43,7 +44,7 @@ export const ImageEditor = as<'div', ImageEditorProps>(
           justifyContent="Center"
           alignItems="Center"
         >
-          <img className={css.Image} src={url} alt={name} />
+          <MediaImage className={css.Image} src={url} alt={name} />
         </Box>
       </Box>
     );

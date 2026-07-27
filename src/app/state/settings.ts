@@ -1,6 +1,7 @@
 import { atom, type WritableAtom } from 'jotai';
 import type { Store } from 'jotai/vanilla/store';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isNightly } from '$utils/platform';
+import { isMobileOrTablet } from '$utils/platform';
 import type {
   NotificationTransportMode,
   NotificationTransportProvider,
@@ -46,7 +47,7 @@ export type JumboEmojiSize = 'none' | 'extraSmall' | 'small' | 'normal' | 'large
 
 /** Reorderable inline trigger buttons in the message composer. */
 export type EditorButtonId = 'gif' | 'sticker' | 'emoji';
-export const EDITOR_BUTTON_ORDER_DEFAULT: EditorButtonId[] = ['gif', 'sticker', 'emoji'];
+const EDITOR_BUTTON_ORDER_DEFAULT: EditorButtonId[] = ['gif', 'sticker', 'emoji'];
 const EDITOR_BUTTON_ORDER_VALUES = new Set<EditorButtonId>(EDITOR_BUTTON_ORDER_DEFAULT);
 export const CALL_TONE_IDS = [
   'sable-default',
@@ -130,6 +131,7 @@ export interface Settings {
   editorStickerButton: boolean;
   editorButtonOrder: EditorButtonId[];
   composerToolbarOpen: boolean;
+  alwaysInlineEditor: boolean;
   messageLayout: MessageLayout;
   messageSpacing: MessageSpacing;
   hideMembershipEvents: boolean;
@@ -204,7 +206,6 @@ export interface Settings {
 
   // Sable features!
   sendPresence: boolean;
-  mobileGestures: boolean;
   rightSwipeAction: RightSwipeAction;
   hideMembershipInReadOnly: boolean;
   useRightBubbles: boolean;
@@ -299,7 +300,7 @@ export const defaultSettings: Settings = {
   isPeopleDrawer: true,
   isWidgetDrawer: false,
   memberSortFilterIndex: 0,
-  enterForNewline: mobileOrTablet(),
+  enterForNewline: isMobileOrTablet(),
   editorToolbar: false,
   editorOldAddFile: false,
   editorMicButton: true,
@@ -308,6 +309,7 @@ export const defaultSettings: Settings = {
   editorStickerButton: false,
   editorButtonOrder: [...EDITOR_BUTTON_ORDER_DEFAULT],
   composerToolbarOpen: false,
+  alwaysInlineEditor: false,
   messageLayout: 0,
   messageSpacing: '400',
   hideMembershipEvents: false,
@@ -339,10 +341,10 @@ export const defaultSettings: Settings = {
   // Push notifications (SW/Sygnal): default on for mobile, opt-in on desktop.
   // In-app pill banner: default on for mobile (primary foreground alert), opt-in on desktop.
   // System (OS) notifications: desktop-only; hidden and disabled on mobile.
-  usePushNotifications: mobileOrTablet(),
+  usePushNotifications: isMobileOrTablet(),
   useUnifiedPush: false,
-  useInAppNotifications: mobileOrTablet(),
-  useSystemNotifications: !mobileOrTablet(),
+  useInAppNotifications: isMobileOrTablet(),
+  useSystemNotifications: !isMobileOrTablet(),
   isNotificationSounds: true,
   backgroundNotificationSounds: true,
   showMessageContentInNotifications: false,
@@ -350,7 +352,7 @@ export const defaultSettings: Settings = {
   useRichPushPayloads: true,
   pushNotifyUrlOverride: undefined,
   clearNotificationsOnRead: false,
-  backgroundPushEnabled: mobileOrTablet(),
+  backgroundPushEnabled: isMobileOrTablet(),
   backgroundPushProvider: null,
   pushTransportMode: 'auto',
   pushTransportOverride: {},
@@ -372,7 +374,7 @@ export const defaultSettings: Settings = {
   privacyBlurEmotes: false,
   showPronouns: true,
   parsePronouns: true,
-  pronounPillMaxCount: mobileOrTablet() ? 1 : 3,
+  pronounPillMaxCount: isMobileOrTablet() ? 1 : 3,
   pronounPillMaxLength: 16,
   renderGlobalNameColors: true,
   renderUserCards: 'both',
@@ -383,7 +385,6 @@ export const defaultSettings: Settings = {
 
   // Sable features!
   sendPresence: true,
-  mobileGestures: true,
   rightSwipeAction: RightSwipeAction.Reply,
   hideMembershipInReadOnly: true,
   useRightBubbles: false,
@@ -773,7 +774,7 @@ export function sanitizeSettingsDefaults(raw: unknown): Partial<Settings> {
     }
   }
 
-  if (import.meta.env.DEV && warnings.length > 0) {
+  if (isNightly() && warnings.length > 0) {
     console.warn(
       '[config.settingsDefaults] ignored unknown or invalid keys:',
       [...new Set(warnings)].slice(0, 25).join(', ')
@@ -790,7 +791,7 @@ export function resetRuntimeSettingsDefaults(): void {
   runtimeSettingsDefaults = {};
 }
 
-export const baseSettings = atom<Settings>(cloneDefaultSettings());
+const baseSettings = atom<Settings>(cloneDefaultSettings());
 
 export function bootstrapSettingsStore(store: Store, rawSettingsDefaults: unknown): void {
   const sanitized = sanitizeSettingsDefaults(rawSettingsDefaults);

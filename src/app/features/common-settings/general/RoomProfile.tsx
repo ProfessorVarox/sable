@@ -1,38 +1,14 @@
-import {
-  Avatar,
-  Box,
-  Button,
-  Chip,
-  color,
-  config,
-  Dialog,
-  Header,
-  IconButton,
-  Input,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
-  Spinner,
-  Text,
-  TextArea,
-} from 'folds';
-import {
-  ArrowsClockwise,
-  chipIcon,
-  composerIcon,
-  menuIcon,
-  PencilSimple,
-  X,
-} from '$components/icons/phosphor';
+import { Avatar, Box, Chip, config, Input, Text, TextArea } from 'folds';
+import { ArrowsClockwise, chipIcon, menuIcon, PencilSimple } from '$components/icons/phosphor';
 import type { FormEventHandler } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import Linkify from 'linkify-react';
 import classNames from 'classnames';
-import type { MatrixError, StateEvents } from '$types/matrix-sdk';
+import type { StateEvents } from '$types/matrix-sdk';
 import { JoinRule, EventType } from '$types/matrix-sdk';
-import { SequenceCard } from '$components/sequence-card';
-import { SequenceCardStyle } from '$features/room-settings/styles.css';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
+import { Image as MediaImage } from '$components/media';
 import { useRoom } from '$hooks/useRoom';
 import { useRoomAvatar, useRoomJoinRule, useRoomName, useRoomTopic } from '$hooks/useRoomMeta';
 import { mDirectAtom } from '$state/mDirectList';
@@ -57,9 +33,10 @@ import { useStateEvent } from '$hooks/useStateEvent';
 import type { RoomBannerContent } from '$types/matrix-sdk-events';
 import { CustomStateEvent } from '$types/matrix/room';
 import { SettingTile } from '$components/setting-tile';
-import { stopPropagation } from '$utils/keyboard';
-import FocusTrap from 'focus-trap-react';
+import { confirm } from '$components/confirm/confirm';
 import { reportMediaLoadFailure } from '$utils/mediaLoadDiagnostics';
+import { AsyncError } from '$components/AsyncError';
+import { Button } from '$components/button';
 
 type RoomProfileEditProps = {
   canEditAvatar: boolean;
@@ -71,7 +48,7 @@ type RoomProfileEditProps = {
   isDm: boolean;
   onClose: () => void;
 };
-export function RoomProfileEdit({
+function RoomProfileEdit({
   canEditAvatar,
   canEditName,
   canEditTopic,
@@ -285,19 +262,17 @@ export function RoomProfileEdit({
           readOnly={!canEditTopic || submitting}
         />
       </Box>
-      {submitState.status === AsyncStatus.Error && (
-        <Text size="T200" style={{ color: color.Critical.Main }}>
-          {(submitState.error as MatrixError).message}
-        </Text>
-      )}
+      <AsyncError state={submitState} />
       <Box gap="300">
         <Button
           type="submit"
           variant="Success"
           size="300"
           radii="300"
-          disabled={uploadingAvatar || submitting}
-          before={submitting && <Spinner size="100" variant="Success" fill="Solid" />}
+          disabled={uploadingAvatar}
+          loading={submitting}
+          spinnerVariant="Success"
+          spinnerSize="100"
         >
           <Text size="B300">Save</Text>
         </Button>
@@ -322,8 +297,6 @@ export type ProfileProps = {
 };
 function RoomBannerEdit({ bannerURI, permissions }: Readonly<ProfileProps>) {
   const mx = useMatrixClient();
-  const [alertRemove, setAlertRemove] = useState(false);
-
   const space = useRoom();
 
   const userId = mx.getUserId() ?? '';
@@ -372,13 +345,18 @@ function RoomBannerEdit({ bannerURI, permissions }: Readonly<ProfileProps>) {
   );
 
   const handleRemoveBanner = async () => {
-    setIsRemoving(true);
-    setStagedUrl(undefined);
-    setImageFile(undefined);
-
-    mx.sendStateEvent(space.roomId, CustomStateEvent.RoomBanner, { url: '' }, '');
-
-    setAlertRemove(false);
+    const ok = await confirm({
+      title: 'Remove Banner',
+      description: 'Are you sure you want to remove profile banner?',
+      action: 'Remove',
+      variant: 'Critical',
+    });
+    if (ok) {
+      setIsRemoving(true);
+      setStagedUrl(undefined);
+      setImageFile(undefined);
+      mx.sendStateEvent(space.roomId, CustomStateEvent.RoomBanner, { url: '' }, '');
+    }
   };
 
   const previewUrl = isRemoving ? undefined : imageFileURL || stagedUrl || bannerUrl;
@@ -400,7 +378,7 @@ function RoomBannerEdit({ bannerURI, permissions }: Readonly<ProfileProps>) {
           }}
         >
           {previewUrl ? (
-            <img
+            <MediaImage
               src={previewUrl}
               key={previewUrl}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
@@ -443,7 +421,7 @@ function RoomBannerEdit({ bannerURI, permissions }: Readonly<ProfileProps>) {
                 variant="Critical"
                 fill="None"
                 radii="300"
-                onClick={() => setAlertRemove(true)}
+                onClick={handleRemoveBanner}
                 disabled={!canEdit}
               >
                 <Text size="B300">Remove</Text>
@@ -452,43 +430,6 @@ function RoomBannerEdit({ bannerURI, permissions }: Readonly<ProfileProps>) {
           </Box>
         )}
       </Box>
-
-      <Overlay open={alertRemove} backdrop={<OverlayBackdrop />}>
-        <OverlayCenter>
-          <FocusTrap
-            focusTrapOptions={{
-              initialFocus: false,
-              onDeactivate: () => setAlertRemove(false),
-              clickOutsideDeactivates: true,
-              escapeDeactivates: stopPropagation,
-            }}
-          >
-            <Dialog variant="Surface">
-              <Header
-                style={{
-                  padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
-                  borderBottomWidth: config.borderWidth.B300,
-                }}
-                variant="Surface"
-                size="500"
-              >
-                <Box grow="Yes">
-                  <Text size="H4">Remove Banner</Text>
-                </Box>
-                <IconButton size="300" onClick={() => setAlertRemove(false)} radii="300">
-                  {composerIcon(X)}
-                </IconButton>
-              </Header>
-              <Box style={{ padding: config.space.S400 }} direction="Column" gap="400">
-                <Text priority="400">Are you sure you want to remove profile banner?</Text>
-                <Button variant="Critical" onClick={handleRemoveBanner} disabled={!canEdit}>
-                  <Text size="B400">Remove</Text>
-                </Button>
-              </Box>
-            </Dialog>
-          </FocusTrap>
-        </OverlayCenter>
-      </Overlay>
     </SettingTile>
   );
 }

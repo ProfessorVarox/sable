@@ -5,14 +5,36 @@
  * of the Sentry initialisation side-effects.
  */
 
+/** Hosts that identify the app shell, not a user's homeserver. Never redacted. */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', 'tauri.localhost']);
+
+// Also preserve the app's own origin so Sentry can show which page an error occurred on.
+if (typeof window !== 'undefined' && window.location) {
+  try {
+    const appHost = new URL(window.location.origin).hostname.toLowerCase();
+    if (appHost) LOCAL_HOSTS.add(appHost);
+  } catch {
+    /* invalid origin, ignore */
+  }
+}
+
+/** Replace the origin of any external http(s) URL with [HOMESERVER], keeping path/query/hash. */
+export function scrubExternalHosts(value: string): string {
+  return value.replace(/\bhttps?:\/\/[^/?#\s]+/gi, (match) => {
+    const schemeEnd = match.indexOf('://') + 3;
+    const hostname = (match.slice(schemeEnd).split(':')[0] ?? '').toLowerCase();
+    if (LOCAL_HOSTS.has(hostname)) return match;
+    return `${match.slice(0, schemeEnd)}[HOMESERVER]`;
+  });
+}
+
 /**
- * Scrub Matrix entity IDs and credential tokens from a plain string value.
- * Handles the sigil-prefixed forms: !roomId:server, @userId:server, $eventId,
- * #alias:server, and common credential token query-string / JSON patterns.
- * Used for structured log attribute values and breadcrumb data fields.
+ * Scrub Matrix entity IDs, credential tokens, and external http(s) hosts from a
+ * plain string value. Used for structured log attribute values and breadcrumb
+ * data fields.
  */
 export function scrubMatrixIds(value: string): string {
-  return value
+  return scrubExternalHosts(value)
     .replace(
       /(access_token|password|token|refresh_token|session_id|sync_token|next_batch)([=:\s]+)([^\s&]+)/gi,
       '$1$2[REDACTED]'
@@ -39,7 +61,7 @@ export function scrubDataObject(data: unknown): unknown {
 }
 
 /** Structured fields that should never be sent to Sentry, even redacted. */
-export const SENTRY_IDENTIFIER_KEYS = new Set([
+const SENTRY_IDENTIFIER_KEYS = new Set([
   'roomId',
   'notificationEventId',
   'refEventId',
@@ -83,7 +105,7 @@ export function sanitizeSentryPayload(data: unknown): unknown {
  */
 export function scrubMatrixUrl(url: string): string {
   return (
-    url
+    scrubExternalHosts(url)
       // ── Matrix Client-Server API paths ──────────────────────────────────────────────
       // /rooms/!roomId:server/...
       .replace(/\/rooms\/![^/?#\s]*/g, '/rooms/![ROOM_ID]')

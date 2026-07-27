@@ -6,10 +6,21 @@ const tauriApi = vi.hoisted(() => ({
 const commands = vi.hoisted(() => ({
   clearMediaSession: vi.fn<() => Promise<void>>(),
   setMediaSession:
-    vi.fn<({ baseUrl, token }: { baseUrl: string; token: string }) => Promise<void>>(),
+    vi.fn<
+      ({
+        baseUrl,
+        token,
+        scope,
+      }: {
+        baseUrl: string;
+        token: string;
+        scope?: string;
+      }) => Promise<void>
+    >(),
 }));
 const mediaTransport = vi.hoisted(() => ({
-  getActiveMediaSession: vi.fn<() => { baseUrl: string; accessToken: string } | undefined>(),
+  getActiveMediaSession:
+    vi.fn<() => { baseUrl: string; accessToken: string; userId: string } | undefined>(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => tauriApi);
@@ -37,8 +48,8 @@ describe('Tauri media session coordinator', () => {
       )
       .mockResolvedValueOnce();
 
-    const first = updateTauriMediaSession('https://one.example', 'one');
-    const second = updateTauriMediaSession('https://two.example', 'two');
+    const first = updateTauriMediaSession('https://one.example', 'one', '@a:one.example');
+    const second = updateTauriMediaSession('https://two.example', 'two', '@b:two.example');
     const clear = updateTauriMediaSession();
 
     await Promise.resolve();
@@ -49,10 +60,12 @@ describe('Tauri media session coordinator', () => {
     expect(commands.setMediaSession).toHaveBeenNthCalledWith(1, {
       baseUrl: 'https://one.example',
       token: 'one',
+      scope: '@a:one.example',
     });
     expect(commands.setMediaSession).toHaveBeenNthCalledWith(2, {
       baseUrl: 'https://two.example',
       token: 'two',
+      scope: '@b:two.example',
     });
     expect(commands.clearMediaSession).toHaveBeenCalledTimes(1);
   });
@@ -62,6 +75,7 @@ describe('Tauri media session coordinator', () => {
     mediaTransport.getActiveMediaSession.mockReturnValue({
       baseUrl: 'https://matrix.example',
       accessToken: 'token',
+      userId: '@a:matrix.example',
     });
     commands.setMediaSession.mockImplementation(
       () =>
@@ -81,5 +95,21 @@ describe('Tauri media session coordinator', () => {
     resolveWrite?.();
     await ready;
     expect(complete).toBe(true);
+  });
+
+  it('keys the native media cache on the user ID, not the rotating access token', async () => {
+    mediaTransport.getActiveMediaSession.mockReturnValue({
+      baseUrl: 'https://matrix.example',
+      accessToken: 'access-token-v1',
+      userId: '@a:matrix.example',
+    });
+
+    await initTauriMediaSession();
+    await updateTauriMediaSession('https://matrix.example', 'access-token-v2', '@a:matrix.example');
+
+    // A token refresh must not change `scope`, otherwise every cached avatar and image is
+    // orphaned and re-downloaded.
+    const scopes = commands.setMediaSession.mock.calls.map(([params]) => params.scope);
+    expect(scopes).toEqual(['@a:matrix.example', '@a:matrix.example']);
   });
 });

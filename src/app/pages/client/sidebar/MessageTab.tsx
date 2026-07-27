@@ -8,12 +8,11 @@ import { getPhosphorIconSize } from '$components/icons/phosphor';
 import { matchPath, useNavigate } from 'react-router-dom';
 import { HOME_PATH, SETTINGS_PATH } from '$pages/paths';
 import { ChatTextIcon } from '@phosphor-icons/react';
-import { useAtom, useAtomValue } from 'jotai';
-import { searchModalAtom } from '$state/searchModal';
-import { useInboxSelected } from '$hooks/router/useInbox';
+import { useAtomValue } from 'jotai';
+import { useInboxSelected } from '$hooks/router/useRouteSelected';
 import { Box, color, Text, toRem } from 'folds';
-import { useNavigateSelected } from '$hooks/router/useNavigateSelected';
-import { useProfileSelected } from '$hooks/router/useProfileSelected';
+import { useNavigateSelected } from '$hooks/router/useRouteSelected';
+import { useProfileSelected } from '$hooks/router/useRouteSelected';
 import { getSpacePath } from '$pages/pathUtils';
 import { lastVisitedSpaceIdAtom } from '$state/room/lastSpace';
 import { allRoomsAtom } from '$state/room-list/roomList';
@@ -30,13 +29,11 @@ export function MessageTab({ isBottom, isMobile }: { isBottom?: boolean; isMobil
 
   const navigate = useNavigate();
   const lastSpaceId = useAtomValue(lastVisitedSpaceIdAtom);
-  const [searchSelected] = useAtom(searchModalAtom);
   const navigateRouteActive = useNavigateSelected();
   const profileRouteActive = useProfileSelected();
   const inboxSelected = useInboxSelected();
   const opened = !(
     matchPath(SETTINGS_PATH, location.pathname) ||
-    searchSelected ||
     navigateRouteActive ||
     profileRouteActive ||
     inboxSelected
@@ -49,7 +46,7 @@ export function MessageTab({ isBottom, isMobile }: { isBottom?: boolean; isMobil
 
     navigate(getSpacePath(lastSpaceId));
   };
-  const mobileTapActivation = useMobileTapActivation(isMobile ?? false, onBack);
+  const mobileTapActivation = useMobileTapActivation(isMobile ?? false, onBack, onBack);
 
   const [showUnreadCounts] = useSetting(settingsAtom, 'showUnreadCounts');
   const [badgeCountDMsOnly] = useSetting(settingsAtom, 'badgeCountDMsOnly');
@@ -73,7 +70,6 @@ export function MessageTab({ isBottom, isMobile }: { isBottom?: boolean; isMobil
               as="button"
               ref={triggerRef}
               outlined={!isMobile}
-              onClick={onBack}
               {...mobileTapActivation}
               size={'400'}
             >

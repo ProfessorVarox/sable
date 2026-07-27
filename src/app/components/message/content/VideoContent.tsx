@@ -32,7 +32,7 @@ import {
 } from '$utils/matrix';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
-import { useRevokeObjectURL } from '$hooks/useObjectURL';
+import { useCreateObjectURL } from '$hooks/useObjectURL';
 import { validBlurHash } from '$utils/blurHash';
 import * as css from './style.css';
 import { MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME } from '../../../../unstable/prefixes';
@@ -45,6 +45,7 @@ type RenderVideoProps = {
   onError: () => void;
   autoPlay: boolean;
   controls: boolean;
+  crossOrigin?: 'anonymous';
 };
 type VideoContentProps = {
   body: string;
@@ -85,6 +86,8 @@ export const VideoContent = as<'div', VideoContentProps>(
     const [blurred, setBlurred] = useState(markedAsSpoiler ?? false);
     const [isHovered, setIsHovered] = useState(false);
 
+    const createObjectURL = useCreateObjectURL();
+
     const [srcState, loadSrc] = useAsyncCallback(
       useCallback(async () => {
         if (url.startsWith('http')) return url;
@@ -98,14 +101,12 @@ export const VideoContent = as<'div', VideoContentProps>(
             await setMediaEncryption(mediaUrl, encInfo, mimeType);
             return rewriteAuthenticatedMediaUrl(mediaUrl)!;
           }
-          const fileContent = await downloadEncryptedMedia(mediaUrl, (encBuf) =>
-            decryptFile(encBuf, mimeType, encInfo)
+          return createObjectURL(
+            downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
           );
-          return URL.createObjectURL(fileContent);
         }
-        const fileContent = await downloadMedia(mediaUrl);
-        return URL.createObjectURL(fileContent);
-      }, [mx, url, useAuthentication, mimeType, encInfo])
+        return createObjectURL(downloadMedia(mediaUrl));
+      }, [mx, url, useAuthentication, mimeType, encInfo, createObjectURL])
     );
 
     // When the source download succeeds, reset video-element error state so the
@@ -115,6 +116,11 @@ export const VideoContent = as<'div', VideoContentProps>(
         setError(false);
       }
     }, [srcState.status]);
+
+    const streamsAuthenticatedMedia =
+      srcState.status === AsyncStatus.Success &&
+      !url.startsWith('http') &&
+      !srcState.data.startsWith('blob:');
 
     const handleLoad = () => {
       setLoad(true);
@@ -132,14 +138,12 @@ export const VideoContent = as<'div', VideoContentProps>(
 
     const handleRetry = () => {
       setError(false);
-      loadSrc();
+      loadSrc().catch(() => undefined);
     };
 
     useEffect(() => {
-      if (autoPlay) loadSrc();
+      if (autoPlay) loadSrc().catch(() => undefined);
     }, [autoPlay, loadSrc]);
-
-    useRevokeObjectURL(srcState.status === AsyncStatus.Success ? srcState.data : undefined);
 
     return (
       <Box
@@ -195,6 +199,10 @@ export const VideoContent = as<'div', VideoContentProps>(
               onError: handleError,
               autoPlay: false,
               controls: true,
+              // Firefox blocks media Range responses it cannot sniff as audio/video (mozilla bug
+              // 1880289); requesting with CORS opts out. External URLs are left alone since we
+              // cannot assume they send Access-Control-Allow-Origin.
+              crossOrigin: streamsAuthenticatedMedia ? 'anonymous' : undefined,
             })}
           </Box>
         )}
@@ -206,7 +214,7 @@ export const VideoContent = as<'div', VideoContentProps>(
             onClick={() => {
               setBlurred(false);
               if (srcState.status === AsyncStatus.Idle) {
-                loadSrc();
+                loadSrc().catch(() => undefined);
               }
             }}
           >
@@ -218,7 +226,7 @@ export const VideoContent = as<'div', VideoContentProps>(
               onClick={() => {
                 setBlurred(false);
                 if (srcState.status === AsyncStatus.Idle) {
-                  loadSrc();
+                  loadSrc().catch(() => undefined);
                 }
               }}
             >
@@ -283,7 +291,7 @@ export const VideoContent = as<'div', VideoContentProps>(
                 onClick={(e) => {
                   e.preventDefault();
                   if (srcState.status === AsyncStatus.Idle) {
-                    loadSrc();
+                    loadSrc().catch(() => undefined);
                     setBlurred(false);
                   } else setBlurred(!blurred);
                 }}

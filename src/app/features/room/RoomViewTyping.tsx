@@ -5,14 +5,14 @@ import classNames from 'classnames';
 import { useSetAtom, useAtomValue } from 'jotai';
 import { roomIdToTypingMembersAtom } from '$state/typingMembers';
 import { TypingIndicator } from '$components/typing-indicator';
-import { getMemberDisplayName } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useRoomTypingMember } from '$hooks/useRoomTypingMembers';
 import { nicknamesAtom } from '$state/nicknames';
 import * as css from './RoomViewTyping.css';
 
-export type RoomViewTypingProps = {
+type RoomViewTypingProps = {
   room: Room;
 };
 export const RoomViewTyping = as<'div', RoomViewTypingProps>(

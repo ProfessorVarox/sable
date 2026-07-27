@@ -35,40 +35,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Resolve target
+      - uses: ./.github/actions/resolve-release-meta
         id: meta
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_TAG: ${{ inputs.tag }}
-          GIT_REF: ${{ github.ref }}
-          GIT_REF_NAME: ${{ github.ref_name }}
-          GIT_SHA: ${{ github.sha }}
-          RUN_NUMBER: ${{ github.run_number }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            TAG="$INPUT_TAG"; REF="$INPUT_TAG"; NIGHTLY=false
-            VERSION="${TAG#v}"
-          elif [ "$GIT_REF" = "refs/heads/dev" ]; then
-            TAG="nightly"; REF="$GIT_SHA"; NIGHTLY=true
-            VERSION="$(node .github/scripts/nightly-version.mjs)"
-          else
-            TAG="$GIT_REF_NAME"; REF="$GIT_REF"; NIGHTLY=false
-            VERSION="${TAG#v}"
-          fi
-          {
-            echo "tag=$TAG"
-            echo "version=$VERSION"
-            echo "ref=$REF"
-            echo "nightly=$NIGHTLY"
-            echo "started_at=$STARTED_AT"
-          } >> "$GITHUB_OUTPUT"
+        with:
+          input-tag: ${{ inputs.tag }}
 
       - name: Wait for release to exist
         if: ${{ steps.meta.outputs.nightly != 'true' }}
@@ -120,7 +94,7 @@ jobs:
           - name: macOS
             platform: macos-latest
             asset-platform: macos-universal
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
             args: --target universal-apple-darwin
             bundle_path: src-tauri/target/universal-apple-darwin/release/bundle
           - name: Windows
@@ -139,50 +113,33 @@ jobs:
       TAG: ${{ needs.setup-release.outputs.tag }}
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
-      VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      SABLE_BUILD_FLAVOR: ${{ needs.setup-release.outputs.nightly == 'true' && 'dev' || 'stable' }}
       VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
       VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
       NODE_OPTIONS: --max-old-space-size=8192
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup-release.outputs.ref }}
           persist-credentials: false
 
-      - name: Install Linux build dependencies
-        if: matrix.cef
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libsoup-3.0-dev \
-            libssl-dev \
-            libxdo-dev \
-            build-essential \
-            file \
-            rpm \
-            ruby \
-            ruby-dev
-          sudo gem install --no-document fpm
-
       - name: Setup app
         uses: ./.github/actions/setup
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2c7215f132e9ebf062739d9130488b56d53c060c
         with:
-          toolchain: stable
-          targets: ${{ matrix.rust-targets }}
+          tauri: 'true'
+
+      - name: Add Rust targets
+        if: ${{ matrix.rust-targets != '' }}
+        shell: bash
+        run: rustup target add ${{ matrix.rust-targets }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -195,8 +152,7 @@ jobs:
           UPDATER_ENDPOINT: ${{ needs.setup-release.outputs.nightly == 'true' && format('https://github.com/{0}/releases/download/nightly/latest.json', github.repository) || '' }}
         run: node .github/scripts/set-tauri-version.mjs "$VERSION" "$UPDATER_ENDPOINT"
 
-      # --- macOS / Windows: standard wry build via tauri-action ---
-      - name: Configure desktop build
+      - name: Configure build args
         shell: bash
         env:
           IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
@@ -210,16 +166,27 @@ jobs:
             ARGS="$ARGS --bundles nsis"
           fi
           if [ "$IS_NIGHTLY" = "true" ]; then
-            ARGS="$ARGS --config src-tauri/tauri.nightly.conf.json"
+            echo "SABLE_BUILD_FLAVOR=dev" >> "$GITHUB_ENV"
           fi
           echo "TAURI_BUILD_ARGS=${ARGS# }" >> "$GITHUB_ENV"
 
       - name: Build desktop bundles
-        id: tauri
         if: ${{ !matrix.cef }}
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        with:
-          args: ${{ matrix.args }} ${{ env.TAURI_BUILD_ARGS }}
+        shell: bash
+        run: pnpm tauri build ${{ matrix.args }} $TAURI_BUILD_ARGS
+
+      - name: Package macOS .app for updater
+        if: ${{ matrix.name == 'macOS' }}
+        shell: bash
+        run: |
+          macos_dir="${{ matrix.bundle_path }}/macos"
+          if [ -d "$macos_dir" ]; then
+            for app in "$macos_dir"/*.app; do
+              [ -e "$app" ] || continue
+              echo "Packaging $(basename "$app") into .tar.gz"
+              tar czf "$app.tar.gz" -C "$macos_dir" "$(basename "$app")"
+            done
+          fi
 
       - name: Normalize desktop artifact names
         if: ${{ !matrix.cef }}
@@ -249,7 +216,7 @@ jobs:
 
       - name: Attest Windows bundles
         if: ${{ matrix.name == 'Windows' }}
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             src-tauri/target/release/bundle/msi/*.msi
@@ -280,7 +247,7 @@ jobs:
       - name: Build native packages
         if: matrix.cef
         shell: bash
-        run: bash scripts/cef-package.sh "$VERSION"
+        run: mise run cef:package "$VERSION"
 
       - name: Sign the AppImage for the updater
         if: ${{ matrix.cef && env.TAURI_SIGNING_PRIVATE_KEY != '' }}
@@ -293,7 +260,7 @@ jobs:
 
       - name: Attest Linux bundles
         if: matrix.cef
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             src-tauri/target/release/bundle/deb/*.deb
@@ -333,50 +300,53 @@ jobs:
       TAG: ${{ needs.setup-release.outputs.tag }}
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
-      VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      SABLE_BUILD_FLAVOR: ${{ needs.setup-release.outputs.nightly == 'true' && 'dev' || 'stable' }}
       VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
       VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      MISE_ENV: tauri
       NODE_OPTIONS: --max-old-space-size=8192
+      # Matches the ABIs passed to `tauri android build` below.
+      RUST_TARGETS: aarch64-linux-android armv7-linux-androideabi
       ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup-release.outputs.ref }}
           persist-credentials: false
 
       - name: Setup app
         uses: ./.github/actions/setup
-
-      - name: Setup Java
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
-          distribution: temurin
-          java-version: '17'
+          tauri: 'true'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      - name: Setup Android SDK + NDK
+        shell: bash
+        run: mise run tauri:setup:android
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: stable
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - name: Add Rust targets
+        shell: bash
+        run: rustup target add $RUST_TARGETS
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: src-tauri
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
       - name: Resolve NDK
         shell: bash
         run: |
-          echo "NDK_HOME=$ANDROID_HOME/ndk/$(ls -1 "$ANDROID_HOME/ndk" | sort -V | tail -n1)" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
 
       - name: Stamp release version into tauri.conf.json
         shell: bash
@@ -397,11 +367,10 @@ jobs:
         env:
           IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
         run: |
-          ARGS=()
           if [ "$IS_NIGHTLY" = "true" ]; then
-            ARGS+=(--config src-tauri/tauri.nightly.conf.json)
+            export SABLE_BUILD_FLAVOR=dev
           fi
-          pnpm tauri android build --apk --aab "${ARGS[@]}"
+          pnpm tauri android build --apk --aab --target aarch64 armv7
           OUT='src-tauri/gen/android/app/build/outputs'
           APK=$(find "$OUT/apk/universal/release" -name '*.apk' -type f | head -1)
           AAB=$(find "$OUT/bundle/universalRelease" -name '*.aab' -type f | head -1)
@@ -411,7 +380,7 @@ jobs:
           mv "$AAB" "$OUT/bundle/universalRelease/Sable-${VERSION}-android-universal.aab"
 
       - name: Attest Android bundles
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
@@ -444,28 +413,31 @@ jobs:
       TAG: ${{ needs.setup-release.outputs.tag }}
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
-      VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      SABLE_BUILD_FLAVOR: ${{ needs.setup-release.outputs.nightly == 'true' && 'dev' || 'stable' }}
       VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
       VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
       NODE_OPTIONS: --max-old-space-size=8192
+      RUST_TARGETS: aarch64-apple-ios
     steps:
       - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup-release.outputs.ref }}
           persist-credentials: false
 
       - name: Setup app
         uses: ./.github/actions/setup
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2c7215f132e9ebf062739d9130488b56d53c060c
         with:
-          toolchain: stable
-          targets: aarch64-apple-ios
+          tauri: 'true'
+
+      - name: Add Rust targets
+        shell: bash
+        run: rustup target add $RUST_TARGETS
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -476,13 +448,13 @@ jobs:
         shell: bash
         run: node .github/scripts/set-tauri-version.mjs "$VERSION"
 
-      - name: Setup Xcode
+      - name: Set up iOS
         shell: bash
-        run: pnpm tauri ios init
+        run: mise -y run tauri:setup:ios
 
       - name: Symlink icons to the ios folder
         shell: bash
-        run: pnpm run setup:tauri-icons --write --force
+        run: mise run icons:symlink --write --force
 
       - name: Build unsigned IPA
         id: ipa
@@ -490,11 +462,10 @@ jobs:
         env:
           IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
         run: |
-          ARGS=()
           if [ "$IS_NIGHTLY" = "true" ]; then
-            ARGS+=(--config src-tauri/tauri.nightly.conf.json)
+            export SABLE_BUILD_FLAVOR=dev
           fi
-          pnpm tauri ios build --no-sign --ci "${ARGS[@]}"
+          pnpm tauri ios build --no-sign --ci
           IPA=$(find src-tauri/gen/apple/build -name '*.ipa' -type f | head -1)
           [ -n "$IPA" ] || { echo "IPA not found"; ls -R src-tauri/gen/apple/build 2>/dev/null || true; exit 1; }
           NORMALIZED_IPA="$(dirname "$IPA")/Sable-${VERSION}-ios-arm64.ipa"
@@ -511,7 +482,7 @@ jobs:
           echo "ipa_build=${IPA_BUILD:-$VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Attest iOS bundle
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: ${{ steps.ipa.outputs.path }}
 
@@ -519,7 +490,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" "${{ steps.ipa.outputs.path }}" --clobber
+          STEPS_IPA_OUTPUTS_PATH: ${{ steps.ipa.outputs.path }}
+        run: gh release upload "$TAG" "${STEPS_IPA_OUTPUTS_PATH}" --clobber
 
       - name: Update AltStore/SideStore source
         shell: bash
@@ -528,8 +500,10 @@ jobs:
           REPO: ${{ github.repository }}
           ALTSTORE_VERSION: ${{ steps.ipa.outputs.ipa_version }}
           ALTSTORE_VERSION_BUILD: ${{ steps.ipa.outputs.ipa_build }}
+          STEPS_IPA_OUTPUTS_NAME: ${{ steps.ipa.outputs.name }}
+          STEPS_IPA_OUTPUTS_SIZE: ${{ steps.ipa.outputs.size }}
         run: |
-          DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/${{ steps.ipa.outputs.name }}"
+          DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/${STEPS_IPA_OUTPUTS_NAME}"
           DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           if gh release download "$TAG" --pattern 'altstore-source.json' --dir . --clobber 2>/dev/null; then
             echo "Using existing altstore-source.json from release $TAG"
@@ -537,7 +511,7 @@ jobs:
             echo "Using repo altstore-source.json"
           fi
           node .github/scripts/update-altstore-source.mjs \
-            altstore-source.json "${ALTSTORE_VERSION:-$VERSION}" "${ALTSTORE_VERSION_BUILD:-$VERSION}" "${{ steps.ipa.outputs.size }}" "$DOWNLOAD_URL" "$DATE" "Sable $VERSION"
+            altstore-source.json "${ALTSTORE_VERSION:-$VERSION}" "${ALTSTORE_VERSION_BUILD:-$VERSION}" "${STEPS_IPA_OUTPUTS_SIZE}" "$DOWNLOAD_URL" "$DATE" "Sable $VERSION"
           gh release upload "$TAG" altstore-source.json --clobber
 
   updater-manifest:
@@ -554,12 +528,13 @@ jobs:
       TAG: ${{ needs.setup-release.outputs.tag }}
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
-      VITE_IS_RELEASE_TAG: ${{ needs.setup-release.outputs.nightly == 'true' && 'true' || '' }}
+      SABLE_BUILD_FLAVOR: ${{ needs.setup-release.outputs.nightly == 'true' && 'dev' || 'stable' }}
+      SABLE_PRODUCT_NAME: ${{ needs.setup-release.outputs.product_name }}
       REPO: ${{ github.repository }}
       STARTED_AT: ${{ needs.setup-release.outputs.started_at }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup-release.outputs.ref }}
           persist-credentials: false
@@ -569,8 +544,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          NEEDS_SETUP_RELEASE_OUTPUTS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
         run: |
-          if [ "${{ needs.setup-release.outputs.nightly }}" = "true" ]; then
+          if [ "${NEEDS_SETUP_RELEASE_OUTPUTS_NIGHTLY}" = "true" ]; then
             gh release view "$TAG" --json assets \
               | jq -r --arg cutoff "$STARTED_AT" \
                   '.assets[] | select(.updatedAt <= $cutoff and (.name | endswith(".sig"))) | .name' \
@@ -590,7 +566,7 @@ jobs:
 
       - name: Attest updater manifest
         if: steps.manifest.outputs.produced == 'true'
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: latest.json
 
@@ -616,9 +592,10 @@ jobs:
             --title "Nightly (dev)" \
             --notes "Rolling nightly build $VERSION from dev — $GIT_SHA"
 
+          # .json manifests are overwritten in place, not accumulated.
           gh release view nightly --json assets \
             | jq -r --arg cutoff "$STARTED_AT" \
-                '.assets[] | select(.updatedAt <= $cutoff) | .name' \
+                '.assets[] | select(.updatedAt <= $cutoff and (.name | endswith(".json") | not)) | .name' \
             | while read -r name; do
                 [ -n "$name" ] || continue
                 echo "Removing superseded nightly asset: $name"

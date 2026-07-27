@@ -5,7 +5,7 @@ import type { Room } from '$types/matrix-sdk';
 import classNames from 'classnames';
 import { useAtom } from 'jotai';
 
-import { getMemberDisplayName } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useRoomLatestRenderedEvent } from '$hooks/useRoomLatestRenderedEvent';
@@ -19,7 +19,7 @@ export function RoomViewFollowingPlaceholder() {
   return <div className={css.RoomViewFollowingPlaceholder} />;
 }
 
-export type RoomViewFollowingProps = {
+type RoomViewFollowingProps = {
   room: Room;
   threadEventId?: string;
   participantIds?: Set<string>;

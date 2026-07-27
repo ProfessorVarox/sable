@@ -9,7 +9,7 @@ import { ScreenSize, useScreenSizeContext } from '../../hooks/useScreenSize';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { useState, useEffect } from 'react';
 
 export function CallChatView() {
@@ -34,7 +34,7 @@ export function CallChatView() {
         flexGrow: 0,
       }}
     >
-      {!mobileOrTablet() && (
+      {!isMobileOrTablet() && (
         <SidebarResizer
           setCurWidth={setCurWidth}
           sidebarWidth={vcmsgSidebarWidth}

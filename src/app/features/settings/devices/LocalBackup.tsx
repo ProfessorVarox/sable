@@ -1,9 +1,9 @@
 import type { FormEventHandler } from 'react';
 import { useCallback, useEffect, useState } from 'react';
-import { Box, Button, color, Spinner, Text, toRem } from 'folds';
+import { Box, color, Text, toRem } from 'folds';
 import { ArrowRight, CaretDown, CaretUp, File, menuIcon, X } from '$components/icons/phosphor';
 import { saveFileToDevice } from '$utils/download';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { SettingTile } from '$components/setting-tile';
 import { PasswordInput } from '$components/password-input';
 import { ConfirmPasswordMatch } from '$components/ConfirmPasswordMatch';
@@ -16,7 +16,7 @@ import {
 } from '$utils/MegolmExportEncryption';
 import { useAlive } from '$hooks/useAlive';
 import { useFilePicker } from '$hooks/useFilePicker';
-import { SequenceCardStyle } from '$features/settings/styles.css';
+import { Button } from '$components/button';
 
 type LocalBackupError = Error | FriendlyError;
 
@@ -119,8 +119,10 @@ function ExportKeys() {
             fill="Soft"
             outlined
             radii="300"
-            disabled={exporting}
-            before={exporting ? <Spinner size="200" variant="Secondary" fill="Soft" /> : undefined}
+            loading={exporting}
+            spinnerSize="200"
+            spinnerVariant="Secondary"
+            spinnerFill="Soft"
           >
             <Text as="span" size="B400">
               Export
@@ -242,8 +244,10 @@ function ImportKeys({ file, onDone }: ImportKeysProps) {
             fill="Soft"
             outlined
             radii="300"
-            disabled={decrypting}
-            before={decrypting ? <Spinner size="200" variant="Secondary" fill="Soft" /> : undefined}
+            loading={decrypting}
+            spinnerSize="200"
+            spinnerVariant="Secondary"
+            spinnerFill="Soft"
           >
             <Text as="span" size="B400">
               Decrypt

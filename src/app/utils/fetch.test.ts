@@ -98,6 +98,22 @@ describe('app fetch wrapper', () => {
   );
 
   it(
+    'drains the plugin-http body so it survives being read once',
+    async () => {
+      isTauri.mockReturnValue(true);
+      tauriFetch.mockResolvedValue(
+        new Response('{"versions":[]}', { headers: { 'content-type': 'application/json' } })
+      );
+      const { fetch } = await import('./fetch');
+
+      const response = await fetch('https://matrix.example.org/_matrix/client/versions');
+
+      expect(await response.json()).toEqual({ versions: [] });
+    },
+    TEST_TIMEOUT
+  );
+
+  it(
     'uses loopback_fetch for localhost in Tauri',
     async () => {
       isTauri.mockReturnValue(true);

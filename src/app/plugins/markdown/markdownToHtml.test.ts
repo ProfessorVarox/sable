@@ -217,6 +217,18 @@ describe('markdownToHtml', () => {
     expect(result).toContain('<div');
   });
 
+  it('keeps task list markers as literal text instead of checkbox inputs', () => {
+    const result = markdownToHtml('- [ ] one\n- [x] two');
+    expect(result).not.toContain('input');
+    expect(result).toBe('<ul>\n<li>[ ] one</li>\n<li>[x] two</li>\n</ul>\n');
+  });
+
+  it('round-trips task list markers back to markdown', () => {
+    expect(htmlToMarkdown(markdownToHtml('- [ ] one\n- [x] two')).trim()).toBe(
+      '- [ ] one\n- [x] two'
+    );
+  });
+
   it('does not parse k. as a list', () => {
     const result = markdownToHtml('k. Hello world');
     expect(result).not.toContain('<li>');

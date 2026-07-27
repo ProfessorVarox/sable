@@ -4,6 +4,7 @@
 // the same approach as Capacitor's hideFormAccessoryBar.
 
 use std::ffi::CString;
+use std::sync::OnceLock;
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
@@ -84,4 +85,77 @@ pub fn hide_form_accessory_bar(window: &WebviewWindow<crate::BrowserEngine>) {
             AnyObject::set_class(&*subview, subclass);
         }
     });
+}
+
+// WKWebView plays HTMLAudioElement on .playback, ignoring the silent switch.
+// AudioServicesPlaySystemSound respects the switch and uses ringer volume.
+
+use objc2_foundation::{NSString, NSURL};
+
+// This library is linked by Cargo before Xcode creates the application bundle,
+// so declaring AudioToolbox only in tauri.conf.json is not sufficient.
+#[link(name = "AudioToolbox", kind = "framework")]
+extern "C" {
+    fn AudioServicesCreateSystemSoundID(
+        in_file_url: *const objc2::runtime::AnyObject,
+        out_sound_id: *mut u32,
+    ) -> i32;
+    fn AudioServicesPlaySystemSound(sound_id: u32);
+}
+
+fn load_system_sound(caf_bytes: &[u8], temp_name: &str) -> Result<u32, String> {
+    // AudioServicesCreateSystemSoundID needs a file URL, so write the
+    // embedded .caf to the app's temp directory on first use.
+    let mut path = std::env::temp_dir();
+    path.push(temp_name);
+    if !path.exists() {
+        std::fs::write(&path, caf_bytes)
+            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    }
+    unsafe {
+        let path_str = NSString::from_str(&path.to_string_lossy());
+        let url = NSURL::fileURLWithPath(&path_str);
+        let mut sound_id: u32 = 0;
+        let status = AudioServicesCreateSystemSoundID(Retained::as_ptr(&url).cast(), &mut sound_id);
+        if status != 0 || sound_id == 0 {
+            return Err(format!(
+                "AudioServicesCreateSystemSoundID failed for {} with status {status}",
+                path.display()
+            ));
+        }
+        Ok(sound_id)
+    }
+}
+
+pub(crate) fn play_notification_sound(kind: String) -> Result<(), String> {
+    static NOTIFICATION_SOUND: OnceLock<u32> = OnceLock::new();
+    static INVITE_SOUND: OnceLock<u32> = OnceLock::new();
+
+    let cache = if kind == "invite" {
+        &INVITE_SOUND
+    } else {
+        &NOTIFICATION_SOUND
+    };
+    let caf: &[u8] = if kind == "invite" {
+        include_bytes!("../resources/invite.caf")
+    } else {
+        include_bytes!("../resources/notification.caf")
+    };
+    let name = if kind == "invite" {
+        "sable_invite.caf"
+    } else {
+        "sable_notification.caf"
+    };
+
+    // Not get_or_init: a failed load must not be cached as permanent silence.
+    let sound_id = match cache.get() {
+        Some(id) => *id,
+        None => {
+            let id = load_system_sound(caf, name)?;
+            let _ = cache.set(id);
+            id
+        }
+    };
+    unsafe { AudioServicesPlaySystemSound(sound_id) };
+    Ok(())
 }

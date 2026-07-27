@@ -18,12 +18,12 @@ import { ClientLayout } from '$pages/client';
 import { ClientRouteOutlet } from '$pages/client/ClientRouteOutlet';
 import { ScreenSize, ScreenSizeProvider } from '$hooks/useScreenSize';
 import * as pageCss from '$components/page/style.css';
+import { SettingsSectionPage } from '$components/page';
 import { messageJumpHighlight } from '$components/message/layout/layout.css';
 import { getHomePath, getSettingsPath } from '$pages/pathUtils';
 import { SETTINGS_PATH } from '$pages/paths';
 import { SettingsRoute } from './SettingsRoute';
 import { SettingsShallowRouteRenderer } from './SettingsShallowRouteRenderer';
-import { SettingsSectionPage } from './SettingsSectionPage';
 import { focusedSettingTile } from './styles.css';
 import { useOpenSettings } from './useOpenSettings';
 import { useSettingsFocus } from './useSettingsFocus';
@@ -90,8 +90,8 @@ vi.mock('$state/hooks/settings', () => ({
   useSetting: mockUseSetting,
 }));
 
-vi.mock('$components/Modal500', () => ({
-  Modal500: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+vi.mock('$components/modal-overlay/ModalOverlay', () => ({
+  ModalOverlay: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('./general', () => ({
@@ -634,7 +634,7 @@ describe('SettingsRoute', () => {
     expect(screen.getByTestId('location-probe')).not.toHaveTextContent('PUSH');
   });
 
-  it('uses history back semantics when a section back button is clicked', async () => {
+  it('returns to the settings menu instead of the previous page when a section back button is clicked', async () => {
     const user = userEvent.setup();
 
     renderSettingsRoute('/settings/devices', ScreenSize.Mobile, {
@@ -644,7 +644,9 @@ describe('SettingsRoute', () => {
 
     await user.click(screen.getByRole('button', { name: 'Back' }));
 
-    await waitFor(() => expect(screen.getByTestId('location-probe')).toHaveTextContent('POP'));
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe')).toHaveTextContent(getSettingsPath())
+    );
     expect(screen.getByText('Settings')).toBeInTheDocument();
   });
 });

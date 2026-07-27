@@ -4,6 +4,7 @@ import { color, config, toRem } from 'folds';
 export const PersonaPickerMenuItem = style({
   backgroundColor: color.Surface.Container,
   minWidth: toRem(200),
+  padding: '0',
   selectors: {
     '&:hover': {
       backgroundColor: color.Surface.ContainerHover,

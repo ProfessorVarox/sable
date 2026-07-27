@@ -1,6 +1,11 @@
 import type { RoomPinnedEventsEventContent, StateEvents } from '$types/matrix-sdk';
 import { type Room, type MatrixEvent, type Relations, EventType } from '$types/matrix-sdk';
-import { canEditEvent, canForwardEvent, getEventEdits, isThreadRelationEvent } from '$utils/room';
+import {
+  canEditEvent,
+  canForwardEvent,
+  getEventEdits,
+  isThreadRelationEvent,
+} from '$utils/room/relations';
 import { MessageReportItem } from './MessageReport';
 import type { RectCords } from 'folds';
 import { as, Box, config, IconButton, Line, Menu, MenuItem, PopOut, Text } from 'folds';
@@ -80,7 +85,7 @@ type MessageQuickReactionsProps = {
   onReaction: ReactionHandler;
   count: number;
 };
-export const MessageQuickReactions = as<'div', MessageQuickReactionsProps>(
+const MessageQuickReactions = as<'div', MessageQuickReactionsProps>(
   ({ onReaction, count, ...props }, ref) => {
     const mx = useMatrixClient();
     const recentEmojis = useRecentEmoji(mx, count);
@@ -179,7 +184,7 @@ const MessageCopyTextItem = as<
   );
 });
 
-export const MessagePinItem = as<
+const MessagePinItem = as<
   'button',
   {
     room: Room;
@@ -219,7 +224,7 @@ export const MessagePinItem = as<
   );
 });
 
-export const MessageBookmarkItem = as<
+const MessageBookmarkItem = as<
   'button',
   {
     room: Room;
@@ -259,7 +264,7 @@ export const MessageBookmarkItem = as<
   );
 });
 
-export const MessageFavoriteGifItem = as<
+const MessageFavoriteGifItem = as<
   'button',
   {
     room: Room;
@@ -323,7 +328,7 @@ export const MessageFavoriteGifItem = as<
   );
 });
 
-export type OptionEmojiMenuProps = {
+type OptionEmojiMenuProps = {
   mEvent: MatrixEvent;
   closeMenu: () => void;
   onReactionToggle?: (targetEventId: string, key: string, shortcode?: string) => void;
@@ -335,7 +340,7 @@ export type OptionEmojiMenuProps = {
   ActualMessage?: ReactNode;
   dragOpts?: DragOptsProps;
 };
-export function OptionsEmojiBoard({
+function OptionsEmojiBoard({
   mEvent,
   onReactionToggle,
   closeMenu,
@@ -567,7 +572,7 @@ export type OptionMenuProps = {
   dragOpts?: DragOptsProps;
 };
 
-export function OptionMenu({
+function OptionMenu({
   mEvent,
   room,
   closeMenu,

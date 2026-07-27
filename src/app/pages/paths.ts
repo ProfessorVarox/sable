@@ -48,7 +48,6 @@ export type RoomSearchParams = {
 export const ROOM_PATH_SEGMENT = ':roomIdOrAlias/:eventId?/';
 
 export const HOME_PATH = '/home/';
-export const HOME_CREATE_PATH = `/home/${CREATE_PATH_SEGMENT}`;
 export const HOME_JOIN_PATH = `/home/${JOIN_PATH_SEGMENT}`;
 export const HOME_SEARCH_PATH = `/home/${SEARCH_PATH_SEGMENT}`;
 export const HOME_ROOM_PATH = `/home/${ROOM_PATH_SEGMENT}`;
@@ -95,15 +94,11 @@ export const INBOX_NOTIFICATIONS_PATH = `/inbox/${NOTIFICATIONS_PATH_SEGMENT}`;
 export const INBOX_INVITES_PATH = `/inbox/${INVITES_PATH_SEGMENT}`;
 export const INBOX_BOOKMARKS_PATH = `/inbox/${BOOKMARKS_PATH_SEGMENT}`;
 
-export const TO_PATH = '/to';
+const TO_PATH = '/to';
 // Deep-link route used by push notification click-back URLs.
 // Format: /to/:user_id/:room_id/:event_id?
 // e.g.  /to/%40alice%3Aserver/%21room%3Aserver/%24event%3Aserver
 export const TO_ROOM_EVENT_PATH = `${TO_PATH}/:user_id/:room_id/:event_id?`;
-
-export const SPACE_SETTINGS_PATH = '/space-settings/';
-
-export const ROOM_SETTINGS_PATH = '/room-settings/';
 
 export const SSO_CALLBACK_PATH = '/lp/sso-callback';
 export const SETTINGS_PATH = '/settings/:section?/';

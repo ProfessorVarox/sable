@@ -3,21 +3,19 @@ import { useCallback, useMemo, useState } from 'react';
 import {
   Box,
   Text,
-  Button,
   Avatar,
   AvatarImage,
   AvatarFallback,
   toRem,
   config,
   Input,
-  Spinner,
   color,
   IconButton,
   Menu,
 } from 'folds';
 import { composerIcon, menuIcon, Plus, Sticker, X } from '$components/icons/phosphor';
 import type { MatrixError } from '$types/matrix-sdk';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import type { ImagePack, PackAddress, PackContent } from '$plugins/custom-emoji';
 import { ImageUsage, packAddressEqual } from '$plugins/custom-emoji';
 import { useRoom } from '$hooks/useRoom';
@@ -35,8 +33,8 @@ import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useAlive } from '$hooks/useAlive';
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
-import { SequenceCardStyle } from '$features/common-settings/styles.css';
 import { CustomStateEvent } from '$types/matrix/room';
+import { Button } from '$components/button';
 
 function PackAvatarImage({ url }: { url: string }) {
   const resolved = useRenderableMediaUrl(url);
@@ -129,8 +127,9 @@ function CreatePackTile({ packs, roomId }: Readonly<CreatePackTileProps>) {
             variant="Success"
             radii="300"
             type="submit"
-            disabled={creating}
-            before={creating && <Spinner size="200" variant="Success" fill="Solid" />}
+            loading={creating}
+            spinnerSize="200"
+            spinnerVariant="Success"
           >
             <Text size="B400">Create</Text>
           </Button>
@@ -340,7 +339,9 @@ export function RoomPacks({ onViewPack }: Readonly<RoomPacksProps>) {
                 variant="Critical"
                 radii="300"
                 disabled={applyingChanges}
-                before={applyingChanges && <Spinner variant="Critical" fill="Solid" size="100" />}
+                loading={applyingChanges}
+                spinnerVariant="Critical"
+                spinnerSize="100"
                 onClick={handleApplyChanges}
               >
                 <Text size="B300">Delete</Text>

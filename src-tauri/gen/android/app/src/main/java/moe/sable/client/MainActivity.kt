@@ -2,6 +2,8 @@ package moe.sable.client
 
 import android.content.Intent
 import android.graphics.Color
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -176,6 +178,35 @@ class MainActivity : TauriActivity() {
       val luminance =
         (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255.0
       return luminance > 0.5
+    }
+
+    @JvmStatic
+    fun playNotificationSoundNative(code: Int) {
+      val activity = instance ?: return
+      val resId = if (code == 1) R.raw.invite else R.raw.notification
+      activity.runOnUiThread {
+        val mp = MediaPlayer()
+        try {
+          val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+          mp.setAudioAttributes(attrs)
+          activity.resources.openRawResourceFd(resId).use { afd ->
+            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+          }
+          mp.setOnCompletionListener { it.release() }
+          mp.setOnErrorListener { player, _, _ ->
+            player.release()
+            true
+          }
+          mp.prepare()
+          mp.start()
+        } catch (e: Exception) {
+          mp.release()
+          android.util.Log.w("NotificationSound", "play failed: ${e.message}")
+        }
+      }
     }
   }
 }

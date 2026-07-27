@@ -27,9 +27,8 @@ import {
   type ThemeRemoteFavorite,
   type ThemeRemoteTweakFavorite,
 } from '$state/settings';
-import { SequenceCardStyle } from '$features/settings/styles.css';
-import { SequenceCard } from '$components/sequence-card';
-import { SettingTile } from '$components/setting-tile';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
+import { SettingTile, SettingToggle } from '$components/setting-tile';
 import { ThemePreviewCard } from '$components/theme/ThemePreviewCard';
 import { usePatchSettings } from './themeSettingsPatch';
 import { ThemeImportModal } from './ThemeImportModal';
@@ -64,7 +63,7 @@ import {
 import { CssViewerButton } from '$components/theme/CssViewerButton';
 import * as css from './ThemeCatalogSettings.css';
 
-export type CatalogPreviewRow = ThemePair & {
+type CatalogPreviewRow = ThemePair & {
   previewText: string;
   displayName: string;
   author?: string;
@@ -74,7 +73,7 @@ export type CatalogPreviewRow = ThemePair & {
   fullInstallUrl: string;
 };
 
-export type LocalPreviewRow = ThemeRemoteFavorite & {
+type LocalPreviewRow = ThemeRemoteFavorite & {
   previewUrl: string;
   previewText: string;
   fullCssText: string;
@@ -85,7 +84,7 @@ export type LocalPreviewRow = ThemeRemoteFavorite & {
   importedLocal?: boolean;
 };
 
-export type CatalogTweakRow = TweakCatalogEntry & {
+type CatalogTweakRow = TweakCatalogEntry & {
   fullCssText: string;
   displayName: string;
   description?: string;
@@ -93,19 +92,17 @@ export type CatalogTweakRow = TweakCatalogEntry & {
   tags: string[];
 };
 
-export type LocalTweakRow = ThemeRemoteTweakFavorite & {
+type LocalTweakRow = ThemeRemoteTweakFavorite & {
   fullCssText: string;
   description?: string;
   author?: string;
   tags: string[];
 };
 
-export type ThemeCatalogSettingsMode = 'full' | 'local' | 'chat' | 'remote' | 'appearance';
-
-export { usePatchSettings } from './themeSettingsPatch';
+type ThemeCatalogSettingsMode = 'local' | 'appearance';
 
 type ThemeCatalogSettingsProps = {
-  mode?: ThemeCatalogSettingsMode;
+  mode: ThemeCatalogSettingsMode;
   onBrowseOpenChange?: (open: boolean) => void;
 };
 
@@ -226,10 +223,7 @@ function CatalogTweakCard({
   );
 }
 
-export function ThemeCatalogSettings({
-  mode = 'full',
-  onBrowseOpenChange,
-}: ThemeCatalogSettingsProps) {
+export function ThemeCatalogSettings({ mode, onBrowseOpenChange }: ThemeCatalogSettingsProps) {
   const clientConfig = useClientConfig();
   const patchSettings = usePatchSettings();
   const queryClient = useQueryClient();
@@ -250,12 +244,10 @@ export function ThemeCatalogSettings({
     }
   }, [browseOpen, isAppearanceMode, onBrowseOpenChange]);
 
-  const isRemoteMode = mode === 'remote' || mode === 'full' || (isAppearanceMode && browseOpen);
-  const isChatMode = mode === 'chat' || mode === 'full' || (isAppearanceMode && !browseOpen);
-  const showAssignmentChrome =
-    mode === 'full' || mode === 'local' || (isAppearanceMode && !browseOpen);
-  const showSavedLibrary =
-    (mode === 'full' || mode === 'local' || isAppearanceMode) && !(isAppearanceMode && browseOpen);
+  const isRemoteMode = isAppearanceMode && browseOpen;
+  const isChatMode = isAppearanceMode && !browseOpen;
+  const showAssignmentChrome = mode === 'local' || (isAppearanceMode && !browseOpen);
+  const showSavedLibrary = !(isAppearanceMode && browseOpen);
 
   const [getFavorites] = useSetting(settingsAtom, 'themeRemoteFavorites');
   const [favorites, setFavorites] = useState(getFavorites ? getFavorites : []);
@@ -1758,46 +1750,29 @@ export function ThemeCatalogSettings({
 
       {isChatMode && (
         <>
-          <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
-            <SettingTile
-              title="Theme & tweak cards"
-              focusId="theme-chat-sable-widgets"
-              description="Show interactive Sable CSS cards instead of plain links."
-              after={
-                <Switch variant="Primary" value={sableChatWidgets} onChange={setSableChatWidgets} />
-              }
-            />
-          </SequenceCard>
-          <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
-            <SettingTile
-              title="Auto-load approved URLs"
-              focusId="theme-chat-auto-approved"
-              description="Automatically fetch previews from approved catalog hosts."
-              after={
-                <Switch
-                  variant="Primary"
-                  value={autoPreviewApprovedUrls}
-                  onChange={setAutoPreviewApprovedUrls}
-                  disabled={!sableChatWidgets}
-                />
-              }
-            />
-          </SequenceCard>
-          <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column">
-            <SettingTile
-              title="Auto-load any URL"
-              focusId="theme-chat-auto-any"
-              description="Not recommended. Automatically fetch potentially unsafe third-party links."
-              after={
-                <Switch
-                  variant="Primary"
-                  value={autoPreviewAnyUrl}
-                  onChange={setAutoPreviewAnyUrl}
-                  disabled={!sableChatWidgets}
-                />
-              }
-            />
-          </SequenceCard>
+          <SettingToggle
+            title="Theme & tweak cards"
+            focusId="theme-chat-sable-widgets"
+            description="Show interactive Sable CSS cards instead of plain links."
+            value={sableChatWidgets}
+            onChange={setSableChatWidgets}
+          />
+          <SettingToggle
+            title="Auto-load approved URLs"
+            focusId="theme-chat-auto-approved"
+            description="Automatically fetch previews from approved catalog hosts."
+            value={autoPreviewApprovedUrls}
+            onChange={setAutoPreviewApprovedUrls}
+            disabled={!sableChatWidgets}
+          />
+          <SettingToggle
+            title="Auto-load any URL"
+            focusId="theme-chat-auto-any"
+            description="Not recommended. Automatically fetch potentially unsafe third-party links."
+            value={autoPreviewAnyUrl}
+            onChange={setAutoPreviewAnyUrl}
+            disabled={!sableChatWidgets}
+          />
         </>
       )}
     </Box>

@@ -2,7 +2,6 @@ import type { FormEventHandler, MouseEventHandler, ReactNode, RefObject, ChangeE
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useNavigate } from 'react-router-dom';
-import type { RectCords } from 'folds';
 import {
   Box,
   Button,
@@ -13,10 +12,6 @@ import {
   Line,
   Menu,
   MenuItem,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
-  PopOut,
   Text,
   config,
   toRem,
@@ -47,7 +42,6 @@ import {
 } from '@atlaskit/pragmatic-drag-and-drop-hitbox/tree-item';
 import { autoScrollForElements } from '@atlaskit/pragmatic-drag-and-drop-auto-scroll/element';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
-import FocusTrap from 'focus-trap-react';
 import {
   useOrphanSpaces,
   useRecursiveChildScopeFactory,
@@ -90,20 +84,22 @@ import { roomToUnreadAtom } from '$state/room/roomToUnread';
 import { markAsRead } from '$utils/notifications';
 import { copyToClipboard } from '$utils/dom';
 import { shareText } from '$utils/share';
-import { stopPropagation } from '$utils/keyboard';
 import { getMatrixToRoom } from '$plugins/matrix-to';
 import { getViaServers } from '$plugins/via-servers';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useRoomAvatar } from '$hooks/useRoomMeta';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
-import { useOpenSpaceSettings } from '$state/hooks/spaceSettings';
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
 import { InviteUserPrompt } from '$components/invite-user-prompt';
 import { CustomAccountDataEvent } from '$types/matrix/accountData';
 import { lastVisitedSpaceIdAtom } from '$state/room/lastSpace';
 import { useMobileTapActivation } from '$hooks/useMobileTapActivation';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import { useOpenRoomSettings } from '$state/hooks/roomSettings';
+import { ResponsiveMenu } from '$components/ResponsiveMenu';
+import { useMenuAnchor } from '$hooks/useMenuAnchor';
 
 type SpaceMenuProps = {
   room: Room;
@@ -120,7 +116,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(
 
     const permissions = useRoomPermissions(creators, powerLevels);
     const canInvite = permissions.action('invite', mx.getSafeUserId());
-    const openSpaceSettings = useOpenSpaceSettings();
+    const openRoomSettings = useOpenRoomSettings();
 
     const [invitePrompt, setInvitePrompt] = useState(false);
 
@@ -160,7 +156,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(
     };
 
     const handleRoomSettings = () => {
-      openSpaceSettings(room.roomId);
+      openRoomSettings(room.roomId);
       requestClose();
     };
 
@@ -284,66 +280,55 @@ function RenameFolderDialog({ mx, folder, onClose, onSave }: Readonly<RenameFold
   };
 
   return (
-    <Overlay open backdrop={<OverlayBackdrop />}>
-      <OverlayCenter>
-        <FocusTrap
-          focusTrapOptions={{
-            initialFocus: false,
-            clickOutsideDeactivates: true,
-            onDeactivate: onClose,
-            escapeDeactivates: stopPropagation,
+    <ModalOverlay requestClose={onClose}>
+      <Dialog variant="Surface">
+        <Header
+          style={{
+            padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
+            borderBottomWidth: config.borderWidth.B300,
           }}
+          variant="Surface"
+          size="500"
         >
-          <Dialog variant="Surface">
-            <Header
-              style={{
-                padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
-                borderBottomWidth: config.borderWidth.B300,
-              }}
-              variant="Surface"
-              size="500"
-            >
-              <Box grow="Yes">
-                <Text size="H4">Rename Folder</Text>
-              </Box>
-              <IconButton size="300" onClick={onClose} radii="300">
-                {composerIcon(X)}
-              </IconButton>
-            </Header>
-            <Box
-              as="form"
-              onSubmit={handleSubmit}
-              style={{ padding: config.space.S400 }}
-              direction="Column"
-              gap="400"
-            >
-              <Text priority="400" size="T300">
-                Choose a short label for this folder. Leave empty to show space names again.
-              </Text>
-              <Box direction="Column" gap="100">
-                <Text size="L400">Folder name</Text>
-                <Input
-                  name="folderName"
-                  variant="Background"
-                  value={draft}
-                  maxLength={FOLDER_NAME_MAX_LENGTH}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
-                  autoFocus
-                />
-              </Box>
-              <Box direction="Row" gap="200" justifyContent="End">
-                <Button type="button" variant="Secondary" fill="Soft" onClick={onClose}>
-                  <Text size="B400">Cancel</Text>
-                </Button>
-                <Button type="submit" variant="Primary">
-                  <Text size="B400">Save</Text>
-                </Button>
-              </Box>
-            </Box>
-          </Dialog>
-        </FocusTrap>
-      </OverlayCenter>
-    </Overlay>
+          <Box grow="Yes">
+            <Text size="H4">Rename Folder</Text>
+          </Box>
+          <IconButton size="300" onClick={onClose} radii="300">
+            {composerIcon(X)}
+          </IconButton>
+        </Header>
+        <Box
+          as="form"
+          onSubmit={handleSubmit}
+          style={{ padding: config.space.S400 }}
+          direction="Column"
+          gap="400"
+        >
+          <Text priority="400" size="T300">
+            Choose a short label for this folder. Leave empty to show space names again.
+          </Text>
+          <Box direction="Column" gap="100">
+            <Text size="L400">Folder name</Text>
+            <Input
+              name="folderName"
+              variant="Background"
+              value={draft}
+              maxLength={FOLDER_NAME_MAX_LENGTH}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
+              autoFocus
+            />
+          </Box>
+          <Box direction="Row" gap="200" justifyContent="End">
+            <Button type="button" variant="Secondary" fill="Soft" onClick={onClose}>
+              <Text size="B400">Cancel</Text>
+            </Button>
+            <Button type="submit" variant="Primary">
+              <Text size="B400">Save</Text>
+            </Button>
+          </Box>
+        </Box>
+      </Dialog>
+    </ModalOverlay>
   );
 }
 
@@ -555,7 +540,11 @@ function SpaceTab({
 }: Readonly<SpaceTabProps>) {
   const isMobile = useScreenSizeContext() === ScreenSize.Mobile;
   const targetRef = useRef<HTMLDivElement>(null);
-  const mobileTapActivation = useMobileTapActivation(isMobile, () => onSelect(space.roomId));
+  const mobileTapActivation = useMobileTapActivation(
+    isMobile,
+    () => onSelect(space.roomId),
+    () => onSelect(space.roomId)
+  );
 
   const spaceDraggable: SidebarDraggable = useMemo(
     () =>
@@ -572,16 +561,7 @@ function SpaceTab({
   const dropState = useDropTarget(spaceDraggable, targetRef, !isMobile);
   const dropType = dropState?.type;
 
-  const [menuAnchor, setMenuAnchor] = useState<RectCords>();
-
-  const handleContextMenu: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    evt.preventDefault();
-    const cords = evt.currentTarget.getBoundingClientRect();
-    setMenuAnchor((currentState) => {
-      if (currentState) return undefined;
-      return cords;
-    });
-  };
+  const menu = useMenuAnchor<HTMLButtonElement>();
 
   return (
     <RoomUnreadProvider roomId={space.roomId}>
@@ -602,8 +582,11 @@ function SpaceTab({
                 data-id={space.roomId}
                 ref={triggerRef}
                 size={folder ? '300' : '400'}
-                onClick={() => onSelect(space.roomId)}
-                onContextMenu={handleContextMenu}
+                onContextMenu={menu.triggerProps.onContextMenu}
+                onTouchStart={menu.triggerProps.onTouchStart}
+                onTouchEnd={menu.triggerProps.onTouchEnd}
+                onTouchMove={menu.triggerProps.onTouchMove}
+                onTouchCancel={menu.triggerProps.onTouchCancel}
                 {...mobileTapActivation}
               >
                 <SpaceAvatar
@@ -621,32 +604,13 @@ function SpaceTab({
               count={unread.highlight > 0 ? unread.highlight : unread.total}
             />
           )}
-          {menuAnchor && (
-            <PopOut
-              anchor={menuAnchor}
-              position="Right"
-              align="Start"
-              content={
-                <FocusTrap
-                  focusTrapOptions={{
-                    initialFocus: false,
-                    returnFocusOnDeactivate: false,
-                    onDeactivate: () => setMenuAnchor(undefined),
-                    clickOutsideDeactivates: true,
-                    isKeyForward: (evt: KeyboardEvent) => evt.key === 'ArrowDown',
-                    isKeyBackward: (evt: KeyboardEvent) => evt.key === 'ArrowUp',
-                    escapeDeactivates: stopPropagation,
-                  }}
-                >
-                  <SpaceMenu
-                    room={space}
-                    requestClose={() => setMenuAnchor(undefined)}
-                    onUnpin={onUnpin}
-                  />
-                </FocusTrap>
-              }
-            />
-          )}
+          <ResponsiveMenu
+            anchor={menu.anchor}
+            position="Right"
+            align="Start"
+            requestClose={menu.close}
+            menu={<SpaceMenu room={space} requestClose={menu.close} onUnpin={onUnpin} />}
+          />
         </SidebarItemLeft>
       )}
     </RoomUnreadProvider>
@@ -795,22 +759,18 @@ export function SpaceTabs({ scrollRef }: Readonly<SpaceTabsProps>) {
   const [openedFolder, setOpenedFolder] = useAtom(useOpenedSidebarFolderAtom());
   const setLastSpaceId = useSetAtom(lastVisitedSpaceIdAtom);
   const [draggingItem, setDraggingItem] = useState<SidebarDraggable>();
-  const [folderMenuState, setFolderMenuState] = useState<{
-    folder: ISidebarFolder;
-    anchor: RectCords;
-  }>();
+  const folderMenu = useMenuAnchor<HTMLDivElement>();
+  const [folderMenuTarget, setFolderMenuTarget] = useState<ISidebarFolder>();
   const [renameTargetFolder, setRenameTargetFolder] = useState<ISidebarFolder>();
 
   const handleFolderContextMenu = useCallback(
     (folder: ISidebarFolder): MouseEventHandler =>
       (evt) => {
         evt.preventDefault();
-        setFolderMenuState({
-          folder,
-          anchor: evt.currentTarget.getBoundingClientRect(),
-        });
+        setFolderMenuTarget(folder);
+        folderMenu.openAt(evt.currentTarget as HTMLElement);
       },
-    []
+    [folderMenu]
   );
 
   const handleRenameFolderApply = useCallback(
@@ -861,7 +821,7 @@ export function SpaceTabs({ scrollRef }: Readonly<SpaceTabsProps>) {
               const folderContent = item.folder.content.filter((s) => s !== item.spaceId);
               if (folderContent.length === 0) {
                 // remove open state from local storage
-                setOpenedFolder({ type: 'DELETE', id: item.folder.id });
+                setOpenedFolder({ type: 'DELETE', value: item.folder.id });
                 return;
               }
               newItems.push({
@@ -985,7 +945,7 @@ export function SpaceTabs({ scrollRef }: Readonly<SpaceTabsProps>) {
 
     setOpenedFolder({
       type: openedFolder.has(targetFolderId) ? 'DELETE' : 'PUT',
-      id: targetFolderId,
+      value: targetFolderId,
     });
   };
 
@@ -1004,31 +964,26 @@ export function SpaceTabs({ scrollRef }: Readonly<SpaceTabsProps>) {
   if (sidebarItems.length === 0) return null;
   return (
     <>
-      {folderMenuState && (
-        <PopOut
-          anchor={folderMenuState.anchor}
-          position="Right"
-          align="Start"
-          content={
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                returnFocusOnDeactivate: false,
-                onDeactivate: () => setFolderMenuState(undefined),
-                clickOutsideDeactivates: true,
-                isKeyForward: (evt: KeyboardEvent) => evt.key === 'ArrowDown',
-                isKeyBackward: (evt: KeyboardEvent) => evt.key === 'ArrowUp',
-                escapeDeactivates: stopPropagation,
+      <ResponsiveMenu
+        anchor={folderMenu.anchor}
+        position="Right"
+        align="Start"
+        requestClose={() => {
+          folderMenu.close();
+          setFolderMenuTarget(undefined);
+        }}
+        menu={
+          folderMenuTarget && (
+            <FolderMenu
+              requestClose={() => {
+                folderMenu.close();
+                setFolderMenuTarget(undefined);
               }}
-            >
-              <FolderMenu
-                requestClose={() => setFolderMenuState(undefined)}
-                onRename={() => setRenameTargetFolder(folderMenuState.folder)}
-              />
-            </FocusTrap>
-          }
-        />
-      )}
+              onRename={() => setRenameTargetFolder(folderMenuTarget)}
+            />
+          )
+        }
+      />
       {renameTargetFolder && (
         <RenameFolderDialog
           mx={mx}

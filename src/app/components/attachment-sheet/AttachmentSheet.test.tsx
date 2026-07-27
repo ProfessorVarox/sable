@@ -7,8 +7,8 @@ vi.mock('$state/hooks/settings', () => ({
   useSetting: () => [false, vi.fn<() => void>()],
 }));
 
-vi.mock('$utils/user-agent', () => ({
-  mobileOrTablet: () => false,
+vi.mock('$utils/platform', () => ({
+  isMobileOrTablet: () => false,
 }));
 
 const callbacks = () => ({

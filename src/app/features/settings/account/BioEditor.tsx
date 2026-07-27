@@ -29,7 +29,7 @@ import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
 import { UseStateProvider } from '$components/UseStateProvider';
 import { EmojiBoard } from '$components/emoji-board';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { SettingTile } from '$components/setting-tile';
 import * as css from './BioEditor.css';
 
@@ -200,7 +200,7 @@ export function BioEditor({ value, isSaving, imagePackRooms, onSave }: BioEditor
                             requestClose={() =>
                               setAnchor((v) => {
                                 if (v) {
-                                  if (!mobileOrTablet()) ReactEditor.focus(editor);
+                                  if (!isMobileOrTablet()) ReactEditor.focus(editor);
                                   return undefined;
                                 }
                                 return v;

@@ -4,6 +4,7 @@ import { useFocused, useSelected, useSlate } from 'slate-react';
 import { useAtomValue } from 'jotai';
 
 import * as css from '$styles/CustomHtml.css';
+import { Image as MediaImage } from '$components/media';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { mxcUrlToHttp } from '$utils/matrix';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
@@ -91,8 +92,9 @@ function RenderEmoticonElement({
         contentEditable={false}
       >
         {element.key.startsWith('mxc://') ? (
-          <img
+          <MediaImage
             className={css.EmoticonImg}
+            style={{ width: 'auto', height: '1em' }}
             src={mxcUrlToHttp(mx, element.key, useAuthentication) ?? undefined}
             alt={element.shortcode}
           />

@@ -7,9 +7,14 @@ import { isTauri } from '@tauri-apps/api/core';
 import { type as osType } from '@tauri-apps/plugin-os';
 
 import { TauriFrontendReady } from '$components/tauri/TauriFrontendReady';
+import { TauriWindowFocus } from '$components/tauri/TauriWindowFocus';
 import { DesktopTitleBar } from '$components/tauri/DesktopTitleBar';
 import { MacTitleBar } from '$components/tauri/MacTitleBar';
+import { DesktopUpdater } from '$pages/client/DesktopUpdater';
+import { WebUpdater } from '$pages/client/WebUpdater';
+import { GlobalBannerRenderer } from '$components/global-banner/GlobalBannerRenderer';
 import { Toast } from '$components/toast/Toast';
+import { ConfirmHost } from '$components/confirm/ConfirmHost';
 import type { ScreenSize } from '$hooks/useScreenSize';
 import { ScreenSizeProvider } from '$hooks/useScreenSize';
 import { isReactQueryDevtoolsEnabled } from '$pages/reactQueryDevtoolsGate';
@@ -76,6 +81,7 @@ function AppShellFrame({ children, portalContainer, onPortalContainerChange }: A
   return (
     <>
       <TauriFrontendReady />
+      <TauriWindowFocus />
       <div
         style={{
           display: 'flex',
@@ -88,6 +94,9 @@ function AppShellFrame({ children, portalContainer, onPortalContainerChange }: A
       >
         {titlebarKind === 'desktop' && <DesktopTitleBar />}
         {titlebarKind === 'mac' && <MacTitleBar />}
+        <DesktopUpdater />
+        <WebUpdater />
+        <GlobalBannerRenderer />
         <div
           style={{
             display: 'flex',
@@ -101,6 +110,7 @@ function AppShellFrame({ children, portalContainer, onPortalContainerChange }: A
             {children}
           </SystemBarShell>
           <Toast container={portalContainer} />
+          <ConfirmHost container={portalContainer} />
         </div>
       </div>
     </>

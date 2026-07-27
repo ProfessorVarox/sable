@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Box, Text, Switch, Button } from 'folds';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { SettingTile } from '$components/setting-tile';
-import { SequenceCardStyle } from '$features/settings/styles.css';
 import { toSettingsFocusIdPart } from '$features/settings/settingsLink';
 import type { LogCategory } from '$utils/debugLogger';
 import { getDebugLogger } from '$utils/debugLogger';
@@ -19,15 +18,10 @@ const ALL_CATEGORIES: LogCategory[] = [
   'general',
 ];
 
+import { downloadJsonFile } from '$utils/common';
+
 const handleExportLogs = () => {
-  const data = getDebugLogger().exportLogs();
-  const blob = new Blob([data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `sable-debug-logs-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadJsonFile(getDebugLogger().exportLogs(), 'sable-debug-logs');
 };
 
 export function SentrySettings() {

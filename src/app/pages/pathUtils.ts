@@ -11,7 +11,6 @@ import {
   EXPLORE_FEATURED_PATH,
   EXPLORE_PATH,
   EXPLORE_SERVER_PATH,
-  HOME_CREATE_PATH,
   HOME_JOIN_PATH,
   HOME_PATH,
   HOME_ROOM_PATH,
@@ -22,7 +21,6 @@ import {
   INBOX_PATH,
   REGISTER_PATH,
   RESET_PASSWORD_PATH,
-  ROOT_PATH,
   SETTINGS_PATH,
   SPACE_LOBBY_PATH,
   SPACE_PATH,
@@ -83,8 +81,6 @@ export const getAppPathFromHref = (baseUrl: string, href: string): string => {
   return pathname + search;
 };
 
-export const getRootPath = (): string => ROOT_PATH;
-
 export const getLoginPath = (server?: string): string => {
   const params = server ? { server: encodeURIComponent(server) } : undefined;
   return generatePath(LOGIN_PATH, params);
@@ -101,7 +97,6 @@ export const getResetPasswordPath = (server?: string): string => {
 };
 
 export const getHomePath = (): string => HOME_PATH;
-export const getHomeCreatePath = (): string => HOME_CREATE_PATH;
 export const getHomeJoinPath = (): string => HOME_JOIN_PATH;
 export const getHomeSearchPath = (): string => HOME_SEARCH_PATH;
 export const getHomeRoomPath = (roomIdOrAlias: string, eventId?: string): string => {
@@ -169,13 +164,8 @@ export const getExploreServerPath = (server: string): string => {
 export const getCreatePath = (): string => CREATE_PATH;
 export const getCreateSpacePath = (spaceId?: string): string =>
   spaceId ? withSearchParam(CREATE_PATH, { spaceId }) : CREATE_PATH;
-export const getCreateRoomPath = (spaceId?: string, type?: string): string => {
-  const params: Record<string, string> = {};
-  if (spaceId) params.spaceId = spaceId;
-  if (type) params.type = type;
-  const keys = Object.keys(params);
-  return keys.length === 0 ? CREATE_ROOM_PATH : withSearchParam(CREATE_ROOM_PATH, params);
-};
+export const getCreateRoomPath = (spaceId?: string): string =>
+  spaceId ? withSearchParam(CREATE_ROOM_PATH, { spaceId }) : CREATE_ROOM_PATH;
 export const getBugReportPath = (): string => BUG_REPORT_PATH;
 export const getNavigatePath = (): string => NAVIGATE_PATH;
 export const getProfilePath = (): string => PROFILE_PATH;

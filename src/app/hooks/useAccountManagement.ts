@@ -4,11 +4,12 @@ import type { ValidatedAuthMetadata } from '$types/matrix-sdk';
 export const getAccountManagementUrl = (
   metadata: ValidatedAuthMetadata | undefined,
   action: string,
-  deviceId?: string
+  deviceId?: string,
+  homeserverUrl?: string
 ): string | undefined => {
   if (!metadata?.account_management_uri) return undefined;
 
-  const url = new URL(metadata.account_management_uri);
+  const url = new URL(metadata.account_management_uri, homeserverUrl);
   if (metadata.account_management_actions_supported?.includes(action)) {
     url.searchParams.set('action', action);
     if (deviceId) url.searchParams.set('device_id', deviceId);

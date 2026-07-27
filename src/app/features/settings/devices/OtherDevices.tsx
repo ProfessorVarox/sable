@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { Box, Button, config, Menu, Spinner, Text } from 'folds';
 import type { AuthDict, IAuthData, IMyDevice, MatrixError, UIAFlow } from '$types/matrix-sdk';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { ActionUIA, ActionUIAFlowsLoader } from '$components/ActionUIA';
 import type { AsyncState } from '$hooks/useAsyncCallback';
 import { AsyncStatus, useAsync } from '$hooks/useAsyncCallback';
@@ -13,7 +13,6 @@ import { VerificationStatus } from '$hooks/useDeviceVerificationStatus';
 import { useAuthMetadata } from '$hooks/useAuthMetadata';
 import { getAccountManagementUrl, useAccountManagementActions } from '$hooks/useAccountManagement';
 import { SettingTile } from '$components/setting-tile';
-import { SequenceCardStyle } from '$features/settings/styles.css';
 import { VerifyOtherDeviceTile } from './Verification';
 import { DeviceDeleteBtn, DeviceTile } from './DeviceTile';
 
@@ -62,7 +61,12 @@ export function OtherDevices({ devices, refreshDeviceList, showVerification }: O
   const [deleted, setDeleted] = useState(new Set());
 
   const handleDashboardOIDC = useCallback(() => {
-    const url = getAccountManagementUrl(authMetadata, accountManagementActions.sessionsList);
+    const url = getAccountManagementUrl(
+      authMetadata,
+      accountManagementActions.sessionsList,
+      undefined,
+      mx.getHomeserverUrl()
+    );
     if (!url) return;
     if (isTauri()) {
       import('@tauri-apps/plugin-opener')
@@ -71,14 +75,15 @@ export function OtherDevices({ devices, refreshDeviceList, showVerification }: O
       return;
     }
     window.open(url, '_blank');
-  }, [authMetadata, accountManagementActions]);
+  }, [authMetadata, accountManagementActions, mx]);
 
   const handleDeleteOIDC = useCallback(
     (deviceId: string) => {
       const url = getAccountManagementUrl(
         authMetadata,
         accountManagementActions.sessionEnd,
-        deviceId
+        deviceId,
+        mx.getHomeserverUrl()
       );
       if (!url) return;
       if (isTauri()) {
@@ -89,7 +94,7 @@ export function OtherDevices({ devices, refreshDeviceList, showVerification }: O
       }
       window.open(url, '_blank');
     },
-    [authMetadata, accountManagementActions]
+    [authMetadata, accountManagementActions, mx]
   );
 
   const handleToggleDelete = useCallback((deviceId: string) => {

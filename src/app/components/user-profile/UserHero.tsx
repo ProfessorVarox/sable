@@ -5,9 +5,6 @@ import {
   Box,
   color as standardColors,
   Modal,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
   Scroll,
   Text,
   Tooltip,
@@ -16,17 +13,16 @@ import {
   config,
 } from 'folds';
 import classNames from 'classnames';
-import FocusTrap from 'focus-trap-react';
 import colorMXID from '$utils/colorMXID';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { BreakWord, LineClamp3 } from '$styles/Text.css';
 import type { UserPresence } from '$hooks/useUserPresence';
-import { stopPropagation } from '$utils/keyboard';
 import { useRoom } from '$hooks/useRoom';
 import { useSableCosmetics } from '$hooks/useSableCosmetics';
 import { useNickname } from '$hooks/useNickname';
 import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
 import { ImageViewer } from '$components/image-viewer';
+import { Image as MediaImage } from '$components/media';
 import { AvatarPresence, PresenceBadge } from '$components/presence';
 import { UserAvatar } from '$components/user-avatar';
 import {
@@ -44,6 +40,7 @@ import { copyToClipboard } from '$utils/dom';
 import { useTimeoutToggle } from '$hooks/useTimeoutToggle';
 import { CopyIcon, CrossIcon } from '@phosphor-icons/react';
 import { useOpenSettings } from '$features/settings';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 
 type UserHeroProps = {
   userId: string;
@@ -83,7 +80,7 @@ export function UserHero({
   const bannerClasses = classNames(css.UserHeroCover, isFallbackCover && css.UserHeroCoverFallback);
 
   const renderCoverImage = () => (
-    <img
+    <MediaImage
       className={classNames(css.UserHeroCover, isFallbackCover && css.UserHeroCoverFallback)}
       src={coverUrl}
       alt={`${userId} cover`}
@@ -156,29 +153,15 @@ export function UserHero({
             </Avatar>
           </AvatarPresence>
           {viewAvatar && (
-            <Overlay open backdrop={<OverlayBackdrop />}>
-              <OverlayCenter>
-                <FocusTrap
-                  focusTrapOptions={{
-                    initialFocus: false,
-                    onDeactivate: () => setViewAvatar(undefined),
-                    clickOutsideDeactivates: true,
-                    escapeDeactivates: stopPropagation,
-                  }}
-                >
-                  <Modal
-                    size="500"
-                    onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
-                  >
-                    <ImageViewer
-                      src={viewAvatar}
-                      alt={userId}
-                      requestClose={() => setViewAvatar(undefined)}
-                    />
-                  </Modal>
-                </FocusTrap>
-              </OverlayCenter>
-            </Overlay>
+            <ModalOverlay requestClose={() => setViewAvatar(undefined)}>
+              <Modal size="500" onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}>
+                <ImageViewer
+                  src={viewAvatar}
+                  alt={userId}
+                  requestClose={() => setViewAvatar(undefined)}
+                />
+              </Modal>
+            </ModalOverlay>
           )}
         </div>
         {((status && status.length > 0) || allowEditing) && (
@@ -202,7 +185,8 @@ export function UserHero({
                 maxHeight: isFullStatus ? toRem(105) : toRem(48),
                 cursor: allowEditing || isExpandable ? 'pointer' : 'default',
                 display: 'flex',
-                width: allowEditing ? '100%' : 'fit-content',
+                width: allowEditing && !status ? '100%' : 'fit-content',
+                textAlign: 'center',
                 padding: `${toRem(8)} ${toRem(12)}`,
                 backgroundColor: statusSurfaceColor,
                 color: textColor,
@@ -238,13 +222,13 @@ export function UserHero({
                     size="T200"
                     style={{
                       flex: 1,
-                      wordBreak: 'break-word',
+                      display: '-webkit-box',
+                      overflowWrap: 'anywhere',
                       WebkitLineClamp: 2,
                       WebkitBoxOrient: 'vertical',
                       overflow: 'hidden',
                       opacity: allowEditing && !status ? config.opacity.Placeholder : 1,
                     }}
-                    truncate={allowEditing}
                   >
                     {status || (allowEditing && "What's on your mind?")}
                   </Text>

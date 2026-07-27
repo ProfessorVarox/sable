@@ -34,6 +34,30 @@ pub fn set_navigation_bar_color(color: u32) -> Result<(), String> {
     call_bar_color("setNavigationBarColorNative", color)
 }
 
+/// `kind` is "notification" or "invite"; mapped to an int to avoid JNI string
+/// marshalling (mirrors set_*_bar_color).
+pub(crate) fn play_notification_sound(kind: String) -> Result<(), String> {
+    let code = match kind.as_str() {
+        "invite" => 1,
+        _ => 0,
+    };
+    let vm = JAVA_VM.get().ok_or("java vm not initialized")?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+
+    let result = env.call_static_method(
+        "moe/sable/client/MainActivity",
+        "playNotificationSoundNative",
+        "(I)V",
+        &[JValue::Int(code)],
+    );
+    if result.is_err() {
+        let _ = env.exception_clear();
+    }
+    result.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 fn call_bar_color(method: &str, color: u32) -> Result<(), String> {
     let vm = JAVA_VM.get().ok_or("java vm not initialized")?;
     let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;

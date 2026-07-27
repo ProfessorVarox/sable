@@ -1,4 +1,4 @@
-import { Box, Button, Overlay, OverlayBackdrop, OverlayCenter, Spinner, Text } from 'folds';
+import { Box, Overlay, OverlayBackdrop, OverlayCenter, Spinner, Text } from 'folds';
 import { useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ValidatedAuthMetadata } from '$types/matrix-sdk';
@@ -14,6 +14,7 @@ import {
   completeOidcLogin,
   startOidcLogin,
 } from './oidcLoginUtil';
+import { Button } from '$components/button';
 
 const ERROR_TITLE = 'Single sign-on';
 
@@ -72,8 +73,9 @@ export function OidcLoginButton({
         variant="Secondary"
         fill="Soft"
         outlined
-        disabled={loading}
-        before={loading ? <Spinner size="200" variant="Secondary" /> : undefined}
+        loading={loading}
+        spinnerSize="200"
+        spinnerVariant="Secondary"
         onClick={() => start()}
       >
         <Text align="Center" size="B500" truncate>

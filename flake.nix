@@ -240,7 +240,7 @@
           nativeBuildInputs = pnpmNativeBuildInputs;
 
           env.VITE_BUILD_HASH = self.shortRev or self.dirtyShortRev or "";
-          env.VITE_IS_RELEASE_TAG = "false";
+          env.SABLE_BUILD_FLAVOR = "stable";
 
           buildPhase = ''
             runHook preBuild

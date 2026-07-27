@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Room } from '$types/matrix-sdk';
 import { RoomEvent } from '$types/matrix-sdk';
-import { useTimelineSync } from './useTimelineSync';
+import { countVisibleAmongNewest, useTimelineSync } from './useTimelineSync';
 import { getRoomUnreadInfo } from '$utils/timeline';
 import type * as TimelineUtils from '$utils/timeline';
 
@@ -116,6 +116,52 @@ function emitLiveTimelineEvent(
     timeline,
   });
 }
+
+const makeTimeline = (ids: string[]) => {
+  const timelineSet = { id: `set-${ids.join('')}` };
+  return {
+    getEvents: () => ids.map((id) => ({ id })),
+    getTimelineSet: () => timelineSet,
+  };
+};
+
+const count = (timelines: unknown[], n: number, backwards: boolean, visibleIds: string[]) => {
+  const isVisible = (ev: { id: string }) => visibleIds.includes(ev.id);
+  return countVisibleAmongNewest(timelines as never, n, backwards, isVisible as never);
+};
+
+describe('countVisibleAmongNewest', () => {
+  it('counts only the newest events at the head when paginating backwards', () => {
+    const timelines = [makeTimeline(['a', 'b', 'c']), makeTimeline(['d', 'e'])];
+
+    expect(count(timelines, 3, true, ['a', 'c', 'e'])).toBe(2);
+  });
+
+  it('counts only the newest events at the tail when paginating forwards', () => {
+    const timelines = [makeTimeline(['a', 'b', 'c']), makeTimeline(['d', 'e'])];
+
+    expect(count(timelines, 3, false, ['a', 'c', 'e'])).toBe(2);
+  });
+
+  it('spans timeline boundaries when the fetched count exceeds one timeline', () => {
+    const timelines = [makeTimeline(['a', 'b']), makeTimeline(['c', 'd'])];
+    expect(count(timelines, 4, true, ['a', 'b', 'c', 'd'])).toBe(4);
+  });
+
+  it('returns zero when nothing fetched is rendered', () => {
+    const timelines = [makeTimeline(['a', 'b', 'c'])];
+    expect(count(timelines, 3, true, [])).toBe(0);
+  });
+
+  it('does not over-count when fetched exceeds the number of loaded events', () => {
+    const timelines = [makeTimeline(['a', 'b'])];
+    expect(count(timelines, 10, true, ['a', 'b'])).toBe(2);
+  });
+
+  it('handles empty timelines', () => {
+    expect(count([], 5, true, ['a'])).toBe(0);
+  });
+});
 
 describe('useTimelineSync', () => {
   it('does not snap a non-bottom user to latest after TimelineReset', async () => {

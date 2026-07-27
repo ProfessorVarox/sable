@@ -1,7 +1,8 @@
 import type { MatrixClient, MatrixEvent, Room } from '$types/matrix-sdk';
 
-import { getAccountData, getStateEvent, getStateEvents } from '$utils/room';
+import { getAccountData, getStateEvent, getStateEvents } from '$utils/room/hierarchy';
 
+import type { IImageInfo } from '$types/matrix/common';
 import type { ImageUsage } from './types';
 import { ImagePack } from './ImagePack';
 import type { PackMetaReader } from './PackMetaReader';
@@ -28,7 +29,7 @@ export function packMetaEqual(a: PackMetaReader, b: PackMetaReader): boolean {
   );
 }
 
-export function makeImagePacks(packEvents: MatrixEvent[]): ImagePack[] {
+function makeImagePacks(packEvents: MatrixEvent[]): ImagePack[] {
   return packEvents.reduce<ImagePack[]>((imagePacks, packEvent) => {
     const packId = packEvent.getId();
     if (!packId) return imagePacks;
@@ -126,4 +127,27 @@ export function getUserImagePack(mx: MatrixClient): ImagePack | undefined {
 
   const userImagePack = ImagePack.fromMatrixEvent(userId, packEvent);
   return userImagePack;
+}
+
+/**
+ * The info a pack declares for one of its images: dimensions, mimetype and size, so sending a pack
+ * image never requires downloading it first.
+ */
+export function getPackImageInfo(
+  mx: MatrixClient,
+  room: Room,
+  usage: ImageUsage,
+  mxcUrl: string
+): IImageInfo | undefined {
+  const userPack = getUserImagePack(mx);
+  const packs = [
+    ...getRoomImagePacks(room),
+    ...(userPack ? [userPack] : []),
+    ...getGlobalImagePacks(mx),
+  ];
+  for (const pack of packs) {
+    const info = pack.getImages(usage).find((image) => image.url === mxcUrl)?.info;
+    if (info) return info;
+  }
+  return undefined;
 }

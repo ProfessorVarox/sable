@@ -144,6 +144,22 @@ async function loopbackFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   }
 }
 
+// plugin-http delivers the body over the IPC channel after the headers already resolved, so
+// a failure there rejects outside the caller's promise chain. Reading it here brings it back
+// into the try below.
+async function drainBody(response: Response): Promise<Response> {
+  if (!response.body) return response;
+
+  const drained = new Response(await response.arrayBuffer(), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  // `Response.url` is read by matrix-js-sdk and cannot be set via the constructor.
+  Object.defineProperty(drained, 'url', { value: response.url, writable: false });
+  return drained;
+}
+
 async function getTauriFetch(): Promise<AppFetch> {
   if (!tauriFetchPromise) {
     tauriFetchPromise = import('@tauri-apps/plugin-http').then(({ fetch }) => fetch as AppFetch);
@@ -173,5 +189,12 @@ export const fetch: AppFetch = async (input, init) => {
   }
 
   const tauriFetch = await getTauriFetch();
-  return tauriFetch(request, init);
+  try {
+    return await drainBody(await tauriFetch(request, init));
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      return new Response(null, { status: 502, statusText: 'Bad Gateway' });
+    }
+    throw e;
+  }
 };

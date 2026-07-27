@@ -1,6 +1,5 @@
 import type { ChangeEventHandler, MouseEventHandler } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { RectCords } from 'folds';
 import {
   Avatar,
   Badge,
@@ -10,7 +9,6 @@ import {
   IconButton,
   Input,
   MenuItem,
-  PopOut,
   Scroll,
   Spinner,
   Text,
@@ -26,12 +24,11 @@ import classNames from 'classnames';
 import { AvatarPresence, PresenceBadge } from '$components/presence';
 import { useUserPresence } from '$hooks/useUserPresence';
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import { UseStateProvider } from '$components/UseStateProvider';
 import type { SearchItemStrGetter, UseAsyncSearchOptions } from '$hooks/useAsyncSearch';
 import { useAsyncSearch } from '$hooks/useAsyncSearch';
 import { useDebounce } from '$hooks/useDebounce';
 import { TypingIndicator } from '$components/typing-indicator';
-import { getMemberDisplayName, getMemberSearchStr } from '$utils/room';
+import { getAvatarUrl, getMemberDisplayName, getMemberSearchStr } from '$utils/room/display';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { useSetSetting, useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
@@ -54,8 +51,9 @@ import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useMembershipFilter, useMembershipFilterMenu } from '$hooks/useMemberFilter';
 import { useMemberPowerSort, useMemberSort, useMemberSortMenu } from '$hooks/useMemberSort';
 import { useGetMemberPowerLevel, usePowerLevelsContext } from '$hooks/usePowerLevels';
-import { MembershipFilterMenu } from '$components/MembershipFilterMenu';
-import { MemberSortMenu } from '$components/MemberSortMenu';
+import { MemberMenuList } from '$components/MemberSortMenu';
+import { ResponsiveMenu } from '$components/ResponsiveMenu';
+import { useMenuAnchor } from '$hooks/useMenuAnchor';
 import { useOpenUserRoomProfile, useUserRoomProfileState } from '$state/hooks/userRoomProfile';
 import { useSpaceOptionally } from '$hooks/useSpace';
 import { ContainerColor } from '$styles/ContainerColor.css';
@@ -139,9 +137,7 @@ function MemberItem({
 
   // Increased the request size to 128x128 to maintain quality for the larger avatar
   const avatarMxcUrl = member.getMxcAvatarUrl();
-  const avatarUrl = avatarMxcUrl
-    ? mx.mxcUrlToHttp(avatarMxcUrl, 128, 128, 'crop', undefined, false, useAuthentication)
-    : undefined;
+  const avatarUrl = getAvatarUrl(mx, avatarMxcUrl, 128, useAuthentication);
 
   const presence = useUserPresence(member.userId);
   const { color, font } = useSableCosmetics(member.userId, room);
@@ -330,6 +326,8 @@ export function MembersDrawer({ room, members }: MembersDrawerProps) {
   const screenSize = useScreenSizeContext();
   const isMobile = screenSize === ScreenSize.Mobile;
   const hideText = curWidth <= 80 && !isMobile;
+  const filterMenu = useMenuAnchor<HTMLButtonElement>();
+  const sortMenu = useMenuAnchor<HTMLButtonElement>();
   return (
     <Box
       className={classNames(css.MembersDrawer, ContainerColor({ variant: 'Background' }))}
@@ -365,70 +363,56 @@ export function MembersDrawer({ room, members }: MembersDrawerProps) {
                   gap="200"
                 >
                   <Box alignItems="Center" justifyContent="SpaceBetween" gap="200">
-                    <UseStateProvider initial={undefined}>
-                      {(anchor: RectCords | undefined, setAnchor) => (
-                        <PopOut
-                          anchor={anchor}
-                          position="Bottom"
-                          align="Start"
-                          offset={4}
-                          content={
-                            <MembershipFilterMenu
-                              selected={membershipFilterIndex}
-                              onSelect={setMembershipFilterIndex}
-                              requestClose={() => setAnchor(undefined)}
-                            />
-                          }
-                        >
-                          <Chip
-                            onClick={
-                              ((evt) =>
-                                setAnchor(
-                                  evt.currentTarget.getBoundingClientRect()
-                                )) as MouseEventHandler<HTMLButtonElement>
-                            }
-                            variant="Background"
-                            size="400"
-                            radii="300"
-                            before={chipIcon(Funnel)}
-                          >
-                            <Text size="T200">{membershipFilter.name}</Text>
-                          </Chip>
-                        </PopOut>
-                      )}
-                    </UseStateProvider>
-                    <UseStateProvider initial={undefined}>
-                      {(anchor: RectCords | undefined, setAnchor) => (
-                        <PopOut
-                          anchor={anchor}
-                          position="Bottom"
-                          align="End"
-                          offset={4}
-                          content={
-                            <MemberSortMenu
-                              selected={sortFilterIndex}
-                              onSelect={setSortFilterIndex}
-                              requestClose={() => setAnchor(undefined)}
-                            />
-                          }
-                        >
-                          <Chip
-                            onClick={
-                              ((evt) =>
-                                setAnchor(
-                                  evt.currentTarget.getBoundingClientRect()
-                                )) as MouseEventHandler<HTMLButtonElement>
-                            }
-                            variant="Background"
-                            size="400"
-                            radii="300"
-                            after={chipIcon(ArrowsDownUp)}
-                          >
-                            <Text size="T200">{memberSort.name}</Text>
-                          </Chip>
-                        </PopOut>
-                      )}
-                    </UseStateProvider>
+                    <ResponsiveMenu
+                      anchor={filterMenu.anchor}
+                      requestClose={filterMenu.close}
+                      position="Bottom"
+                      align="Start"
+                      offset={4}
+                      menu={
+                        <MemberMenuList
+                          items={membershipFilterMenu}
+                          selected={membershipFilterIndex}
+                          onSelect={setMembershipFilterIndex}
+                          requestClose={filterMenu.close}
+                        />
+                      }
+                    >
+                      <Chip
+                        onClick={filterMenu.triggerProps.onClick}
+                        variant="Background"
+                        size="400"
+                        radii="300"
+                        before={chipIcon(Funnel)}
+                      >
+                        <Text size="T200">{membershipFilter.name}</Text>
+                      </Chip>
+                    </ResponsiveMenu>
+                    <ResponsiveMenu
+                      anchor={sortMenu.anchor}
+                      requestClose={sortMenu.close}
+                      position="Bottom"
+                      align="End"
+                      offset={4}
+                      menu={
+                        <MemberMenuList
+                          items={sortFilterMenu}
+                          selected={sortFilterIndex}
+                          onSelect={setSortFilterIndex}
+                          requestClose={sortMenu.close}
+                        />
+                      }
+                    >
+                      <Chip
+                        onClick={sortMenu.triggerProps.onClick}
+                        variant="Background"
+                        size="400"
+                        radii="300"
+                        after={chipIcon(ArrowsDownUp)}
+                      >
+                        <Text size="T200">{memberSort.name}</Text>
+                      </Chip>
+                    </ResponsiveMenu>
                   </Box>
                   <Box direction="Column" gap="100">
                     <Input

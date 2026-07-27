@@ -15,7 +15,7 @@ export const Editor = style([
 
 export const EditorRow = style({
   gridTemplateColumns: 'auto 1fr auto',
-  alignItems: 'center',
+  alignItems: 'end',
 });
 
 export const EditorRowMultiline = style({
@@ -80,6 +80,10 @@ export const EditorTextarea = style([
   },
 ]);
 
+export const EditorTextareaInline = style({
+  paddingBottom: toRem(13),
+});
+
 export const EditorResponsiveAfterMultiline = style([
   EditorOptions,
   {
@@ -118,8 +122,4 @@ export const EditorToolbarBase = style({
 
 export const EditorToolbar = style({
   padding: config.space.S100,
-});
-
-export const MarkdownBtnBox = style({
-  paddingRight: config.space.S100,
 });

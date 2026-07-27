@@ -6,7 +6,7 @@
 .tauri-titlebar {
   height: var(--tauri-titlebar-height);
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   align-items: stretch;
   position: relative;
   background: var(--sable-bg-container);
@@ -44,6 +44,21 @@
   letter-spacing: 0.02em;
 }
 
+.tauri-titlebar__update {
+  display: flex;
+  align-items: center;
+  padding-inline: 4px;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.tauri-titlebar--mac .tauri-titlebar__update {
+  position: absolute;
+  right: 8px;
+  top: 0;
+  height: 100%;
+}
+
 .tauri-titlebar__controls {
   display: flex;
   app-region: no-drag;
@@ -76,6 +91,8 @@
   color: var(--sable-bg-on-container);
   background: color-mix(in srgb, var(--sable-bg-on-container) 10%, transparent);
   white-space: nowrap;
+  max-width: 50vw;
+  text-overflow: ellipsis;
 }
 
 .tauri-titlebar-status__label--success {

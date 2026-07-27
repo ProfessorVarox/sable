@@ -5,13 +5,18 @@ import { createClient } from '$types/matrix-sdk';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useAutoDiscoveryInfo } from '$hooks/useAutoDiscoveryInfo';
 import { promiseFulfilledResult, promiseRejectedResult } from '$utils/common';
-import type { AuthFlows, RegisterFlowsResponse } from '$hooks/useAuthFlows';
-import { RegisterFlowStatus, parseRegisterErrResp } from '$hooks/useAuthFlows';
+import {
+  isUsableOAuthMetadata,
+  type AuthFlows,
+  RegisterFlowStatus,
+  parseRegisterErrResp,
+  type RegisterFlowsResponse,
+} from '$hooks/useAuthFlows';
 import { fetch } from '$utils/fetch';
 
 type AuthFlowsLoaderProps = {
   fallback?: () => ReactNode;
-  error?: (err: unknown) => ReactNode;
+  error?: (err: unknown, retry: () => void) => ReactNode;
   children: (authFlows: AuthFlows) => ReactNode;
 };
 export function AuthFlowsLoader({ fallback, error, children }: AuthFlowsLoaderProps) {
@@ -29,7 +34,10 @@ export function AuthFlowsLoader({ fallback, error, children }: AuthFlowsLoaderPr
       ]);
       const loginFlows = promiseFulfilledResult(result[0]);
       const registerResp = promiseRejectedResult(result[1]) as MatrixError | undefined;
-      const authMetadata = promiseFulfilledResult(result[2]);
+      const discoveredAuthMetadata = promiseFulfilledResult(result[2]);
+      const authMetadata = isUsableOAuthMetadata(discoveredAuthMetadata)
+        ? discoveredAuthMetadata
+        : undefined;
       let registerFlows: RegisterFlowsResponse = {
         status: RegisterFlowStatus.InvalidRequest,
       };
@@ -64,7 +72,7 @@ export function AuthFlowsLoader({ fallback, error, children }: AuthFlowsLoaderPr
   }
 
   if (state.status === AsyncStatus.Error) {
-    return error?.(state.error);
+    return error?.(state.error, load);
   }
 
   return children(state.data);

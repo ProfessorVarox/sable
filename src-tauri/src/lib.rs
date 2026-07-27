@@ -118,6 +118,21 @@ fn setup_cef_resize_workaround(
     Ok(())
 }
 
+/// Routes in-app notification sounds to the native volume stream on mobile.
+/// `kind` is "notification" or "invite".
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+fn play_notification_sound(kind: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        mobile::play_notification_sound(kind)
+    }
+    #[cfg(target_os = "ios")]
+    {
+        ios::play_notification_sound(kind)
+    }
+}
+
 pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> tauri::Result<()> {
     if let Some(_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         #[cfg(desktop)]
@@ -140,6 +155,30 @@ pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> taur
             .disable_drag_drop_handler()
             .use_https_scheme(true)
             .background_color(tauri::window::Color(0x1A, 0x1C, 0x28, 0xFF));
+
+    // Only android: intercept navigation to external URLs and open them in the system browser
+    // Other platforms: might need other URI schemes, and on_navigation might get called on iframe urls
+    // (as of now, the following is confirmed not to work with linux/webkit2gtk)
+    #[cfg(target_os = "android")]
+    let builder = {
+        let nav_handle = app.clone();
+        builder.on_navigation(move |url| {
+            let internal = url.scheme() == "tauri"
+                || url.host_str() == Some("tauri.localhost")
+                || (cfg!(dev) && url.host_str() == Some("localhost"));
+            if !internal {
+                // open in new thread
+                // open_url blocks on the ui thread but we are on the ui thread...
+                let handle = nav_handle.clone();
+                let url = url.to_string();
+                std::thread::spawn(move || {
+                    use tauri_plugin_opener::OpenerExt;
+                    let _ = handle.opener().open_url(url, None::<&str>);
+                });
+            }
+            internal
+        })
+    };
 
     #[cfg(desktop)]
     let title = main_window_title(app);
@@ -164,7 +203,10 @@ pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> taur
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     let builder = builder.decorations(!desktop_settings.use_custom_title_bar);
 
+    #[cfg(desktop)]
     let webview_window = builder.build()?;
+    #[cfg(not(desktop))]
+    builder.build()?;
 
     #[cfg(all(feature = "cef", target_os = "linux"))]
     setup_cef_resize_workaround(&webview_window)?;
@@ -199,7 +241,17 @@ pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> taur
                     settings.set_enable_media_stream(true);
                     settings.set_enable_mediasource(true);
                     settings.set_enable_media(true);
+                    // Enable inspector via SABLE_DEVTOOLS env var.
+                    if std::env::var("SABLE_DEVTOOLS").is_ok() {
+                        settings.set_enable_developer_extras(true);
+                    }
                 }
+
+                // Bypass CORS for HTTP(S) targets so Element Call's iframe
+                // fetches to split-horizon DNS homeservers aren't PNA-blocked.
+                // Same-origin policy and CSP remain enforced.
+                gtk_webview.set_cors_allowlist(&["http://*/*", "https://*/*"]);
+
                 gtk_webview.connect_permission_request(move |_wv, request| {
                     // Ask the user (once per permission type, then remember the choice)
                     // for the permissions Sable actually uses; deny anything else.
@@ -281,7 +333,6 @@ pub fn run() {
         let _ = show_or_create_main_window(app);
     }));
 
-    #[cfg(any(mobile, desktop))]
     let builder = builder.plugin(tauri_plugin_notifications::init());
 
     #[cfg(all(desktop, feature = "updater"))]
@@ -363,13 +414,22 @@ pub fn run() {
 
             #[cfg(debug_assertions)]
             {
-                let (log_plugin, _level, logger) = tauri_plugin_log::Builder::default()
-                    .level(log::LevelFilter::Info)
-                    .split(app.handle())?;
-                let mut devtools = tauri_plugin_devtools::Builder::default();
-                devtools.attach_logger(logger);
-                app.handle().plugin(devtools.init())?;
-                app.handle().plugin(log_plugin)?;
+                #[cfg(feature = "devtools")]
+                {
+                    let (log_plugin, _level, logger) = tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .split(app.handle())?;
+                    let mut devtools = tauri_plugin_devtools::Builder::default();
+                    devtools.attach_logger(logger);
+                    app.handle().plugin(devtools.init())?;
+                    app.handle().plugin(log_plugin)?;
+                }
+                #[cfg(not(feature = "devtools"))]
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
             }
 
             Ok(())
@@ -393,6 +453,8 @@ pub fn run() {
             mobile::set_navigation_bar_color,
             #[cfg(target_os = "ios")]
             ios::haptic_feedback,
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            play_notification_sound,
             #[cfg(desktop)]
             desktop::download::save_download,
             #[cfg(desktop)]

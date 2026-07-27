@@ -14,6 +14,7 @@ import type { TUploadAtom, UploadSuccess } from '$state/upload';
 import { UploadStatus, useBindUploadAtom } from '$state/upload';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import type { TUploadContent } from '$utils/matrix';
+import { isImageMimeType } from '$utils/mimeTypes';
 import { bytesToSize } from '$utils/common';
 import { useMediaConfig } from '$hooks/useMediaConfig';
 import { UploadCard, UploadCardError, CompactUploadCardProgress } from './UploadCard';
@@ -22,7 +23,7 @@ function getFileTypeIconComponent(fileType: string): PhosphorIcon {
   const type = fileType.toLowerCase();
   if (type.startsWith('audio')) return Play;
   if (type.startsWith('video')) return VideoCamera;
-  if (type.startsWith('image')) return Image;
+  if (isImageMimeType(type)) return Image;
   return File;
 }
 

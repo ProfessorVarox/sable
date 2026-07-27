@@ -149,6 +149,7 @@ describe('react custom html parser', () => {
     const img = container.querySelector('img');
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute('height', '32');
+    expect(img).toHaveStyle({ width: 'auto', height: '1em' });
   });
 
   it('clamps incoming inline image height to the configured max', () => {

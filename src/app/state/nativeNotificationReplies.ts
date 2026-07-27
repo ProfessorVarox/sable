@@ -1,6 +1,6 @@
 import { atom } from 'jotai';
 
-export const NATIVE_REPLY_MAX = 8;
+const NATIVE_REPLY_MAX = 8;
 export const NATIVE_REPLY_EXPIRY_MS = 120_000;
 export type NativeNotificationReply = {
   key: string;
@@ -10,7 +10,7 @@ export type NativeNotificationReply = {
   text: string;
   createdAt: number;
 };
-export type NativeActionPayload = {
+type NativeActionPayload = {
   actionId: string;
   inputValue?: string | null;
   notification: {

@@ -30,7 +30,7 @@ import { PasswordInput } from '$components/password-input';
 import { getResetPasswordPath } from '$pages/pathUtils';
 import { stopPropagation } from '$utils/keyboard';
 import { FieldError } from '$pages/auth/FiledError';
-import { deviceDisplayName } from '$utils/user-agent';
+import { deviceDisplayName } from '$utils/platform';
 import { getMxIdServer } from '$utils/mxIdHelper';
 import type { CustomLoginResponse } from './loginUtil';
 import { LoginError, factoryGetBaseUrl, login, useLoginComplete } from './loginUtil';

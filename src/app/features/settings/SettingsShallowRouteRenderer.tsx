@@ -1,30 +1,29 @@
-import { matchPath, useLocation, useNavigate } from 'react-router-dom';
+import { useRef } from 'react';
+import { matchPath, useLocation } from 'react-router-dom';
+import { Modal } from 'folds';
 import { useScreenSizeContext } from '$hooks/useScreenSize';
-import { Modal500 } from '$components/Modal500';
-import { isShallowSettingsRoute } from '$pages/client/ClientRouteOutlet';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import { isShallowRoute } from '$pages/client/shallowRoute';
+import { useCloseShallowRoute } from '$pages/client/useShallowRoute';
 import { SETTINGS_PATH } from '$pages/paths';
-import { getSettingsCloseTarget, type SettingsRouteState } from './navigation';
 import { SettingsRoute } from './SettingsRoute';
 
 export function SettingsShallowRouteRenderer() {
-  const navigate = useNavigate();
   const location = useLocation();
   const screenSize = useScreenSizeContext();
-  const routeState = location.state as SettingsRouteState | null;
+  const requestClose = useCloseShallowRoute();
   const routeMatch = matchPath(SETTINGS_PATH, location.pathname);
+  const modalRef = useRef<HTMLDivElement | null>(null);
 
-  if (!isShallowSettingsRoute(location.pathname, location.state, screenSize) || !routeMatch) {
+  if (!routeMatch || !isShallowRoute(location.pathname, location.state, screenSize)) {
     return null;
   }
 
-  const handleRequestClose = () => {
-    const closeTarget = getSettingsCloseTarget(routeState);
-    navigate(closeTarget.to, { replace: true, state: closeTarget.state });
-  };
-
   return (
-    <Modal500 requestClose={handleRequestClose}>
-      <SettingsRoute routeSection={routeMatch.params.section} />
-    </Modal500>
+    <ModalOverlay requestClose={requestClose} mobile="fullscreen" contentRef={modalRef}>
+      <Modal ref={modalRef} tabIndex={-1} size="500" variant="Background">
+        <SettingsRoute routeSection={routeMatch.params.section} />
+      </Modal>
+    </ModalOverlay>
   );
 }

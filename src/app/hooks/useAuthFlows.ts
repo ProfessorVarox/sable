@@ -51,6 +51,15 @@ export type AuthFlows = {
   authMetadata?: ValidatedAuthMetadata;
 };
 
+/** True only when the homeserver advertises the OAuth authorization-code flow Sable uses. */
+export const isUsableOAuthMetadata = (metadata: ValidatedAuthMetadata | undefined): boolean =>
+  metadata !== undefined &&
+  metadata.grant_types_supported.includes('authorization_code') &&
+  metadata.grant_types_supported.includes('refresh_token') &&
+  metadata.response_types_supported.includes('code') &&
+  metadata.response_modes_supported.includes('fragment') &&
+  metadata.code_challenge_methods_supported.includes('S256');
+
 const AuthFlowsContext = createContext<AuthFlows | null>(null);
 
 export const AuthFlowsProvider = AuthFlowsContext.Provider;

@@ -1,7 +1,7 @@
 import type { ChangeEventHandler } from 'react';
 import { useRef } from 'react';
 import { Input, Chip, Text } from 'folds';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { ArrowRight, sizedIcon, MagnifyingGlass } from '$components/icons/phosphor';
 import { EmojiBoardTab } from '../types';
 
@@ -56,7 +56,7 @@ export function SearchInput({
         )
       }
       onChange={onChange}
-      autoFocus={!mobileOrTablet()}
+      autoFocus={!isMobileOrTablet()}
     />
   );
 }

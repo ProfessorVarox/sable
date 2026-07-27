@@ -23,7 +23,7 @@ import {
   type RenderImageContentProps,
 } from '$components/message';
 import { UserAvatar } from '$components/user-avatar';
-import { Image } from '$components/media';
+import { Image as MediaImage } from '$components/media';
 import { ImageViewer } from '$components/image-viewer';
 import { RenderMessageContent } from '$components/RenderMessageContent';
 import { PowerIcon } from '$components/power';
@@ -55,7 +55,8 @@ import { nicknamesAtom } from '$state/nicknames';
 import { settingsAtom } from '$state/settings';
 import { useSetting } from '$state/hooks/settings';
 import type { GetContentCallback } from '$types/matrix/room';
-import { getEditedEvent, getMemberAvatarMxc, getMemberDisplayName } from '$utils/room';
+import { getMemberAvatarMxc, getMemberDisplayName } from '$utils/room/display';
+import { getEditedEvent } from '$utils/room/relations';
 import { getMxIdLocalPart, mxcUrlToHttp } from '$utils/matrix';
 import * as customHtmlCss from '$styles/CustomHtml.css';
 
@@ -71,8 +72,8 @@ type MessagePreviewRendererContext = MessagePreviewRendererOptions & {
   mx: ReturnType<typeof useMatrixClient>;
 };
 
-function LazyImage(props: ComponentProps<typeof Image>) {
-  return <Image {...props} loading="lazy" />;
+function LazyImage(props: ComponentProps<typeof MediaImage>) {
+  return <MediaImage {...props} disablePixelation loading="lazy" />;
 }
 
 function resolvePreviewContent(
@@ -242,7 +243,7 @@ function renderTombstone(_ctx: MessagePreviewRendererContext, event: MatrixEvent
   return <Text>{event.getContent().body ?? 'This room has been replaced.'}</Text>;
 }
 
-export function useMessagePreviewRenderer(options: MessagePreviewRendererOptions) {
+function useMessagePreviewRenderer(options: MessagePreviewRendererOptions) {
   const mx = useMatrixClient();
   const context = useMemo<MessagePreviewRendererContext>(() => ({ ...options, mx }), [mx, options]);
   const handlers = useMemo(

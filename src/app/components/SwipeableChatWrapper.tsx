@@ -3,7 +3,7 @@ import { animate, motion, useMotionValue } from 'framer-motion';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom, RightSwipeAction } from '$state/settings';
 import { haptic } from '$utils/haptics';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { useMobileNavDrawer } from '$components/page/MobileNavDrawerContext';
 
 interface SwipeableChatWrapperProps {
@@ -17,7 +17,6 @@ export function SwipeableChatWrapper({
   onOpenMembers,
   onReply,
 }: SwipeableChatWrapperProps) {
-  const [mobileGestures] = useSetting(settingsAtom, 'mobileGestures');
   const [rightSwipeAction] = useSetting(settingsAtom, 'rightSwipeAction');
   const x = useMotionValue(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -30,6 +29,8 @@ export function SwipeableChatWrapper({
         gestureActiveRef.current = true;
         x.stop();
       }
+
+      if (!isMobileOrTablet()) return;
 
       const canSwipeLeft =
         rightSwipeAction === RightSwipeAction.Members ? !!onOpenMembers : !!onReply;
@@ -57,16 +58,16 @@ export function SwipeableChatWrapper({
 
   useLayoutEffect(() => {
     const element = containerRef.current;
-    if (!drawer || !element || !mobileGestures || !mobileOrTablet()) return undefined;
+    if (!drawer || !element || !isMobileOrTablet()) return undefined;
 
     return drawer.registerChatSwipe(element, {
       move,
       end: ({ distanceX, velocityX }) => finish(true, distanceX, velocityX),
       cancel: () => finish(false),
     });
-  }, [drawer, finish, mobileGestures, move]);
+  }, [drawer, finish, move]);
 
-  if (!mobileGestures || !mobileOrTablet()) {
+  if (!isMobileOrTablet()) {
     return (
       <div
         style={{

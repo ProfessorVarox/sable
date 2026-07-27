@@ -1,7 +1,7 @@
+import React from 'react';
 import classNames from 'classnames';
 import { Box, config, Text } from 'folds';
 import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion';
-import { SyncState } from '$types/matrix-sdk';
 import { type TitlebarStatusView } from '$state/titlebarStatus';
 import { ContainerColor } from '$styles/ContainerColor.css';
 
@@ -10,31 +10,9 @@ const TITLEBAR_EASE_OUT_SOFT: [number, number, number, number] = [0.24, 0.72, 0.
 
 type SyncConnectionStatusProps = {
   status: TitlebarStatusView | null;
+  onClick?: () => void;
+  icon?: React.ReactNode;
 };
-
-export function getSyncConnectionStatusView(
-  current: SyncState | null,
-  previous: SyncState | null | undefined
-): TitlebarStatusView | null {
-  if (
-    (current === SyncState.Prepared ||
-      current === SyncState.Syncing ||
-      current === SyncState.Catchup) &&
-    previous !== SyncState.Syncing
-  ) {
-    return { text: 'Connecting...', variant: 'Success' };
-  }
-
-  if (current === SyncState.Reconnecting) {
-    return { text: 'Connection Lost! Reconnecting...', variant: 'Warning' };
-  }
-
-  if (current === SyncState.Error) {
-    return { text: 'Connection Lost!', variant: 'Critical' };
-  }
-
-  return null;
-}
 
 export function SyncConnectionStatusBanner({ status }: SyncConnectionStatusProps) {
   const shouldReduceMotion = useReducedMotion();
@@ -157,7 +135,7 @@ export function SyncConnectionStatusBanner({ status }: SyncConnectionStatusProps
   );
 }
 
-export function SyncConnectionStatusTitlebar({ status }: SyncConnectionStatusProps) {
+export function SyncConnectionStatusTitlebar({ status, onClick, icon }: SyncConnectionStatusProps) {
   const shouldReduceMotion = useReducedMotion();
   const progress = status?.progress;
   const pillVariants = shouldReduceMotion
@@ -233,10 +211,12 @@ export function SyncConnectionStatusTitlebar({ status }: SyncConnectionStatusPro
       };
 
   return (
-    <AnimatePresence mode="sync" initial={false}>
+    <AnimatePresence mode="popLayout" initial={false}>
       {status && (
         <motion.span
           key={status.variant}
+          role={onClick ? 'button' : undefined}
+          tabIndex={onClick ? 0 : undefined}
           className={classNames(
             'tauri-titlebar-status__label',
             status.variant === 'Success' && 'tauri-titlebar-status__label--success',
@@ -244,11 +224,23 @@ export function SyncConnectionStatusTitlebar({ status }: SyncConnectionStatusPro
             status.variant === 'Critical' && 'tauri-titlebar-status__label--critical',
             status.variant === 'Primary' && 'tauri-titlebar-status__label--primary'
           )}
+          onClick={onClick}
+          onKeyDown={
+            onClick
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onClick();
+                  }
+                }
+              : undefined
+          }
           style={{
             transformOrigin: 'center top',
             position: 'relative',
             overflow: 'hidden',
             willChange: shouldReduceMotion ? 'opacity' : 'transform, opacity, clip-path',
+            cursor: onClick ? 'pointer' : undefined,
           }}
           variants={pillVariants}
           initial="hidden"
@@ -256,11 +248,20 @@ export function SyncConnectionStatusTitlebar({ status }: SyncConnectionStatusPro
           exit="exit"
         >
           <motion.span
-            className="tauri-titlebar-status__text"
-            style={{ willChange: 'opacity' }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              willChange: 'opacity',
+            }}
             variants={textVariants}
           >
-            {status.text}
+            {icon && (
+              <span style={{ display: 'flex' }} aria-hidden>
+                {icon}
+              </span>
+            )}
+            <span className="tauri-titlebar-status__text">{status.text}</span>
           </motion.span>
           {progress !== undefined && (
             <div

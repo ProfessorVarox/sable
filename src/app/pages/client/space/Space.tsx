@@ -1,21 +1,14 @@
-import type { MouseEventHandler, ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import type { RectCords } from 'folds';
+import { useAtom, useAtomValue } from 'jotai';
 import {
   Avatar,
   Box,
-  Button,
   IconButton,
   Line,
   Menu,
   MenuItem,
   Modal,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
-  PopOut,
-  Spinner,
   Text,
   color,
   config,
@@ -23,7 +16,6 @@ import {
 } from 'folds';
 import type { VirtualItem } from '@tanstack/react-virtual';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import FocusTrap from 'focus-trap-react';
 import type { MatrixClient, Room, RoomJoinRulesEventContent } from '$types/matrix-sdk';
 import { JoinRule, EventType, KnownMembership } from '$types/matrix-sdk';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -46,7 +38,8 @@ import { useRoomName } from '$hooks/useRoomMeta';
 import type { HierarchyItem } from '$hooks/useSpaceHierarchy';
 import { useSpaceJoinedHierarchy } from '$hooks/useSpaceHierarchy';
 import { allRoomsAtom } from '$state/room-list/roomList';
-import { PageNav, PageNavContent, PageNavHeader } from '$components/page';
+import { PageNavContent, PageNavHeader } from '$components/page';
+import { PageNavShell } from '$components/page/PageNavShell';
 import { usePowerLevels } from '$hooks/usePowerLevels';
 import { useRecursiveChildScopeFactory, useSpaceChildren } from '$state/hooks/roomList';
 import {
@@ -76,7 +69,6 @@ import { shareText } from '$utils/share';
 import { useClosedNavCategoriesAtom } from '$state/hooks/closedNavCategories';
 import { useStateEvent } from '$hooks/useStateEvent';
 
-import { stopPropagation } from '$utils/keyboard';
 import { getMatrixToRoom } from '$plugins/matrix-to';
 import { getViaServers } from '$plugins/via-servers';
 import { useSetting } from '$state/hooks/settings';
@@ -85,20 +77,19 @@ import {
   getRoomNotificationMode,
   useRoomsNotificationPreferencesContext,
 } from '$hooks/useRoomsNotificationPreferences';
-import { useOpenSpaceSettings } from '$state/hooks/spaceSettings';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
 import { ContainerColor } from '$styles/ContainerColor.css';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
-import { BreakWord } from '$styles/Text.css';
+import { AsyncError } from '$components/AsyncError';
 import { InviteUserPrompt } from '$components/invite-user-prompt';
 import { useCallEmbed } from '$hooks/useCallEmbed';
 import { createDebugLogger } from '$utils/debugLogger';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
-import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
+import { useSidebarWidth } from '$hooks/useSidebarWidth';
 import { RoomAvatar } from '$components/room-avatar';
-import { getRoomAvatarUrl } from '$utils/room';
+import { getRoomAvatarUrl } from '$utils/room/display';
 import { nameInitials } from '$utils/common';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { CustomStateEvent } from '$types/matrix/room';
@@ -107,9 +98,13 @@ import { ModalWide } from '$styles/Modal.css';
 import { ImageViewer } from '$components/image-viewer';
 import { reportMediaLoadFailure } from '$utils/mediaLoadDiagnostics';
 import * as css from './styles.css';
-import { isResizingSidebarAtom } from '$state/isResizingSidebar';
-import { UserQuickTools } from '../sidebar/UserQuickTools';
+import { Image as MediaImage } from '$components/media';
 import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import { useOpenRoomSettings } from '$state/hooks/roomSettings';
+import { ResponsiveMenu } from '$components/ResponsiveMenu';
+import { useMenuAnchor } from '$hooks/useMenuAnchor';
+import { Button } from '$components/button';
 
 const debugLog = createDebugLogger('Space');
 
@@ -128,7 +123,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
 
   const permissions = useRoomPermissions(creators, powerLevels);
   const canInvite = permissions.action('invite', mx.getSafeUserId());
-  const openSpaceSettings = useOpenSpaceSettings();
+  const openRoomSettings = useOpenRoomSettings();
   const { navigateRoom } = useRoomNavigate();
 
   const [invitePrompt, setInvitePrompt] = useState(false);
@@ -164,7 +159,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
   };
 
   const handleRoomSettings = () => {
-    openSpaceSettings(room.roomId);
+    openRoomSettings(room.roomId);
     requestClose();
   };
 
@@ -273,7 +268,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
 function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient }) {
   const space = useSpace();
   const spaceName = useRoomName(space);
-  const [menuAnchor, setMenuAnchor] = useState<RectCords>();
+  const menu = useMenuAnchor();
   const useAuthentication = useMediaAuthentication();
 
   const joinRules = useStateEvent(
@@ -281,13 +276,6 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
     EventType.RoomJoinRules
   )?.getContent<RoomJoinRulesEventContent>();
 
-  const handleOpenMenu: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    const cords = evt.currentTarget.getBoundingClientRect();
-    setMenuAnchor((currentState) => {
-      if (currentState) return undefined;
-      return cords;
-    });
-  };
   const [showBanners] = useSetting(settingsAtom, 'showRoomBanners');
   const [roomBannerHeight, setRoomBannerHeight] = useSetting(settingsAtom, 'roomBannerHeight');
   const [curHeight, setCurHeight] = useState(roomBannerHeight);
@@ -317,7 +305,11 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
           <PageNavHeader outlined={!hasBanner} size="600">
             {hideText ? (
               <Box alignItems="Center" grow="Yes" justifyContent="Center">
-                <Avatar size={hideText ? undefined : '200'} radii="400" onClick={handleOpenMenu}>
+                <Avatar
+                  size={hideText ? undefined : '200'}
+                  radii="400"
+                  onClick={menu.triggerProps.onClick}
+                >
                   <RoomAvatar
                     roomId={space.roomId}
                     src={getRoomAvatarUrl(mx, space, 96, useAuthentication)}
@@ -346,42 +338,27 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
                 </Box>
                 <Box shrink="No">
                   <IconButton
-                    aria-pressed={!!menuAnchor}
+                    aria-pressed={!!menu.anchor}
                     variant="Background"
                     style={hasBanner ? { backgroundColor: 'transparent', color: '#fff' } : {}}
-                    onClick={handleOpenMenu}
+                    onClick={menu.triggerProps.onClick}
                   >
                     {composerIcon(DotsThreeOutlineVerticalIcon, {
-                      weight: menuAnchor ? 'fill' : 'regular',
+                      weight: menu.anchor ? 'fill' : 'regular',
                     })}
                   </IconButton>
                 </Box>
               </Box>
             )}
           </PageNavHeader>
-          {menuAnchor && (
-            <PopOut
-              anchor={menuAnchor}
-              position="Bottom"
-              align="End"
-              offset={6}
-              content={
-                <FocusTrap
-                  focusTrapOptions={{
-                    initialFocus: false,
-                    returnFocusOnDeactivate: false,
-                    onDeactivate: () => setMenuAnchor(undefined),
-                    clickOutsideDeactivates: true,
-                    isKeyForward: (evt: KeyboardEvent) => evt.key === 'ArrowDown',
-                    isKeyBackward: (evt: KeyboardEvent) => evt.key === 'ArrowUp',
-                    escapeDeactivates: stopPropagation,
-                  }}
-                >
-                  <SpaceMenu room={space} requestClose={() => setMenuAnchor(undefined)} />
-                </FocusTrap>
-              }
-            />
-          )}
+          <ResponsiveMenu
+            anchor={menu.anchor}
+            requestClose={menu.close}
+            position="Bottom"
+            align="End"
+            offset={6}
+            menu={<SpaceMenu room={space} requestClose={menu.close} />}
+          />
         </div>
       </div>
       {hasBanner && (
@@ -401,7 +378,7 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
                   }
                 }}
               >
-                <img
+                <MediaImage
                   className={css.RoomCoverImage}
                   src={bannerURI}
                   alt=""
@@ -424,37 +401,26 @@ function SpaceHeader({ hideText, mx }: { hideText?: boolean; mx: MatrixClient })
         </>
       )}
       {hasBanner && bannerViewerOpen && (
-        <Overlay open backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                onDeactivate: () => setBannerViewerOpen(false),
-                clickOutsideDeactivates: true,
-                escapeDeactivates: stopPropagation,
-              }}
-            >
-              <Modal
-                className={ModalWide}
-                size="500"
-                onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
-              >
-                <ImageViewer
-                  src={bannerURI}
-                  alt={`${spaceName} banner`}
-                  requestClose={() => setBannerViewerOpen(false)}
-                />
-              </Modal>
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
+        <ModalOverlay requestClose={() => setBannerViewerOpen(false)}>
+          <Modal
+            className={ModalWide}
+            size="500"
+            onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
+          >
+            <ImageViewer
+              src={bannerURI}
+              alt={`${spaceName} banner`}
+              requestClose={() => setBannerViewerOpen(false)}
+            />
+          </Modal>
+        </ModalOverlay>
       )}
     </>
   );
 }
 
 type SpaceTombstoneProps = { roomId: string; replacementRoomId: string };
-export function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProps) {
+function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProps) {
   const mx = useMatrixClient();
   const { navigateSpace } = useRoomNavigate();
 
@@ -488,11 +454,7 @@ export function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProp
       <Box direction="Column" grow="Yes" gap="100">
         <Text size="L400">Space Upgraded</Text>
         <Text size="T200">This space has been replaced and is no longer active.</Text>
-        {joinState.status === AsyncStatus.Error && (
-          <Text className={BreakWord} style={{ color: color.Critical.Main }} size="T200">
-            {(joinState.error as Error)?.message ?? 'Failed to join replacement space!'}
-          </Text>
-        )}
+        <AsyncError state={joinState} />
       </Box>
       <Box direction="Column" shrink="No">
         {replacementRoom?.getMyMembership() === KnownMembership.Join ||
@@ -502,17 +464,15 @@ export function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProp
           </Button>
         ) : (
           <Button
-            onClick={handleJoin}
+            loading={joinState.status === AsyncStatus.Loading}
+            spinnerSize="100"
+            spinnerVariant="Primary"
+            spinnerFill="Solid"
             size="300"
             variant="Primary"
             fill="Solid"
             radii="300"
-            before={
-              joinState.status === AsyncStatus.Loading && (
-                <Spinner size="100" variant="Primary" fill="Solid" />
-              )
-            }
-            disabled={joinState.status === AsyncStatus.Loading}
+            onClick={handleJoin}
           >
             <Text size="B300">Join New Space</Text>
           </Button>
@@ -543,12 +503,16 @@ export function Space() {
   const allJoinedRooms = useMemo(() => new Set(allRooms), [allRooms]);
   const notificationPreferences = useRoomsNotificationPreferencesContext();
 
-  const setIsResizingSidebar = useSetAtom(isResizingSidebarAtom);
-  const [roomSidebarWidth, setRoomSidebarWidth] = useSetting(settingsAtom, 'roomSidebarWidth');
-  const [curWidth, setCurWidth] = useState(roomSidebarWidth);
-  useEffect(() => {
-    setCurWidth(roomSidebarWidth);
-  }, [roomSidebarWidth]);
+  const {
+    curWidth,
+    setCurWidth,
+    roomSidebarWidth,
+    setRoomSidebarWidth,
+    setIsResizingSidebar,
+    isMobile,
+    hideText,
+    oldSidebar,
+  } = useSidebarWidth();
 
   const [showRoomIconGeneral] = useSetting(settingsAtom, 'showRoomIcon');
   const [showRoomIconArray] = useSetting(settingsAtom, 'perRoomShowRoomIcon');
@@ -837,199 +801,173 @@ export function Space() {
   const getToLink = (roomId: string) =>
     getSpaceRoomPath(spaceIdOrAlias, getCanonicalAliasOrRoomId(mx, roomId));
 
-  const screenSize = useScreenSizeContext();
-  const isMobile = screenSize === ScreenSize.Mobile;
-  const hideText = curWidth <= 80 && !isMobile;
-  const [oldSidebar] = useSetting(settingsAtom, 'oldSidebar');
-
   return (
-    <Box
-      shrink="No"
-      style={{
-        position: 'relative',
-        width: isMobile ? '100%' : toRem(curWidth),
-      }}
+    <PageNavShell
+      header={<SpaceHeader hideText={hideText} mx={mx} />}
+      curWidth={curWidth}
+      setCurWidth={setCurWidth}
+      roomSidebarWidth={roomSidebarWidth}
+      setRoomSidebarWidth={setRoomSidebarWidth}
+      setIsResizingSidebar={setIsResizingSidebar}
+      isMobile={isMobile}
+      oldSidebar={oldSidebar}
     >
-      <PageNav>
-        <SpaceHeader hideText={hideText} mx={mx} />
-        <PageNavContent scrollRef={scrollRef}>
-          <Box direction="Column" gap="300">
-            {tombstoneEvent && (
-              <SpaceTombstone
-                roomId={space.roomId}
-                replacementRoomId={tombstoneEvent.getContent().replacement_room}
-              />
-            )}
-            <NavCategory>
-              <NavItem variant="Background" radii="400" aria-selected={lobbySelected}>
-                <NavLink to={getSpaceLobbyPath(getCanonicalAliasOrRoomId(mx, space.roomId))}>
-                  <NavItemContent>
-                    <Box as="span" grow="Yes" alignItems="Center" justifyContent="Start" gap="200">
-                      <Avatar
-                        size={hideText ? undefined : '200'}
-                        radii="400"
-                        style={hideText ? { width: '100%', padding: '0' } : undefined}
-                      >
-                        {menuIcon(Flag, { weight: lobbySelected ? 'fill' : 'regular' })}
-                      </Avatar>
+      <PageNavContent scrollRef={scrollRef}>
+        <Box direction="Column" gap="300">
+          {tombstoneEvent && (
+            <SpaceTombstone
+              roomId={space.roomId}
+              replacementRoomId={tombstoneEvent.getContent().replacement_room}
+            />
+          )}
+          <NavCategory>
+            <NavItem variant="Background" radii="400" aria-selected={lobbySelected}>
+              <NavLink to={getSpaceLobbyPath(getCanonicalAliasOrRoomId(mx, space.roomId))}>
+                <NavItemContent>
+                  <Box as="span" grow="Yes" alignItems="Center" justifyContent="Start" gap="200">
+                    <Avatar
+                      size={hideText ? undefined : '200'}
+                      radii="400"
+                      style={hideText ? { width: '100%', padding: '0' } : undefined}
+                    >
+                      {menuIcon(Flag, { weight: lobbySelected ? 'fill' : 'regular' })}
+                    </Avatar>
+                    {!hideText && (
+                      <Box as="span" grow="Yes">
+                        <Text as="span" size="Inherit" truncate>
+                          Lobby
+                        </Text>
+                      </Box>
+                    )}
+                  </Box>
+                </NavItemContent>
+              </NavLink>
+            </NavItem>
+            <NavItem variant="Background" radii="400" aria-selected={searchSelected}>
+              <NavLink to={getSpaceSearchPath(getCanonicalAliasOrRoomId(mx, space.roomId))}>
+                <NavItemContent>
+                  <Box as="span" grow="Yes" alignItems="Center" justifyContent="Start" gap="200">
+                    <Avatar
+                      size={hideText ? undefined : '200'}
+                      radii="400"
+                      style={hideText ? { width: '100%' } : undefined}
+                    >
+                      {menuIcon(MagnifyingGlass, {
+                        weight: searchSelected ? 'fill' : 'regular',
+                      })}
+                    </Avatar>
+                    <Box as="span" grow="Yes">
                       {!hideText && (
-                        <Box as="span" grow="Yes">
-                          <Text as="span" size="Inherit" truncate>
-                            Lobby
-                          </Text>
-                        </Box>
+                        <Text as="span" size="Inherit" truncate>
+                          Message Search
+                        </Text>
                       )}
                     </Box>
-                  </NavItemContent>
-                </NavLink>
-              </NavItem>
-              <NavItem variant="Background" radii="400" aria-selected={searchSelected}>
-                <NavLink to={getSpaceSearchPath(getCanonicalAliasOrRoomId(mx, space.roomId))}>
-                  <NavItemContent>
-                    <Box as="span" grow="Yes" alignItems="Center" justifyContent="Start" gap="200">
-                      <Avatar
-                        size={hideText ? undefined : '200'}
-                        radii="400"
-                        style={hideText ? { width: '100%' } : undefined}
-                      >
-                        {menuIcon(MagnifyingGlass, {
-                          weight: searchSelected ? 'fill' : 'regular',
-                        })}
-                      </Avatar>
-                      <Box as="span" grow="Yes">
-                        {!hideText && (
-                          <Text as="span" size="Inherit" truncate>
-                            Message Search
-                          </Text>
-                        )}
-                      </Box>
-                    </Box>
-                  </NavItemContent>
-                </NavLink>
-              </NavItem>
-            </NavCategory>
-            <NavCategory
-              style={{
-                height: virtualizer.getTotalSize(),
-                position: 'relative',
-                overflow: 'visible',
-              }}
-            >
-              {virtualizedItems.map((vItem) => {
-                const hierarchyItem = hierarchy[vItem.index];
-                if (!hierarchyItem) return null;
-                const { roomId, depth: itemDepth } = hierarchyItem;
-                const depth = itemDepth ?? 0;
-                const room = mx.getRoom(roomId);
-                const renderDepth = room?.isSpaceRoom() ? depth - 2 : depth - 1;
-                if (!room) return null;
-                if (depth === subspaceHierarchyLimit && room.isSpaceRoom()) {
-                  return (
-                    <VirtualTile
-                      virtualItem={vItem}
-                      key={vItem.key}
-                      ref={virtualizer.measureElement}
-                    >
-                      <div
-                        style={
-                          hideText
-                            ? {}
-                            : {
-                                paddingLeft: `calc(${renderDepth} * ${config.space.S400})`,
-                              }
-                        }
-                      >
-                        <SpaceNavItem
-                          room={room}
-                          selected={selectedRoomId === roomId}
-                          linkPath={getSpaceLobbyPath(getCanonicalAliasOrRoomId(mx, roomId))}
-                          hideText={hideText}
-                        />
-                      </div>
-                    </VirtualTile>
-                  );
-                }
-
-                const paddingTop = getCategoryPadding(depth);
-                const paddingLeft = `calc(${renderDepth} * ${config.space.S400})`;
-
-                if (room.isSpaceRoom()) {
-                  const categoryId = makeNavCategoryId(space.roomId, roomId);
-                  const closedViaCategory = getInClosedCategories(space.roomId, roomId);
-
-                  return (
-                    <VirtualTile
-                      virtualItem={vItem}
-                      key={vItem.key}
-                      ref={virtualizer.measureElement}
-                    >
-                      <div style={hideText ? { paddingTop: '0' } : { paddingTop, paddingLeft }}>
-                        <NavCategoryHeader style={hideText ? { justifyContent: 'Center' } : {}}>
-                          <RoomNavCategoryButton
-                            data-category-id={categoryId}
-                            onClick={handleCategoryClick}
-                            closed={closedCategories.has(categoryId) || closedViaCategory}
-                          >
-                            {!hideText && (roomId === space.roomId ? 'Rooms' : room?.name)}
-                          </RoomNavCategoryButton>
-                        </NavCategoryHeader>
-                      </div>
-                    </VirtualTile>
-                  );
-                }
-
+                  </Box>
+                </NavItemContent>
+              </NavLink>
+            </NavItem>
+          </NavCategory>
+          <NavCategory
+            style={{
+              height: virtualizer.getTotalSize(),
+              position: 'relative',
+              overflow: 'visible',
+            }}
+          >
+            {virtualizedItems.map((vItem) => {
+              const hierarchyItem = hierarchy[vItem.index];
+              if (!hierarchyItem) return null;
+              const { roomId, depth: itemDepth } = hierarchyItem;
+              const depth = itemDepth ?? 0;
+              const room = mx.getRoom(roomId);
+              const renderDepth = room?.isSpaceRoom() ? depth - 2 : depth - 1;
+              if (!room) return null;
+              if (depth === subspaceHierarchyLimit && room.isSpaceRoom()) {
                 return (
                   <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
                     <div
                       style={
                         hideText
-                          ? {
-                              padding: '0',
-                              width: '100%',
-                              aspectRatio: 1,
-                              display: 'flex',
-                              flexDirection: 'column',
+                          ? {}
+                          : {
+                              paddingLeft: `calc(${renderDepth} * ${config.space.S400})`,
                             }
-                          : { paddingLeft }
                       }
                     >
-                      <RoomNavItem
+                      <SpaceNavItem
                         room={room}
                         selected={selectedRoomId === roomId}
-                        showAvatar={mDirects.has(roomId) || showIcons()}
-                        direct={mDirects.has(roomId)}
-                        linkPath={getToLink(roomId)}
+                        linkPath={getSpaceLobbyPath(getCanonicalAliasOrRoomId(mx, roomId))}
                         hideText={hideText}
-                        notificationMode={getRoomNotificationMode(
-                          notificationPreferences,
-                          room.roomId
-                        )}
-                        joinCallOnSingleClick={joinCallOnSingleClick}
-                        isStrict={showRoomIcon === ShowRoomIcon.Strict}
                       />
                     </div>
                   </VirtualTile>
                 );
-              })}
-              {getConnectorSVG(hierarchy, virtualizedItems)}
-            </NavCategory>
-            {!isMobile && <div style={{ height: toRem(40) }} />}
-          </Box>
-        </PageNavContent>
-      </PageNav>
-      {!isMobile && (
-        <SidebarResizer
-          setCurWidth={setCurWidth}
-          sidebarWidth={roomSidebarWidth}
-          setSidebarWidth={setRoomSidebarWidth}
-          instep={50}
-          outstep={190}
-          minValue={50}
-          maxValue={500}
-          setAnnouncement={setIsResizingSidebar}
-        />
-      )}
-      {!oldSidebar && !isMobile && <UserQuickTools width={curWidth + 66} compact={false} />}
-    </Box>
+              }
+
+              const paddingTop = getCategoryPadding(depth);
+              const paddingLeft = `calc(${renderDepth} * ${config.space.S400})`;
+
+              if (room.isSpaceRoom()) {
+                const categoryId = makeNavCategoryId(space.roomId, roomId);
+                const closedViaCategory = getInClosedCategories(space.roomId, roomId);
+
+                return (
+                  <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
+                    <div style={hideText ? { paddingTop: '0' } : { paddingTop, paddingLeft }}>
+                      <NavCategoryHeader style={hideText ? { justifyContent: 'Center' } : {}}>
+                        <RoomNavCategoryButton
+                          data-category-id={categoryId}
+                          onClick={handleCategoryClick}
+                          closed={closedCategories.has(categoryId) || closedViaCategory}
+                        >
+                          {!hideText && (roomId === space.roomId ? 'Rooms' : room?.name)}
+                        </RoomNavCategoryButton>
+                      </NavCategoryHeader>
+                    </div>
+                  </VirtualTile>
+                );
+              }
+
+              return (
+                <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
+                  <div
+                    style={
+                      hideText
+                        ? {
+                            padding: '0',
+                            width: '100%',
+                            aspectRatio: 1,
+                            display: 'flex',
+                            flexDirection: 'column',
+                          }
+                        : { paddingLeft }
+                    }
+                  >
+                    <RoomNavItem
+                      room={room}
+                      selected={selectedRoomId === roomId}
+                      showAvatar={mDirects.has(roomId) || showIcons()}
+                      direct={mDirects.has(roomId)}
+                      linkPath={getToLink(roomId)}
+                      hideText={hideText}
+                      notificationMode={getRoomNotificationMode(
+                        notificationPreferences,
+                        room.roomId
+                      )}
+                      joinCallOnSingleClick={joinCallOnSingleClick}
+                      isStrict={showRoomIcon === ShowRoomIcon.Strict}
+                    />
+                  </div>
+                </VirtualTile>
+              );
+            })}
+            {getConnectorSVG(hierarchy, virtualizedItems)}
+          </NavCategory>
+          {!isMobile && <div style={{ height: toRem(40) }} />}
+        </Box>
+      </PageNavContent>
+    </PageNavShell>
   );
 }

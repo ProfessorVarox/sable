@@ -11,7 +11,7 @@ import {
   Spinner,
   Text,
 } from 'folds';
-import type { HttpApiEventHandlerMap, MatrixClient } from '$types/matrix-sdk';
+import type { MatrixClient } from '$types/matrix-sdk';
 import { HttpApiEvent } from '$types/matrix-sdk';
 import FocusTrap from 'focus-trap-react';
 import type { MouseEventHandler, ReactNode } from 'react';
@@ -34,6 +34,8 @@ import { MediaConfigProvider } from '$hooks/useMediaConfig';
 import { MatrixClientProvider } from '$hooks/useMatrixClient';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useSyncState } from '$hooks/useSyncState';
+import { useCrossSigningResetDetect } from '$hooks/useCrossSigningResetDetect';
+import { useMatrixEvent } from '$hooks/useMatrixEvent';
 import { stopPropagation } from '$utils/keyboard';
 import { AuthMetadataProvider, getSessionAuthMetadata } from '$hooks/useAuthMetadata';
 import {
@@ -219,24 +221,19 @@ function ClientRootOptions({ mx, onLogout }: ClientRootOptionsProps) {
 }
 
 const useLogoutListener = (mx?: MatrixClient) => {
-  useEffect(() => {
-    const handleLogout: HttpApiEventHandlerMap[HttpApiEvent.SessionLoggedOut] = async () => {
-      Sentry.addBreadcrumb({
-        category: 'auth',
-        message: 'Session forcibly logged out by server',
-        level: 'warning',
-      });
-      if (mx) stopClient(mx);
-      await mx?.clearStores();
-      window.localStorage.clear();
-      window.location.reload();
-    };
-
-    mx?.on(HttpApiEvent.SessionLoggedOut, handleLogout);
-    return () => {
-      mx?.removeListener(HttpApiEvent.SessionLoggedOut, handleLogout);
-    };
+  const handleLogout = useCallback(async () => {
+    Sentry.addBreadcrumb({
+      category: 'auth',
+      message: 'Session forcibly logged out by server',
+      level: 'warning',
+    });
+    if (mx) stopClient(mx);
+    await mx?.clearStores();
+    window.localStorage.clear();
+    window.location.reload();
   }, [mx]);
+
+  useMatrixEvent(mx, HttpApiEvent.SessionLoggedOut, handleLogout);
 };
 
 type ClientRootProps = {
@@ -272,7 +269,7 @@ export function ClientRoot({ children }: ClientRootProps) {
       log.log('initClient for', activeSession.userId);
       const newMx = await initClient(activeSession);
       loadedUserIdRef.current = activeSession.userId;
-      await pushSessionToSW(activeSession.baseUrl, activeSession.accessToken);
+      await pushSessionToSW(activeSession.baseUrl, activeSession.accessToken, activeSession.userId);
       return newMx;
     }, [activeSession, activeSessionId, setActiveSessionId])
   );
@@ -311,7 +308,7 @@ export function ClientRoot({ children }: ClientRootProps) {
         activeSession.userId,
         '— reloading client'
       );
-      void pushSessionToSW(activeSession.baseUrl, activeSession.accessToken);
+      void pushSessionToSW(activeSession.baseUrl, activeSession.accessToken, activeSession.userId);
       if (mx?.clientRunning) {
         stopClient(mx);
       }
@@ -334,6 +331,7 @@ export function ClientRoot({ children }: ClientRootProps) {
   useSyncNicknames(mx);
   useLogoutListener(mx);
   useAppVisibility(mx);
+  useCrossSigningResetDetect(mx);
 
   useEffect(
     () => () => {

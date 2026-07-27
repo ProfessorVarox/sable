@@ -23,6 +23,12 @@ import { escapeNonAllowlistedHtmlTags, MARKDOWN_ALLOWED_HTML_TAGS } from './allo
 // Configure marked with Matrix extensions
 const processor = marked.use({
   breaks: true,
+  renderer: {
+    // `input` is not a Matrix-permitted tag, keep the literal `[ ]`/`[x]` marker.
+    checkbox({ raw }) {
+      return raw;
+    },
+  },
   extensions: [
     matrixMfmColorExtension,
     matrixUnderlineExtension,

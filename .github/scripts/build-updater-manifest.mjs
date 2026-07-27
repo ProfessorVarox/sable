@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveReleaseMeta } from './release-meta.mjs';
 
 const TAG = process.env.TAG;
 const VERSION = process.env.VERSION;
@@ -19,6 +20,14 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(VERSION)) {
   process.exit(1);
 }
 const version = VERSION;
+
+const { isNightly } = resolveReleaseMeta({
+  eventName: process.env.EVENT_NAME,
+  inputTag: process.env.INPUT_TAG,
+  gitRef: process.env.GIT_REF,
+  gitRefName: process.env.GIT_REF_NAME,
+  gitSha: process.env.GIT_SHA,
+});
 
 const dir = mkdtempSync(join(tmpdir(), 'sable-sigs-'));
 execSync(`gh release download "${TAG}" --repo "${REPO}" --pattern '*.sig' --dir "${dir}"`, {
@@ -55,7 +64,7 @@ if (Object.keys(platforms).length === 0) {
 }
 
 let notes = `Sable ${version}`;
-if (TAG !== 'nightly') {
+if (!isNightly) {
   try {
     notes =
       execSync(`gh release view "${TAG}" --repo "${REPO}" --json body -q .body`, {

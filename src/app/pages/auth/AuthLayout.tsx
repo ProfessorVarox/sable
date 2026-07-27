@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect } from 'react';
-import { Box, Chip, Header, Scroll, Spinner, Text, color } from 'folds';
+import { Box, Chip, Header, IconButton, Scroll, Spinner, Text, color } from 'folds';
+import { ArrowClockwiseIcon } from '@phosphor-icons/react';
 import {
   Outlet,
   generatePath,
@@ -26,6 +27,7 @@ import { AuthServerProvider } from '$hooks/useAuthServer';
 import { LOGIN_PATH, REGISTER_PATH, RESET_PASSWORD_PATH } from '$pages/paths';
 import { getHomePath } from '$pages/pathUtils';
 import { fetch } from '$utils/fetch';
+import { sizedIcon } from '$components/icons/phosphor';
 import { AutoDiscoveryAction, autoDiscovery } from '../../cs-api';
 import type { SpecVersions } from '../../cs-api';
 import { ServerPicker } from './ServerPicker';
@@ -57,12 +59,23 @@ function AuthLayoutLoading({ message }: { message: string }) {
   );
 }
 
-function AuthLayoutError({ message }: { message: string }) {
+function AuthLayoutError({ message, retry }: { message: string; retry: () => void }) {
   return (
     <Box justifyContent="Center" alignItems="Center" gap="200">
       <Text align="Center" style={{ color: color.Critical.Main }} size="T300">
         {message}
       </Text>
+      <IconButton
+        type="button"
+        size="300"
+        variant="Critical"
+        fill="None"
+        onClick={retry}
+        aria-label="Retry"
+        radii="300"
+      >
+        {sizedIcon(ArrowClockwiseIcon, '100')}
+      </IconButton>
     </Box>
   );
 }
@@ -71,9 +84,12 @@ function AuthHomeserverConnectFallback({ baseUrl }: { baseUrl: string }) {
   return <AuthLayoutLoading message={`Connecting to ${baseUrl}`} />;
 }
 
-function authHomeserverConnectError() {
+function authHomeserverConnectError(_error: unknown, retry: () => void) {
   return (
-    <AuthLayoutError message="Failed to connect. Either homeserver is unavailable at this moment or does not exist." />
+    <AuthLayoutError
+      message="Failed to connect. Either homeserver is unavailable at this moment or does not exist."
+      retry={retry}
+    />
   );
 }
 
@@ -81,8 +97,8 @@ function authFlowsLoadingFallback() {
   return <AuthLayoutLoading message="Loading authentication flow..." />;
 }
 
-function authFlowsError() {
-  return <AuthLayoutError message="Failed to get authentication flow information." />;
+function authFlowsError(_error: unknown, retry: () => void) {
+  return <AuthLayoutError message="Failed to get authentication flow information." retry={retry} />;
 }
 
 function AuthFlowsOutlet({ authFlows }: { authFlows: AuthFlows }) {
@@ -138,6 +154,7 @@ export function AuthLayout() {
       };
     }, [])
   );
+  const retryHomeserverDiscovery = () => discoverServer(server);
 
   useEffect(() => {
     if (server) discoverServer(server);
@@ -234,15 +251,22 @@ export function AuthLayout() {
               <AuthLayoutLoading message="Looking for homeserver..." />
             )}
             {discoveryState.status === AsyncStatus.Error && (
-              <AuthLayoutError message="Failed to find homeserver." />
+              <AuthLayoutError
+                message="Failed to find homeserver."
+                retry={retryHomeserverDiscovery}
+              />
             )}
             {autoDiscoveryError?.action === AutoDiscoveryAction.FAIL_PROMPT && (
               <AuthLayoutError
                 message={`Failed to connect. Homeserver configuration found with ${autoDiscoveryError.host} appears unusable.`}
+                retry={retryHomeserverDiscovery}
               />
             )}
             {autoDiscoveryError?.action === AutoDiscoveryAction.FAIL_ERROR && (
-              <AuthLayoutError message="Failed to connect. Homeserver configuration base_url appears invalid." />
+              <AuthLayoutError
+                message="Failed to connect. Homeserver configuration base_url appears invalid."
+                retry={retryHomeserverDiscovery}
+              />
             )}
             {discoveryState.status === AsyncStatus.Success && autoDiscoveryInfo && (
               <AuthServerProvider value={discoveryState.data.serverName}>

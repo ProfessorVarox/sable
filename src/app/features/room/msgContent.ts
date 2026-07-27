@@ -19,7 +19,7 @@ import {
   mxcUrlToHttp,
   uploadContentToServer,
 } from '$utils/matrix';
-import { mimeTypeToExt } from '$utils/mimeTypes';
+import { isImageMimeType, mimeTypeToExt } from '$utils/mimeTypes';
 import type { TUploadItem } from '$state/room/roomInputDrafts';
 import type { GifData } from '$components/emoji-board/types';
 import { encodeBlurHashAsync } from '$utils/blurHash';
@@ -83,6 +83,11 @@ export const getImageMsgContent = async (
     content.info = {
       ...getImageInfo(imgEl, file),
       [MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME]: blurHash,
+    };
+  } else {
+    content.info = {
+      mimetype: originalFile.type,
+      size: originalFile.size,
     };
   }
   if (encInfo) {
@@ -327,7 +332,7 @@ export const getGalleryItemContent = async (
   item: TUploadItem,
   mxc: string
 ): Promise<IGalleryItem> => {
-  if (item.file.type.startsWith('image')) {
+  if (isImageMimeType(item.file.type)) {
     return swapMsgTypeToItemType(await getImageMsgContent(mx, item, mxc), MsgType.Image);
   }
   if (item.file.type.startsWith('video')) {

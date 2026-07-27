@@ -79,17 +79,6 @@ export const PreventSelect = style({
 //I have zero clue where these numbers and vars are from but they should be changed
 //I just copied the hardcoded value in a more correct place
 
-export const MessageNickEditor = style({
-  background: 'var(--mx-c-surface)',
-  color: 'var(--mx-c-on-surface)',
-  border: '1px solid var(--mx-c-outline)',
-  borderRadius: '6px',
-  padding: '4px 8px',
-  fontSize: '14px',
-  width: '100%',
-  outline: 'none',
-});
-
 export const MessageMobileOptionsWrapped = style({
   position: 'fixed',
   top: 0,
@@ -127,6 +116,7 @@ export const MessageMobileDragHandle = style({
   paddingTop: '6px',
   justifyContent: 'center',
   zIndex: 10,
+  pointerEvents: 'none',
 });
 
 export const MessageMobileDragIndicator = style({
@@ -135,6 +125,7 @@ export const MessageMobileDragIndicator = style({
   borderRadius: '2px',
   backgroundColor: color.SurfaceVariant.OnContainer,
   opacity: 0.5,
+  pointerEvents: 'auto',
 });
 
 export const BubbleAvatarBase = style({

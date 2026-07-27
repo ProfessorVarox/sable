@@ -37,7 +37,7 @@ import { ConfirmPasswordMatch } from '$components/ConfirmPasswordMatch';
 import { UIAFlowOverlay } from '$components/UIAFlowOverlay';
 import type { RequestEmailTokenCallback, RequestEmailTokenResponse } from '$hooks/types';
 import { FieldError } from '$pages/auth/FiledError';
-import { deviceDisplayName } from '$utils/user-agent';
+import { deviceDisplayName } from '$utils/platform';
 import { fetch } from '$utils/fetch';
 import type { RegisterResult } from './registerUtil';
 import { RegisterError, register, useRegisterComplete } from './registerUtil';

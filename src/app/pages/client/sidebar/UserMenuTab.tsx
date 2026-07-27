@@ -11,9 +11,6 @@ import {
   Line,
   Menu,
   MenuItem,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
   PopOut,
   Spinner,
   Text,
@@ -22,6 +19,7 @@ import {
   toRem,
 } from 'folds';
 import { FocusTrap } from 'focus-trap-react';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 import { SidebarAvatar, SidebarItem, SidebarItemBadge } from '../../../components/sidebar';
 import { UserAvatar } from '../../../components/user-avatar';
 import { useMatrixClient } from '../../../hooks/useMatrixClient';
@@ -49,7 +47,7 @@ import { useFocusWithin, useHover } from 'react-aria';
 import { setUserPresence } from '$utils/presence';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
-import { useProfileSelected } from '$hooks/router/useProfileSelected';
+import { useProfileSelected } from '$hooks/router/useRouteSelected';
 import { useDeviceIds, useDeviceList, useSplitCurrentDevice } from '$hooks/useDeviceList';
 import {
   useDeviceVerificationStatus,
@@ -275,11 +273,13 @@ export function AccountMenuOption({ isMobile, isRight }: { isMobile: boolean; is
           after={isOpen && isMobile ? menuIcon(CaretDownIcon) : menuIcon(CaretRightIcon)}
           style={{
             position: 'relative',
-            background: isOpen
-              ? isMobile
-                ? color.Surface.Container
-                : color.Surface.ContainerHover
-              : color.Background.Container,
+            background: isMobile
+              ? isOpen
+                ? color.Background.ContainerHover
+                : color.Background.Container
+              : isOpen
+                ? color.Surface.ContainerHover
+                : color.Surface.Container,
           }}
           onClick={() => isMobile && setIsOpen(!isOpen)}
           {...hoverProps}
@@ -363,51 +363,41 @@ export function AccountMenuOption({ isMobile, isRight }: { isMobile: boolean; is
         </div>
       )}
       {confirmSignOutSession && (
-        <Overlay open backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                onDeactivate: () => setConfirmSignOutSession(undefined),
-                clickOutsideDeactivates: true,
+        <ModalOverlay requestClose={() => setConfirmSignOutSession(undefined)}>
+          <Dialog variant="Surface">
+            <Header
+              style={{
+                padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
+                borderBottomWidth: config.borderWidth.B300,
               }}
+              variant="Surface"
+              size="500"
             >
-              <Dialog variant="Surface">
-                <Header
-                  style={{
-                    padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
-                    borderBottomWidth: config.borderWidth.B300,
+              <Box grow="Yes">
+                <Text size="H4">Sign out</Text>
+              </Box>
+            </Header>
+            <Box style={{ padding: config.space.S400 }} direction="Column" gap="400">
+              <Text priority="400">
+                Are you sure you want to sign out of <b>{confirmSignOutSession.userId}</b>?
+              </Text>
+              <Box direction="Column" gap="200">
+                <Button
+                  variant="Critical"
+                  onClick={() => {
+                    handleSignOut(confirmSignOutSession);
+                    setConfirmSignOutSession(undefined);
                   }}
-                  variant="Surface"
-                  size="500"
                 >
-                  <Box grow="Yes">
-                    <Text size="H4">Sign out</Text>
-                  </Box>
-                </Header>
-                <Box style={{ padding: config.space.S400 }} direction="Column" gap="400">
-                  <Text priority="400">
-                    Are you sure you want to sign out of <b>{confirmSignOutSession.userId}</b>?
-                  </Text>
-                  <Box direction="Column" gap="200">
-                    <Button
-                      variant="Critical"
-                      onClick={() => {
-                        handleSignOut(confirmSignOutSession);
-                        setConfirmSignOutSession(undefined);
-                      }}
-                    >
-                      <Text size="B400">Sign out</Text>
-                    </Button>
-                    <Button variant="Secondary" onClick={() => setConfirmSignOutSession(undefined)}>
-                      <Text size="B400">Cancel</Text>
-                    </Button>
-                  </Box>
-                </Box>
-              </Dialog>
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
+                  <Text size="B400">Sign out</Text>
+                </Button>
+                <Button variant="Secondary" onClick={() => setConfirmSignOutSession(undefined)}>
+                  <Text size="B400">Cancel</Text>
+                </Button>
+              </Box>
+            </Box>
+          </Dialog>
+        </ModalOverlay>
       )}
     </>
   );
@@ -499,11 +489,13 @@ export function PresenceMenuOption({
         after={isOpen && isMobile ? menuIcon(CaretDownIcon) : menuIcon(CaretRightIcon)}
         style={{
           position: 'relative',
-          background: isOpen
-            ? isMobile
-              ? color.Surface.Container
-              : color.Surface.ContainerHover
-            : color.Background.Container,
+          background: isMobile
+            ? isOpen
+              ? color.Background.ContainerHover
+              : color.Background.Container
+            : isOpen
+              ? color.Surface.ContainerHover
+              : color.Surface.Container,
         }}
         onClick={() => isMobile && setIsOpen(!isOpen)}
         {...hoverProps}
@@ -682,9 +674,13 @@ export function UserMenuTab({ isBottom, isMobile }: { isBottom?: boolean; isMobi
   };
 
   const handleCloseMenu = () => setMenuAnchor(undefined);
-  const mobileTapActivation = useMobileTapActivation(isMobile ?? false, () => {
-    navigate(getProfilePath());
-  });
+  const mobileTapActivation = useMobileTapActivation(
+    isMobile ?? false,
+    () => {
+      navigate(getProfilePath());
+    },
+    handleToggle
+  );
 
   const isActive = (!!menuAnchor || profileSelected) && !isMobile;
 
@@ -693,7 +689,6 @@ export function UserMenuTab({ isBottom, isMobile }: { isBottom?: boolean; isMobi
       <Box
         direction="Column"
         alignItems="Center"
-        onClick={handleToggle}
         {...mobileTapActivation}
         style={
           isMobile

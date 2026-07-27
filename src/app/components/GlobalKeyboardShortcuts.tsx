@@ -17,9 +17,11 @@ import { roomToUnreadAtom } from '$state/room/roomToUnread';
 import { useKeyDown } from '$hooks/useKeyDown';
 import {
   getDirectRoomPath,
+  getCreateRoomPath,
   getHomeRoomPath,
   getHomeSearchPath,
   getInboxBookmarksPath,
+  getNavigatePath,
   getSpaceRoomPath,
   getSpaceSearchPath,
   withSearchParam,
@@ -33,11 +35,13 @@ import type { Room } from '$types/matrix-sdk';
 import { useSelectedSpace } from '$hooks/router/useSelectedSpace';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
+import { useOpenShallowRoute } from '$pages/client/useShallowRoute';
 import { matchesShortcut } from '../keyboard/shortcuts';
 
 export function GlobalKeyboardShortcuts() {
   const [shortcutOverrides] = useSetting(settingsAtom, 'shortcutOverrides');
   const navigate = useNavigate();
+  const openShallowRoute = useOpenShallowRoute();
   const location = useLocation();
   const mx = useMatrixClient();
   const roomToParents = useAtomValue(roomToParentsAtom);
@@ -177,6 +181,25 @@ export function GlobalKeyboardShortcuts() {
     [navigate, shortcutOverrides]
   );
 
+  const handleCreateRoomKeyDown = useCallback(
+    (evt: KeyboardEvent) => {
+      if (!matchesShortcut('app.createRoom', evt, shortcutOverrides)) return;
+      evt.preventDefault();
+      openShallowRoute(getCreateRoomPath(currentSpace));
+    },
+    [currentSpace, openShallowRoute, shortcutOverrides]
+  );
+
+  /** Opens the room search palette */
+  const handleOpenRoomSearch = useCallback(
+    (evt: KeyboardEvent) => {
+      if (!matchesShortcut('navigation.openRoomSearch', evt, shortcutOverrides)) return;
+      evt.preventDefault();
+      openShallowRoute(getNavigatePath());
+    },
+    [openShallowRoute, shortcutOverrides]
+  );
+
   /** Ctrl+F: Search for messages */
   const handleSearchMessageInRoom = useCallback(
     (evt: KeyboardEvent) => {
@@ -200,7 +223,9 @@ export function GlobalKeyboardShortcuts() {
   useKeyDown(window, handleUnreadNavKeyDown);
   useKeyDown(window, handleReplyKeyDown);
   useKeyDown(window, handleBookmarkKeyDown);
+  useKeyDown(window, handleCreateRoomKeyDown);
   useKeyDown(window, handleSearchMessageInRoom);
+  useKeyDown(window, handleOpenRoomSearch);
 
   return null;
 }

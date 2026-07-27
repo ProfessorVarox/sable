@@ -8,7 +8,7 @@ export function pushSessionToSW(
 ): Promise<void> {
   if (isTauri()) {
     // Tauri has no service worker.
-    return updateTauriMediaSession(baseUrl, accessToken);
+    return updateTauriMediaSession(baseUrl, accessToken, userId);
   }
 
   if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {

@@ -37,6 +37,7 @@ const {
 
 vi.mock('./app/utils/platform', () => ({
   hasServiceWorker: mockHasServiceWorker,
+  isMobileOrTablet: vi.fn<() => boolean>().mockReturnValue(false),
 }));
 
 vi.mock('./sw-session', () => ({

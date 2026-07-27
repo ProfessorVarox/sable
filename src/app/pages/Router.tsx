@@ -18,14 +18,10 @@ import { ScreenSize } from '$hooks/useScreenSize';
 import { ReceiveSelfDeviceVerification } from '$components/DeviceVerification';
 import { AutoRestoreBackupOnVerification } from '$components/BackupRestore';
 import { UserRoomProfileRenderer } from '$components/UserRoomProfileRenderer';
-import { CreateRoomModalRenderer } from '$features/create-room';
-import { CreateSpaceModalRenderer } from '$features/create-space';
-import { BugReportModalRenderer } from '$features/bug-report';
 import type { Sessions } from '$state/sessions';
 import { getFallbackSession, MATRIX_SESSIONS_KEY } from '$state/sessions';
 import { getLocalStorageItem } from '$state/utils/atomWithLocalStorage';
 import { NotificationJumper } from '$hooks/useNotificationJumper';
-import { SearchModalRenderer } from '$features/navigate';
 import { GlobalKeyboardShortcuts } from '$components/GlobalKeyboardShortcuts';
 import { DesktopShortcuts } from '$components/tauri/DesktopShortcuts';
 import { CallEmbedProvider } from '$components/CallEmbedProvider';
@@ -59,6 +55,7 @@ import {
 } from './paths';
 import {
   getAppPathFromHref,
+  getCreateRoomPath,
   getExploreFeaturedPath,
   getHomePath,
   getInboxNotificationsPath,
@@ -67,6 +64,7 @@ import {
   getSpaceLobbyPath,
 } from './pathUtils';
 import { ClientBindAtoms, ClientLayout, ClientRoot, ClientRouteOutlet } from './client';
+import { ShallowRouteRenderer } from './client/ShallowRouteRenderer';
 import { HandleNotificationClick, ClientNonUIFeatures } from './client/ClientNonUIFeatures';
 import { Home, HomeRouteRoomProvider, HomeSearch } from './client/home';
 import { Direct, DirectCreate, DirectRouteRoomProvider } from './client/direct';
@@ -88,9 +86,6 @@ const SettingsShallowRouteRenderer = lazy(() =>
 const RoomSettingsRenderer = lazy(() =>
   import('$features/room-settings').then((m) => ({ default: m.RoomSettingsRenderer }))
 );
-const SpaceSettingsRenderer = lazy(() =>
-  import('$features/space-settings').then((m) => ({ default: m.SpaceSettingsRenderer }))
-);
 
 const Notifications = lazy(() =>
   import('./client/inbox').then((m) => ({ default: m.Notifications }))
@@ -109,16 +104,11 @@ const PublicRooms = lazy(() =>
 import { setAfterLoginRedirectPath } from './afterLoginRedirectPath';
 import { WelcomePage } from './client/WelcomePage';
 import { SidebarNav } from './client/SidebarNav';
-import {
-  MobileFriendlyPageNav,
-  MobileFriendlySidebarNav,
-  MobileFriendlyBottomNav,
-} from './MobileFriendly';
+import { MobileFriendlySidebarNav, MobileFriendlyBottomNav } from './MobileFriendly';
 import { ClientInitStorageAtom } from './client/ClientInitStorageAtom';
 import { AuthRouteThemeManager, UnAuthRouteThemeManager } from './ThemeManager';
 import { TauriDeepLinkBridge } from './TauriDeepLinkBridge';
 import { ClientRoomsNotificationPreferences } from './client/ClientRoomsNotificationPreferences';
-import { HomeCreateRoom } from './client/home/CreateRoom';
 import { Create } from './client/create';
 import { ToRoomEvent } from './client/ToRoomEvent';
 import { CallStatusRenderer } from './CallStatusRenderer';
@@ -260,19 +250,13 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
                         <MobileFriendlyBottomNav>
                           <UserQuickToolsProvider />
                         </MobileFriendlyBottomNav>
-                        <SearchModalRenderer />
                         <UserRoomProfileRenderer />
-                        <CreateRoomModalRenderer />
-                        <CreateSpaceModalRenderer />
-                        <BugReportModalRenderer />
+                        <ShallowRouteRenderer />
                         <Suspense fallback={null}>
                           <SettingsShallowRouteRenderer />
                         </Suspense>
                         <Suspense fallback={null}>
                           <RoomSettingsRenderer />
-                        </Suspense>
-                        <Suspense fallback={null}>
-                          <SpaceSettingsRenderer />
                         </Suspense>
                         <GlobalKeyboardShortcuts />
                         <DesktopShortcuts />
@@ -305,21 +289,14 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
         <Route
           path={HOME_PATH}
           element={
-            <PageRoot
-              rail={<SidebarNav />}
-              bottomNav={<UserQuickToolsProvider />}
-              nav={
-                <MobileFriendlyPageNav path={HOME_PATH}>
-                  <Home />
-                </MobileFriendlyPageNav>
-              }
-            >
+            <PageRoot rail={<SidebarNav />} bottomNav={<UserQuickToolsProvider />} nav={<Home />}>
               <Outlet />
             </PageRoot>
           }
         >
           {mobile ? null : <Route index element={<WelcomePage />} />}
-          <Route path={CREATE_PATH_SEGMENT} element={<HomeCreateRoom />} />
+          {/* Superseded by CREATE_ROOM_PATH; kept so old links keep working. */}
+          <Route path={CREATE_PATH_SEGMENT} loader={() => redirect(getCreateRoomPath())} />
           <Route path={JOIN_PATH_SEGMENT} element={<p>join</p>} />
           <Route path={SEARCH_PATH_SEGMENT} element={<HomeSearch />} />
           <Route
@@ -334,15 +311,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
         <Route
           path={DIRECT_PATH}
           element={
-            <PageRoot
-              rail={<SidebarNav />}
-              bottomNav={<UserQuickToolsProvider />}
-              nav={
-                <MobileFriendlyPageNav path={DIRECT_PATH}>
-                  <Direct />
-                </MobileFriendlyPageNav>
-              }
-            >
+            <PageRoot rail={<SidebarNav />} bottomNav={<UserQuickToolsProvider />} nav={<Direct />}>
               <Outlet />
             </PageRoot>
           }
@@ -365,11 +334,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
               <PageRoot
                 rail={<SidebarNav />}
                 bottomNav={<UserQuickToolsProvider />}
-                nav={
-                  <MobileFriendlyPageNav path={SPACE_PATH}>
-                    <Space />
-                  </MobileFriendlyPageNav>
-                }
+                nav={<Space />}
               >
                 <Outlet />
               </PageRoot>
@@ -409,11 +374,9 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             <PageRoot
               rail={<SidebarNav />}
               nav={
-                <MobileFriendlyPageNav path={EXPLORE_PATH}>
-                  <Suspense fallback={<SplashScreen>{null}</SplashScreen>}>
-                    <Explore />
-                  </Suspense>
-                </MobileFriendlyPageNav>
+                <Suspense fallback={<SplashScreen>{null}</SplashScreen>}>
+                  <Explore />
+                </Suspense>
               }
             >
               <Outlet />
@@ -476,11 +439,9 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
           element={
             <PageRoot
               nav={
-                <MobileFriendlyPageNav path={INBOX_PATH}>
-                  <Suspense fallback={<SplashScreen>{null}</SplashScreen>}>
-                    <Inbox />
-                  </Suspense>
-                </MobileFriendlyPageNav>
+                <Suspense fallback={<SplashScreen>{null}</SplashScreen>}>
+                  <Inbox />
+                </Suspense>
               }
             >
               <Outlet />

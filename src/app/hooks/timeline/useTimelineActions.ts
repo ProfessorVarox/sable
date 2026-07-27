@@ -7,9 +7,42 @@ import type { Editor } from 'slate';
 import { ReactEditor } from 'slate-react';
 
 import { getMxIdLocalPart, toggleReaction } from '$utils/matrix';
-import { extractReplyDraftBody, getMemberDisplayName, resolveReplyDraftTarget } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
+import { extractReplyDraftBody, resolveReplyDraftTarget } from '$utils/room/relations';
 import { createMentionElement, moveCursor } from '$components/editor';
 import * as prefix from '$unstable/prefixes';
+
+/**
+ * The profile popup reads name, avatar and the identity fields off the room
+ * member, so the cached copies would shadow fresher state event data.
+ */
+export const buildCachedProfilePayload = (cachedData: UserProfile | undefined) => {
+  const cleanExtended = cachedData?.extended ? { ...cachedData.extended } : undefined;
+
+  if (cleanExtended) {
+    delete cleanExtended[prefix.MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_PROFILE_BIOGRAPHY_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_COMMET_UNSTABLE_PROFILE_BIO_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_COMMET_UNSTABLE_PROFILE_STATUS_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_UNSTABLE_PROFILE_TIMEZONE_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_STABLE_PROFILE_TIMEZONE_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_UNSTABLE_PROFILE_BANNER_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_DARK_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_LIGHT_PROPERTY_NAME];
+    delete cleanExtended.avatar_url;
+    delete cleanExtended.displayname;
+    delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_HAS_CAT_PROPERTY_NAME];
+    delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_IS_CAT_PROPERTY_NAME];
+  }
+
+  return {
+    pronouns: cachedData?.pronouns,
+    bio: cachedData?.bio,
+    timezone: cachedData?.timezone,
+    extended: cleanExtended,
+  };
+};
 
 export interface UseTimelineActionsOptions {
   room: Room;
@@ -27,7 +60,11 @@ export interface UseTimelineActionsOptions {
     options?: unknown
   ) => void;
   activeReplyId?: string;
+  /** Distinguishes a real reply draft from the seeded base-thread draft, which has body ''. */
+  activeReplyBody?: string;
   setReplyDraft: (draft: unknown) => void;
+  /** Set when these actions drive a thread drawer rather than the room timeline. */
+  threadRootId?: string;
   openThreadId?: string;
   setOpenThread: (threadId: string | undefined) => void;
   handleEdit: (editId?: string) => void;
@@ -43,7 +80,9 @@ export function useTimelineActions({
   spaceId,
   openUserRoomProfile,
   activeReplyId,
+  activeReplyBody,
   setReplyDraft,
+  threadRootId,
   openThreadId,
   setOpenThread,
   handleEdit,
@@ -65,38 +104,13 @@ export function useTimelineActions({
       const userId = evt.currentTarget.getAttribute('data-user-id');
       if (!userId) return;
 
-      const cachedData = getGlobalProfile(userId);
-      const cleanExtended = cachedData?.extended ? { ...cachedData.extended } : undefined;
-
-      if (cleanExtended) {
-        delete cleanExtended[prefix.MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_PROFILE_BIOGRAPHY_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_COMMET_UNSTABLE_PROFILE_BIO_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_COMMET_UNSTABLE_PROFILE_STATUS_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_UNSTABLE_PROFILE_TIMEZONE_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_STABLE_PROFILE_TIMEZONE_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_UNSTABLE_PROFILE_BANNER_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_DARK_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_LIGHT_PROPERTY_NAME];
-        delete cleanExtended.avatar_url;
-        delete cleanExtended.displayname;
-        delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_HAS_CAT_PROPERTY_NAME];
-        delete cleanExtended[prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_IS_CAT_PROPERTY_NAME];
-      }
-
       openUserRoomProfile(
         room.roomId,
         spaceId,
         userId,
         evt.currentTarget.getBoundingClientRect(),
         undefined,
-        {
-          pronouns: cachedData?.pronouns,
-          bio: cachedData?.bio,
-          timezone: cachedData?.timezone,
-          extended: cleanExtended,
-        }
+        buildCachedProfilePayload(getGlobalProfile(userId))
       );
     },
     [room.roomId, spaceId, openUserRoomProfile, getGlobalProfile]
@@ -131,8 +145,19 @@ export function useTimelineActions({
 
       const { eventId: draftEventId, replyEvt } = resolved;
 
-      if (activeReplyId === draftEventId) {
-        setReplyDraft(undefined);
+      // In a thread the seeded base draft already targets the root with an empty
+      // body, so matching on the id alone would make the root unrepliable.
+      if (activeReplyId === draftEventId && activeReplyBody !== '') {
+        setReplyDraft(
+          threadRootId
+            ? {
+                userId: mx.getUserId() ?? '',
+                eventId: threadRootId,
+                body: '',
+                relation: { rel_type: 'm.thread', event_id: threadRootId },
+              }
+            : undefined
+        );
         return;
       }
 
@@ -155,7 +180,7 @@ export function useTimelineActions({
         });
       }
     },
-    [room, setReplyDraft, activeReplyId]
+    [room, setReplyDraft, activeReplyId, activeReplyBody, threadRootId, mx]
   );
 
   const handleReplyClick = useCallback(
@@ -180,9 +205,14 @@ export function useTimelineActions({
 
   const handleReactionToggle = useCallback(
     (targetEventId: string, key: string, shortcode?: string) => {
-      toggleReaction(mx, room, targetEventId, key, shortcode);
+      // Thread reactions live in the thread's own timeline set; without it the
+      // existing reaction is never found and un-reacting sends a second one.
+      const threadTimelineSet = threadRootId
+        ? room.getThread(threadRootId)?.timelineSet
+        : undefined;
+      toggleReaction(mx, room, targetEventId, key, shortcode, threadTimelineSet);
     },
-    [mx, room]
+    [mx, room, threadRootId]
   );
 
   const handleResend = useCallback(

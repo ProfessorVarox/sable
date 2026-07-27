@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, Box, Button, Chip, config, Menu, Spinner, Text } from 'folds';
+import { Badge, Box, Chip, config, Menu, Text } from 'folds';
 import { CaretDown, CaretUp, chipIcon } from '$components/icons/phosphor';
 import { produce } from 'immer';
-import { SequenceCard } from '$components/sequence-card';
+import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { SettingTile } from '$components/setting-tile';
 import type { IPowerLevels, PermissionLocation } from '$hooks/usePowerLevels';
 import { applyPermissionPower, getPermissionPower } from '$hooks/usePowerLevels';
@@ -14,9 +14,9 @@ import type { StateEvents } from '$types/matrix-sdk';
 import { PowerSwitcher } from '$components/power';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useAlive } from '$hooks/useAlive';
-import { SequenceCardStyle } from '$features/common-settings/styles.css';
 import type { PermissionGroup } from './types';
 import { EventType } from '$types/matrix-sdk';
+import { Button } from '$components/button';
 
 const USER_DEFAULT_LOCATION: PermissionLocation = {
   user: true,
@@ -271,7 +271,9 @@ export function PermissionGroups({
                 variant="Success"
                 radii="300"
                 disabled={applyingChanges}
-                before={applyingChanges && <Spinner variant="Success" fill="Solid" size="100" />}
+                loading={applyingChanges}
+                spinnerVariant="Success"
+                spinnerSize="100"
                 onClick={handleApplyChanges}
               >
                 <Text size="B300">Apply Changes</Text>

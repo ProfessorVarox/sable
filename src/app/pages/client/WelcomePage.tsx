@@ -1,6 +1,7 @@
 import { Box, Button, Text, config, toRem } from 'folds';
 import { Code, Heart, menuIcon } from '$components/icons/phosphor';
 import { Page, PageHero, PageHeroSection } from '$components/page';
+import { versionLabel } from '$utils/platform';
 import LogoSVG from '$public/res/svg/logo.svg';
 
 export function WelcomePage() {
@@ -24,7 +25,7 @@ export function WelcomePage() {
                   target="_blank"
                   rel="noreferrer noopener"
                 >
-                  {`v${APP_VERSION}${IS_RELEASE_TAG ? '' : `-dev${BUILD_HASH ? ` (${BUILD_HASH})` : ''}`}`}
+                  {versionLabel()}
                 </a>
               </span>
             }

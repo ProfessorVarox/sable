@@ -26,5 +26,6 @@
     ".env": ".env.*",
     "flake.nix": "flake.lock",
     ".gitattributes": ".gitignore"
-  }
+  },
+  "i18n-ally.localesPaths": ["public/locales"]
 }

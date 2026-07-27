@@ -1,21 +1,8 @@
 import type { ReactNode } from 'react';
 import { useCallback, useState } from 'react';
-import {
-  Box,
-  Button,
-  Modal,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
-  Spinner,
-  Text,
-  Tooltip,
-  TooltipProvider,
-  as,
-} from 'folds';
+import { Box, Button, Modal, Spinner, Text, Tooltip, TooltipProvider, as } from 'folds';
 import { ArrowRight, Download, sizedIcon, Warning } from '$components/icons/phosphor';
 import type { EncryptedAttachmentInfo } from 'browser-encrypt-attachment';
-import FocusTrap from 'focus-trap-react';
 import type { IFileInfo } from '$types/matrix/common';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -26,13 +13,13 @@ import {
   getFileNameExt,
   mimeTypeToExt,
 } from '$utils/mimeTypes';
-import { stopPropagation } from '$utils/keyboard';
 import { decryptFile, downloadEncryptedMedia, downloadMedia, mxcUrlToHttp } from '$utils/matrix';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
-import { useRevokeObjectURL } from '$hooks/useObjectURL';
+import { useCreateObjectURL } from '$hooks/useObjectURL';
 import { useDismissOnBack } from '$utils/androidBack';
 import { ModalWide } from '$styles/Modal.css';
 import { getDownloadFilename, saveFileToDevice } from '$utils/download';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 
 const renderErrorButton = (retry: () => void, text: string) => (
   <TooltipProvider
@@ -101,33 +88,22 @@ export function ReadTextFile({ body, mimeType, url, encInfo, renderViewer }: Rea
   return (
     <>
       {textState.status === AsyncStatus.Success && (
-        <Overlay open={textViewer} backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                onDeactivate: () => setTextViewer(false),
-                clickOutsideDeactivates: true,
-                escapeDeactivates: stopPropagation,
-              }}
-            >
-              <Modal
-                className={ModalWide}
-                size="500"
-                onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
-              >
-                {renderViewer({
-                  name: body,
-                  text: textState.data,
-                  langName: READABLE_TEXT_MIME_TYPES.includes(mimeType)
-                    ? mimeTypeToExt(mimeType)
-                    : mimeTypeToExt(READABLE_EXT_TO_MIME_TYPE[getFileNameExt(body)] ?? mimeType),
-                  requestClose: () => setTextViewer(false),
-                })}
-              </Modal>
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
+        <ModalOverlay open={textViewer} requestClose={() => setTextViewer(false)}>
+          <Modal
+            className={ModalWide}
+            size="500"
+            onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
+          >
+            {renderViewer({
+              name: body,
+              text: textState.data,
+              langName: READABLE_TEXT_MIME_TYPES.includes(mimeType)
+                ? mimeTypeToExt(mimeType)
+                : mimeTypeToExt(READABLE_EXT_TO_MIME_TYPE[getFileNameExt(body)] ?? mimeType),
+              requestClose: () => setTextViewer(false),
+            })}
+          </Modal>
+        </ModalOverlay>
       )}
       {textState.status === AsyncStatus.Error ? (
         renderErrorButton(loadText, 'Open File')
@@ -178,47 +154,37 @@ export function ReadPdfFile({ body, mimeType, url, encInfo, renderViewer }: Read
   // Android back closes the PDF viewer instead of navigating away.
   useDismissOnBack(() => setPdfViewer(false), pdfViewer);
 
+  const createObjectURL = useCreateObjectURL();
+
   const [pdfState, loadPdf] = useAsyncCallback(
     useCallback(async () => {
       const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
       if (!mediaUrl) throw new Error('Invalid media URL');
       const fileContent = encInfo
-        ? await downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
-        : await downloadMedia(mediaUrl);
+        ? downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
+        : downloadMedia(mediaUrl);
+      const fileURL = await createObjectURL(fileContent);
       setPdfViewer(true);
-      return URL.createObjectURL(fileContent);
-    }, [mx, url, useAuthentication, mimeType, encInfo])
+      return fileURL;
+    }, [mx, url, useAuthentication, mimeType, encInfo, createObjectURL])
   );
-
-  useRevokeObjectURL(pdfState.status === AsyncStatus.Success ? pdfState.data : undefined);
 
   return (
     <>
       {pdfState.status === AsyncStatus.Success && (
-        <Overlay open={pdfViewer} backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                onDeactivate: () => setPdfViewer(false),
-                clickOutsideDeactivates: true,
-                escapeDeactivates: stopPropagation,
-              }}
-            >
-              <Modal
-                className={ModalWide}
-                size="500"
-                onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
-              >
-                {renderViewer({
-                  name: body,
-                  src: pdfState.data,
-                  requestClose: () => setPdfViewer(false),
-                })}
-              </Modal>
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
+        <ModalOverlay open={pdfViewer} requestClose={() => setPdfViewer(false)}>
+          <Modal
+            className={ModalWide}
+            size="500"
+            onContextMenu={(evt: React.MouseEvent) => evt.stopPropagation()}
+          >
+            {renderViewer({
+              name: body,
+              src: pdfState.data,
+              requestClose: () => setPdfViewer(false),
+            })}
+          </Modal>
+        </ModalOverlay>
       )}
       {pdfState.status === AsyncStatus.Error ? (
         renderErrorButton(loadPdf, 'Open PDF')
@@ -258,21 +224,22 @@ export function DownloadFile({ body, mimeType, url, info, encInfo }: DownloadFil
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
 
+  const createObjectURL = useCreateObjectURL();
+
   const [downloadState, download] = useAsyncCallback(
     useCallback(async () => {
       const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
       if (!mediaUrl) throw new Error('Invalid media URL');
-      const fileContent = encInfo
-        ? await downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
-        : await downloadMedia(mediaUrl);
+      const fileContentPromise = encInfo
+        ? downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
+        : downloadMedia(mediaUrl);
+      const fileURL = await createObjectURL(fileContentPromise);
+      const fileContent = await fileContentPromise;
 
-      const fileURL = URL.createObjectURL(fileContent);
       await saveFileToDevice(fileContent, getDownloadFilename(body), mimeType);
       return fileURL;
-    }, [mx, url, useAuthentication, mimeType, encInfo, body])
+    }, [mx, url, useAuthentication, mimeType, encInfo, body, createObjectURL])
   );
-
-  useRevokeObjectURL(downloadState.status === AsyncStatus.Success ? downloadState.data : undefined);
 
   return downloadState.status === AsyncStatus.Error ? (
     renderErrorButton(download, `Retry Download (${bytesToSize(info.size ?? 0)})`)

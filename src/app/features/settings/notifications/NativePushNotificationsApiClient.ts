@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { isAndroidTauri } from './TauriNotificationsApiClient';
 
 export type NativePushRegistration = {
   deviceToken: string;
@@ -24,6 +25,7 @@ export async function getNativePushNotificationsApi(): Promise<NativePushNotific
         registerForPushNotifications: (vapid?: string) =>
           invoke<NativePushRegistration>('plugin:notifications|register_for_push_notifications', {
             vapid,
+            ...(isAndroidTauri() ? { provider: 'fcm' } : {}),
           }),
         unregisterForPushNotifications: notificationsApi.unregisterForPushNotifications,
       })

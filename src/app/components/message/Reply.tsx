@@ -25,12 +25,10 @@ import {
 } from '$components/icons/phosphor';
 import {
   getMemberDisplayName,
-  getReactionKey,
-  getReactionShortcode,
-  getRedactionTargetId,
   trimReplyFromBody,
   trimReplyFromFormattedBody,
-} from '$utils/room';
+} from '$utils/room/display';
+import { getReactionKey, getReactionShortcode, getRedactionTargetId } from '$utils/room/relations';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { randomNumberBetween } from '$utils/common';
 import { sanitizeCustomHtml } from '$utils/sanitize';
@@ -174,7 +172,7 @@ type ReplyLayoutProps = {
   mentioned: boolean;
   replyIcon?: JSX.Element;
 };
-export const ReplyLayout = as<'div', ReplyLayoutProps>(
+const ReplyLayout = as<'div', ReplyLayoutProps>(
   ({ username, userColor, icon, className, mentioned, children, replyIcon, ...props }, ref) => (
     <Box
       className={classNames(css.Reply, className)}

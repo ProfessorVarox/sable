@@ -11,7 +11,7 @@ import {
   desktopSettingsSyncingAtom,
 } from '$state/desktopSettings';
 
-export type DesktopSettingSetter<K extends DesktopSettingKey> =
+type DesktopSettingSetter<K extends DesktopSettingKey> =
   | DesktopSettings[K]
   | ((value: DesktopSettings[K]) => DesktopSettings[K]);
 
@@ -26,7 +26,7 @@ function resolveDesktopSettingValue<K extends DesktopSettingKey>(
   return value;
 }
 
-export const useSetDesktopSetting = <K extends DesktopSettingKey>(key: K) => {
+const useSetDesktopSetting = <K extends DesktopSettingKey>(key: K) => {
   const setterAtom = useMemo(
     () =>
       atom<null, [DesktopSettingSetter<K>], Promise<void>>(null, (get, set, value) => {

@@ -10,12 +10,6 @@ const getAppBaseUrl = (): string => {
     return `${TAURI_SSO_PROTOCOL}//${TAURI_SSO_HOST}`;
   }
 
-  if (import.meta.env.DEV) {
-    // TODO: disabled for now since it causes issues with the SSO flow. We should find a better solution for this in the future.
-    // return window.location.origin;
-    return `${TAURI_SSO_PROTOCOL}//${TAURI_SSO_HOST}`;
-  }
-
   return `${TAURI_SSO_PROTOCOL}//${TAURI_SSO_HOST}`;
 };
 

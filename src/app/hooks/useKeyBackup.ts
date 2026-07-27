@@ -8,19 +8,13 @@ import { CryptoEvent } from '$types/matrix-sdk';
 import { useCallback, useEffect, useState } from 'react';
 import * as Sentry from '@sentry/react';
 import { useMatrixClient } from './useMatrixClient';
+import { useMatrixEvent } from './useMatrixEvent';
 import { useAlive } from './useAlive';
 
-export const useKeyBackupStatusChange = (
-  onChange: CryptoEventHandlerMap[CryptoEvent.KeyBackupStatus]
-) => {
+const useKeyBackupStatusChange = (onChange: CryptoEventHandlerMap[CryptoEvent.KeyBackupStatus]) => {
   const mx = useMatrixClient();
 
-  useEffect(() => {
-    mx.on(CryptoEvent.KeyBackupStatus, onChange);
-    return () => {
-      mx.removeListener(CryptoEvent.KeyBackupStatus, onChange);
-    };
-  }, [mx, onChange]);
+  useMatrixEvent(mx, CryptoEvent.KeyBackupStatus, onChange);
 };
 
 export const useKeyBackupStatus = (crypto: CryptoApi): boolean => {
@@ -40,30 +34,18 @@ export const useKeyBackupStatus = (crypto: CryptoApi): boolean => {
   return status;
 };
 
-export const useKeyBackupSessionsRemainingChange = (
+const useKeyBackupSessionsRemainingChange = (
   onChange: CryptoEventHandlerMap[CryptoEvent.KeyBackupSessionsRemaining]
 ) => {
   const mx = useMatrixClient();
 
-  useEffect(() => {
-    mx.on(CryptoEvent.KeyBackupSessionsRemaining, onChange);
-    return () => {
-      mx.removeListener(CryptoEvent.KeyBackupSessionsRemaining, onChange);
-    };
-  }, [mx, onChange]);
+  useMatrixEvent(mx, CryptoEvent.KeyBackupSessionsRemaining, onChange);
 };
 
-export const useKeyBackupFailedChange = (
-  onChange: CryptoEventHandlerMap[CryptoEvent.KeyBackupFailed]
-) => {
+const useKeyBackupFailedChange = (onChange: CryptoEventHandlerMap[CryptoEvent.KeyBackupFailed]) => {
   const mx = useMatrixClient();
 
-  useEffect(() => {
-    mx.on(CryptoEvent.KeyBackupFailed, onChange);
-    return () => {
-      mx.removeListener(CryptoEvent.KeyBackupFailed, onChange);
-    };
-  }, [mx, onChange]);
+  useMatrixEvent(mx, CryptoEvent.KeyBackupFailed, onChange);
 };
 
 export const useKeyBackupDecryptionKeyCached = (
@@ -71,12 +53,7 @@ export const useKeyBackupDecryptionKeyCached = (
 ) => {
   const mx = useMatrixClient();
 
-  useEffect(() => {
-    mx.on(CryptoEvent.KeyBackupDecryptionKeyCached, onChange);
-    return () => {
-      mx.removeListener(CryptoEvent.KeyBackupDecryptionKeyCached, onChange);
-    };
-  }, [mx, onChange]);
+  useMatrixEvent(mx, CryptoEvent.KeyBackupDecryptionKeyCached, onChange);
 };
 
 export const useKeyBackupSync = (): [number, string | undefined] => {

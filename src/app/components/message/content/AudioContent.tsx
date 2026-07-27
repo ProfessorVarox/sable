@@ -28,7 +28,7 @@ import {
 } from '$utils/matrix';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
-import { useRevokeObjectURL } from '$hooks/useObjectURL';
+import { useCreateObjectURL } from '$hooks/useObjectURL';
 import { MEDIA_VOLUME_KEY } from '$components/media';
 import { hasControllingServiceWorker } from '$utils/platform';
 
@@ -60,6 +60,8 @@ export function AudioContent({
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
 
+  const createObjectURL = useCreateObjectURL();
+
   const [srcState, loadSrc] = useAsyncCallback(
     useCallback(async () => {
       const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
@@ -71,17 +73,13 @@ export function AudioContent({
           await setMediaEncryption(mediaUrl, encInfo, mimeType);
           return rewriteAuthenticatedMediaUrl(mediaUrl)!;
         }
-        const fileContent = await downloadEncryptedMedia(mediaUrl, (encBuf) =>
-          decryptFile(encBuf, mimeType, encInfo)
+        return createObjectURL(
+          downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
         );
-        return URL.createObjectURL(fileContent);
       }
-      const fileContent = await downloadMedia(mediaUrl);
-      return URL.createObjectURL(fileContent);
-    }, [mx, url, useAuthentication, mimeType, encInfo])
+      return createObjectURL(downloadMedia(mediaUrl));
+    }, [mx, url, useAuthentication, mimeType, encInfo, createObjectURL])
   );
-
-  useRevokeObjectURL(srcState.status === AsyncStatus.Success ? srcState.data : undefined);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -124,7 +122,7 @@ export function AudioContent({
     if (srcState.status === AsyncStatus.Success) {
       setPlaying(!playing);
     } else if (srcState.status !== AsyncStatus.Loading) {
-      loadSrc();
+      loadSrc().catch(() => undefined);
     }
   };
 
@@ -275,6 +273,12 @@ export function AudioContent({
         controls={false}
         autoPlay
         ref={audioRef}
+        // See VideoContent: CORS opts this Range-streamed media out of Firefox's ORB.
+        crossOrigin={
+          srcState.status === AsyncStatus.Success && !srcState.data.startsWith('blob:')
+            ? 'anonymous'
+            : undefined
+        }
         onVolumeChange={(e) => {
           localStorage.setItem(MEDIA_VOLUME_KEY, String((e.target as HTMLAudioElement).volume));
         }}

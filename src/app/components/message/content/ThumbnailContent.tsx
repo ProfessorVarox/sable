@@ -14,7 +14,7 @@ import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { isTauri } from '@tauri-apps/api/core';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
-import { useRevokeObjectURL } from '$hooks/useObjectURL';
+import { useCreateObjectURL } from '$hooks/useObjectURL';
 import { FALLBACK_MIMETYPE } from '$utils/mimeTypes';
 
 export type ThumbnailContentProps = {
@@ -35,34 +35,37 @@ export function ThumbnailContent({ info, renderImage }: ThumbnailContentProps) {
 
   const resolvedMediaUrl = useRenderableMediaUrl(encInfo ? undefined : rawMediaUrl);
 
+  const createObjectURL = useCreateObjectURL();
+
   const [thumbSrcState, loadThumbSrc] = useAsyncCallback(
     useCallback(async () => {
       const thumbInfo = info.thumbnail_info;
-      if (typeof thumbMxcUrl !== 'string' || typeof thumbInfo?.mimetype !== 'string') {
+      // Only the URL is required: `mimetype` is a decryption hint that already falls back,
+      // and other clients routinely omit it.
+      if (typeof thumbMxcUrl !== 'string') {
         throw new Error('Failed to load thumbnail');
       }
       if (encInfo) {
         if (!rawMediaUrl) throw new Error('Invalid media URL');
         if (isTauri()) {
-          await setMediaEncryption(rawMediaUrl, encInfo, thumbInfo.mimetype ?? FALLBACK_MIMETYPE);
+          await setMediaEncryption(rawMediaUrl, encInfo, thumbInfo?.mimetype ?? FALLBACK_MIMETYPE);
           return rewriteAuthenticatedMediaUrl(rawMediaUrl)!;
         }
-        const fileContent = await downloadEncryptedMedia(rawMediaUrl, (encBuf) =>
-          decryptFile(encBuf, thumbInfo.mimetype ?? FALLBACK_MIMETYPE, encInfo)
+        return createObjectURL(
+          downloadEncryptedMedia(rawMediaUrl, (encBuf) =>
+            decryptFile(encBuf, thumbInfo?.mimetype ?? FALLBACK_MIMETYPE, encInfo)
+          )
         );
-        return URL.createObjectURL(fileContent);
       }
       return resolvedMediaUrl ?? rawMediaUrl ?? thumbMxcUrl;
-    }, [info, thumbMxcUrl, rawMediaUrl, resolvedMediaUrl, encInfo])
+    }, [info, thumbMxcUrl, rawMediaUrl, resolvedMediaUrl, encInfo, createObjectURL])
   );
 
   useEffect(() => {
-    loadThumbSrc();
+    // The failure is already reflected in `thumbSrcState`; swallow the rejection so it
+    // does not surface as an unhandled promise rejection.
+    loadThumbSrc().catch(() => undefined);
   }, [loadThumbSrc]);
-
-  useRevokeObjectURL(
-    encInfo && thumbSrcState.status === AsyncStatus.Success ? thumbSrcState.data : undefined
-  );
 
   if (thumbSrcState.status === AsyncStatus.Success) return renderImage(thumbSrcState.data);
 

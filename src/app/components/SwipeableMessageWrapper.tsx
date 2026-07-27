@@ -4,7 +4,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import { ArrowBendUpLeftIcon, PencilSimple, getPhosphorIconSize } from '$components/icons/phosphor';
 import { haptic } from '$utils/haptics';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { RightSwipeAction, settingsAtom } from '$state/settings';
 import { useMobileNavDrawer } from '$components/page/MobileNavDrawerContext';
 
@@ -171,11 +171,8 @@ export function SwipeableMessageWrapper({
   const settings = useAtomValue(settingsAtom);
 
   const isSwipeToReplyEnabled = useMemo(
-    () =>
-      settings.mobileGestures &&
-      mobileOrTablet() &&
-      settings.rightSwipeAction !== RightSwipeAction.Members,
-    [settings.mobileGestures, settings.rightSwipeAction]
+    () => isMobileOrTablet() && settings.rightSwipeAction !== RightSwipeAction.Members,
+    [settings.rightSwipeAction]
   );
 
   if (!isSwipeToReplyEnabled || !onReply) {

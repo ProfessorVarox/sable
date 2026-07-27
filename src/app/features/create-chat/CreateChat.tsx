@@ -1,4 +1,4 @@
-import { Box, Button, color, config, Input, Spinner, Switch, Text } from 'folds';
+import { Box, color, config, Input, Switch, Text } from 'folds';
 import { sizedIcon, Warning } from '$components/icons/phosphor';
 import type { FormEventHandler } from 'react';
 import { useCallback, useState } from 'react';
@@ -15,6 +15,7 @@ import { createRoomEncryptionState } from '$components/create-room';
 import { useAlive } from '$hooks/useAlive';
 import { getDirectRoomPath } from '$pages/pathUtils';
 import { ErrorCode } from '../../cs-errorcode';
+import { Button } from '$components/button';
 
 type CreateChatProps = {
   defaultUserId?: string;
@@ -146,9 +147,11 @@ export function CreateChat({ defaultUserId }: CreateChatProps) {
           variant="Primary"
           radii="400"
           disabled={disabled}
-          before={loading && <Spinner variant="Primary" fill="Solid" size="200" />}
+          loading={loading}
+          spinnerVariant="Primary"
+          spinnerSize="200"
         >
-          <Text size="B500">Create</Text>
+          <Text size="B400">Create Chat</Text>
         </Button>
       </Box>
     </Box>

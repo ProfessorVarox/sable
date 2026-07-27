@@ -4,7 +4,8 @@ import type { Room } from '$types/matrix-sdk';
 import { useAtomValue } from 'jotai';
 import type { IRoomCreateContent } from '$types/matrix/room';
 
-import { getMemberDisplayName, getStateEvent } from '$utils/room';
+import { getMemberDisplayName } from '$utils/room/display';
+import { getStateEvent } from '$utils/room/hierarchy';
 import { nicknamesAtom } from '$state/nicknames';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { getMxIdLocalPart, mxcUrlToHttp, removeRoomIdFromMDirect } from '$utils/matrix';
@@ -24,7 +25,7 @@ import { userFallbackIcon } from '$components/icons/phosphor';
 import { DirectInvitePrompt } from '$components/direct-invite-prompt';
 import { EventType, KnownMembership } from '$types/matrix-sdk';
 
-export type RoomIntroProps = {
+type RoomIntroProps = {
   room: Room;
 };
 

@@ -13,7 +13,7 @@ import {
   config,
 } from 'folds';
 import type { IContent, MatrixEvent, Room } from '$types/matrix-sdk';
-import { getMemberDisplayName } from '$utils/room';
+import { getAvatarUrl, getMemberDisplayName } from '$utils/room/display';
 import { getMxIdLocalPart } from '$utils/matrix';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
@@ -50,7 +50,7 @@ import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUr
 import * as css from './EventHistory.css';
 import { EventType } from '$types/matrix-sdk';
 
-export type EventHistoryProps = {
+type EventHistoryProps = {
   room: Room;
   mEvents: MatrixEvent[];
   requestClose: () => void;
@@ -70,9 +70,7 @@ export const EventHistory = as<'div', EventHistoryProps>(
     const readerId = mEvents[0]?.event.sender ?? '';
     const name = getName(readerId ?? '');
     const avatarMxcUrl = room.getMember(readerId ?? '')?.getMxcAvatarUrl();
-    const avatarUrl = avatarMxcUrl
-      ? mx.mxcUrlToHttp(avatarMxcUrl, 100, 100, 'crop', undefined, false, useAuthentication)
-      : undefined;
+    const avatarUrl = getAvatarUrl(mx, avatarMxcUrl, 100, useAuthentication);
 
     const [hour24Clock] = useSetting(settingsAtom, 'hour24Clock');
     const [dateFormatString] = useSetting(settingsAtom, 'dateFormatString');

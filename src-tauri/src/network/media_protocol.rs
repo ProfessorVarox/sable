@@ -3,7 +3,10 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, RwLock, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock, RwLock, Weak,
+    },
     time::Duration,
 };
 
@@ -20,17 +23,35 @@ use tauri_plugin_http::reqwest::{
     header::{AUTHORIZATION, CONTENT_TYPE},
     Client, Url,
 };
-use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio::{
+    sync::{Mutex as AsyncMutex, Notify, Semaphore},
+    time::{timeout_at, Instant},
+};
 
 pub const MEDIA_URI_SCHEME: &str = "sable-media";
 
 const MEDIA_PATH_PREFIXES: [&str; 2] = ["/_matrix/media/", "/_matrix/client/v1/media/"];
+// How the webview spells this protocol: `sable-media://` on iOS/macOS, and
+// `http(s)://sable-media.localhost/` on Windows/Android respectively.
+const MEDIA_PROTOCOL_PREFIXES: [&str; 3] = [
+    "sable-media://",
+    "http://sable-media.localhost/",
+    "https://sable-media.localhost/",
+];
 const CACHE_SUBDIR: &str = "sable-media";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Inactivity deadline between chunks, so a slow but progressing download is not killed.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_CONCURRENT_REQUESTS: usize = 4;
+const MAX_CONCURRENT_THUMBNAIL_REQUESTS: usize = 4;
+const MAX_CONCURRENT_DOWNLOAD_REQUESTS: usize = 6;
+// The frontend mounts (and starts requesting media) before it hands us the session, so a request
+// may arrive first. `<img>` never retries, so waiting beats answering 503.
+const SESSION_WAIT: Duration = Duration::from_secs(5);
 const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RANGE_CHUNK: u64 = 2 * 1024 * 1024;
+// Short: a 4xx stops being true once an unreachable remote server comes back.
+const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(600);
+const MAX_NEGATIVE_CACHE_ENTRIES: usize = 512;
 
 const TEMP_CACHE_SUBDIR: &str = "sable-media-temp";
 const MAX_TEMP_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
@@ -39,32 +60,68 @@ type FetchResult = Result<(String, Option<Arc<Vec<u8>>>, PathBuf), StatusCode>;
 
 pub struct MediaSessionState {
     inner: RwLock<Option<MediaSession>>,
+    session_ready: Notify,
+    session_ever_set: AtomicBool,
     encryption: RwLock<HashMap<String, EncryptionParams>>,
     client: OnceLock<Client>,
-    semaphore: Semaphore,
+    thumbnail_semaphore: Semaphore,
+    download_semaphore: Semaphore,
     cache_miss_gates: Mutex<HashMap<String, Weak<AsyncMutex<Option<FetchResult>>>>>,
+    negative_cache: Mutex<HashMap<String, (StatusCode, Instant)>>,
 }
 
 impl Default for MediaSessionState {
     fn default() -> Self {
         Self {
             inner: RwLock::new(None),
+            session_ready: Notify::new(),
+            session_ever_set: AtomicBool::new(false),
             encryption: RwLock::new(HashMap::new()),
             client: OnceLock::new(),
-            semaphore: Semaphore::new(MAX_CONCURRENT_REQUESTS),
+            thumbnail_semaphore: Semaphore::new(MAX_CONCURRENT_THUMBNAIL_REQUESTS),
+            download_semaphore: Semaphore::new(MAX_CONCURRENT_DOWNLOAD_REQUESTS),
             cache_miss_gates: Mutex::new(HashMap::new()),
+            negative_cache: Mutex::new(HashMap::new()),
         }
     }
 }
 
 impl MediaSessionState {
+    fn session(&self) -> Option<MediaSession> {
+        self.inner.read().ok().and_then(|guard| guard.clone())
+    }
+
+    /// Waits out the startup window where media is requested before the session arrives. Fails
+    /// fast once a session has existed, so requests still in flight after a logout do not hang.
+    async fn wait_for_session(&self) -> Option<MediaSession> {
+        if let Some(session) = self.session() {
+            return Some(session);
+        }
+        if self.session_ever_set.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let deadline = Instant::now() + SESSION_WAIT;
+        loop {
+            let mut notified = std::pin::pin!(self.session_ready.notified());
+            // Register before re-checking, otherwise a session arriving in between is missed.
+            notified.as_mut().enable();
+            if let Some(session) = self.session() {
+                return Some(session);
+            }
+            if timeout_at(deadline, notified).await.is_err() {
+                return None;
+            }
+        }
+    }
+
     // Shared across requests so the connection pool and TLS sessions stay warm.
     fn client(&self) -> Client {
         self.client
             .get_or_init(|| {
                 // MSC3916: default policy strips Authorization on cross-origin redirects to a signed CDN URL.
                 Client::builder()
-                    .timeout(REQUEST_TIMEOUT)
+                    .read_timeout(READ_TIMEOUT)
                     .connect_timeout(CONNECT_TIMEOUT)
                     .redirect(tauri_plugin_http::reqwest::redirect::Policy::default())
                     .build()
@@ -90,12 +147,54 @@ impl MediaSessionState {
         gates.insert(key.to_owned(), Arc::downgrade(&gate));
         Ok(gate)
     }
+
+    fn recent_client_error(&self, key: &str) -> Option<StatusCode> {
+        let mut cache = self.negative_cache.lock().ok()?;
+        let (status, seen_at) = *cache.get(key)?;
+        if seen_at.elapsed() < NEGATIVE_CACHE_TTL {
+            return Some(status);
+        }
+        cache.remove(key);
+        None
+    }
+
+    /// 5xx and auth/rate-limit failures stay retryable.
+    fn note_client_error(&self, key: &str, status: StatusCode) {
+        let media_specific = status.is_client_error()
+            && !matches!(
+                status,
+                StatusCode::UNAUTHORIZED
+                    | StatusCode::FORBIDDEN
+                    | StatusCode::REQUEST_TIMEOUT
+                    | StatusCode::TOO_MANY_REQUESTS
+            );
+        if !media_specific {
+            return;
+        }
+        let Ok(mut cache) = self.negative_cache.lock() else {
+            return;
+        };
+        cache.retain(|_, (_, seen_at)| seen_at.elapsed() < NEGATIVE_CACHE_TTL);
+        if cache.len() >= MAX_NEGATIVE_CACHE_ENTRIES {
+            return;
+        }
+        cache.insert(key.to_owned(), (status, Instant::now()));
+    }
+
+    fn forget_client_errors(&self) {
+        if let Ok(mut cache) = self.negative_cache.lock() {
+            cache.clear();
+        }
+    }
 }
 
 #[derive(Clone)]
 struct MediaSession {
     origin: String,
     token: String,
+    // Cache key input. The Matrix user ID, not `token`, which rotates on every OIDC
+    // refresh and would orphan the whole on-disk cache.
+    scope: String,
 }
 
 #[derive(Clone)]
@@ -112,17 +211,32 @@ pub fn set_media_session(
     state: tauri::State<'_, MediaSessionState>,
     base_url: String,
     token: String,
+    scope: Option<String>,
 ) -> Result<(), String> {
     let origin = Url::parse(&base_url)
         .map_err(|err| err.to_string())?
         .origin()
         .ascii_serialization();
 
-    let mut guard = state
-        .inner
-        .write()
-        .map_err(|_| "media session lock poisoned".to_string())?;
-    *guard = Some(MediaSession { origin, token });
+    let scope = scope
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| origin.clone());
+
+    {
+        let mut guard = state
+            .inner
+            .write()
+            .map_err(|_| "media session lock poisoned".to_string())?;
+        *guard = Some(MediaSession {
+            origin,
+            token,
+            scope,
+        });
+    }
+
+    state.forget_client_errors();
+    state.session_ever_set.store(true, Ordering::Release);
+    state.session_ready.notify_waiters();
     Ok(())
 }
 
@@ -134,6 +248,10 @@ pub fn clear_media_session<R: Runtime>(
     if let Ok(mut guard) = state.inner.write() {
         *guard = None;
     }
+    if let Ok(mut guard) = state.encryption.write() {
+        guard.clear();
+    }
+    state.forget_client_errors();
     if let Ok(dir) = cache_dir(&app) {
         let _ = fs::remove_dir_all(dir);
     }
@@ -203,7 +321,10 @@ pub fn set_media_encryption(
 }
 
 fn normalize_encryption_key(url: &str) -> String {
-    if url.starts_with("sable-media://") || url.starts_with("http://sable-media.localhost/") {
+    if MEDIA_PROTOCOL_PREFIXES
+        .iter()
+        .any(|prefix| url.starts_with(prefix))
+    {
         if let Ok(uri) = Uri::try_from(url) {
             let path = uri.path().trim_start_matches('/');
             let decoded = percent_encoding::percent_decode_str(path)
@@ -215,7 +336,33 @@ fn normalize_encryption_key(url: &str) -> String {
             return decoded.into_owned();
         }
     }
-    url.to_string()
+    // Parse bare URLs too, so both sides of the map agree on one canonical form.
+    Url::parse(url)
+        .map(|parsed| parsed.to_string())
+        .unwrap_or_else(|_| url.to_string())
+}
+
+/// The app's own webview origins, which vary by platform and scheme.
+fn is_webview_origin(origin: &str) -> bool {
+    matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) || (cfg!(debug_assertions) && origin.starts_with("http://localhost:"))
+}
+
+/// Grants CORS only to our own webview. A request with no `Origin` (an `<img>`
+/// load) is not a CORS request and needs no grant.
+fn apply_cors_headers(response: &mut Response<Vec<u8>>, request_origin: Option<&str>) {
+    let Some(origin) = request_origin.filter(|origin| is_webview_origin(origin)) else {
+        return;
+    };
+    let Ok(value) = header::HeaderValue::from_str(origin) else {
+        return;
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    // Responses are cached `immutable`, so the cache must key on Origin too.
+    headers.insert(header::VARY, header::HeaderValue::from_static("Origin"));
 }
 
 pub fn respond<R: Runtime>(
@@ -225,15 +372,20 @@ pub fn respond<R: Runtime>(
 ) {
     let app = ctx.app_handle().clone();
     let uri = request.uri().clone();
-    let range = request
-        .headers()
-        .get(header::RANGE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let header_value = |name: header::HeaderName| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let range = header_value(header::RANGE);
+    let origin = header_value(header::ORIGIN);
     tauri::async_runtime::spawn(async move {
-        let response = handle_request(&app, uri, range)
+        let mut response = handle_request(&app, uri, range)
             .await
             .unwrap_or_else(error_response);
+        apply_cors_headers(&mut response, origin.as_deref());
         responder.respond(response);
     });
 }
@@ -248,23 +400,9 @@ async fn handle_request<R: Runtime>(
         .map_err(|_| StatusCode::BAD_REQUEST)?
         .into_owned();
 
-    let session = {
-        let state = app.state::<MediaSessionState>();
-        let guard = state
-            .inner
-            .read()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        match guard.clone() {
-            Some(s) => s,
-            None => {
-                return Ok(Response::builder()
-                    .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .header(header::RETRY_AFTER, "1")
-                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .body(Vec::new())
-                    .expect("failed to build 503 media response"));
-            }
-        }
+    let state = app.state::<MediaSessionState>();
+    let Some(session) = state.wait_for_session().await else {
+        return Ok(session_unavailable_response());
     };
 
     let media_url = Url::parse(&target).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -281,11 +419,12 @@ async fn handle_request<R: Runtime>(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let key = cache_key(&session.token, &target);
+    let key = cache_key(&session.scope, &target);
+    if let Some(status) = state.recent_client_error(&key) {
+        return Err(status);
+    }
     let dir = cache_dir(app).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let temp_dir = temp_cache_dir(app).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let state = app.state::<MediaSessionState>();
 
     let (content_type, in_memory_body, disk_path) =
         ensure_cached(&state, &session, &key, media_url, dir, temp_dir).await?;
@@ -345,6 +484,9 @@ async fn ensure_cached_with_limits(
     if let Some(content_type) =
         read_content_type(body_path.clone(), content_type_path.clone()).await
     {
+        let content_type =
+            sniff_and_fix_content_type(body_path.clone(), content_type_path.clone(), content_type)
+                .await;
         return Ok((content_type, None, body_path));
     }
 
@@ -352,6 +494,12 @@ async fn ensure_cached_with_limits(
     if let Some(content_type) =
         read_content_type(temp_body_path.clone(), temp_content_type_path.clone()).await
     {
+        let content_type = sniff_and_fix_content_type(
+            temp_body_path.clone(),
+            temp_content_type_path.clone(),
+            content_type,
+        )
+        .await;
         return Ok((content_type, None, temp_body_path));
     }
 
@@ -362,6 +510,9 @@ async fn ensure_cached_with_limits(
     if let Some(content_type) =
         read_content_type(body_path.clone(), content_type_path.clone()).await
     {
+        let content_type =
+            sniff_and_fix_content_type(body_path.clone(), content_type_path.clone(), content_type)
+                .await;
         return Ok((content_type, None, body_path));
     }
 
@@ -369,6 +520,12 @@ async fn ensure_cached_with_limits(
     if let Some(content_type) =
         read_content_type(temp_body_path.clone(), temp_content_type_path.clone()).await
     {
+        let content_type = sniff_and_fix_content_type(
+            temp_body_path.clone(),
+            temp_content_type_path.clone(),
+            content_type,
+        )
+        .await;
         return Ok((content_type, None, temp_body_path));
     }
 
@@ -403,10 +560,39 @@ async fn ensure_cached_with_limits(
             fetch_res
         }
         Err(status) => {
+            state.note_client_error(key, *status);
             *gate_guard = Some(Err(*status));
             Err(*status)
         }
     }
+}
+
+// Thumbnails queue separately so a few large downloads cannot stall a painting timeline.
+async fn acquire_lane<'a>(
+    state: &'a MediaSessionState,
+    media_url: &Url,
+) -> Result<tokio::sync::SemaphorePermit<'a>, StatusCode> {
+    let semaphore = if is_thumbnail_request(media_url) {
+        &state.thumbnail_semaphore
+    } else {
+        &state.download_semaphore
+    };
+    semaphore
+        .acquire()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn is_thumbnail_request(media_url: &Url) -> bool {
+    media_url.path().contains("/thumbnail/")
+}
+
+fn has_encryption_params(state: &MediaSessionState, url: &str) -> bool {
+    state
+        .encryption
+        .read()
+        .map(|guard| guard.contains_key(url))
+        .unwrap_or(false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -423,13 +609,9 @@ async fn fetch_and_cache(
     max_persistent_cache_bytes: u64,
     max_temp_cache_bytes: u64,
 ) -> Result<(String, Option<Arc<Vec<u8>>>, PathBuf), StatusCode> {
-    let _permit = state
-        .semaphore
-        .acquire()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let permit = acquire_lane(state, &media_url).await?;
 
-    let upstream = state
+    let mut upstream = state
         .client()
         .get(media_url.clone())
         .header(AUTHORIZATION, format!("Bearer {}", session.token))
@@ -450,26 +632,179 @@ async fn fetch_and_cache(
         .unwrap_or("application/octet-stream")
         .to_owned();
 
-    let body = upstream
-        .bytes()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?
-        .to_vec();
+    // Encrypted media stays buffered: its SHA-256 only verifies over the whole ciphertext.
+    if has_encryption_params(state, media_url.as_str()) {
+        let body = upstream
+            .bytes()
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?
+            .to_vec();
+        let (body, content_type) =
+            decrypt_if_encrypted(state, media_url.as_str(), body, &content_type)?;
+        drop(permit);
 
-    // Check for encryption params and decrypt if present
-    let (body, content_type) =
-        match decrypt_if_encrypted(state, media_url.as_str(), body, &content_type) {
-            Ok((decrypted_body, decrypted_ct)) => (decrypted_body, decrypted_ct),
-            Err(status) => return Err(status),
-        };
+        return store_buffered_body(
+            body,
+            content_type,
+            dir,
+            temp_dir,
+            body_path,
+            content_type_path,
+            temp_body_path,
+            temp_content_type_path,
+            max_persistent_cache_bytes,
+            max_temp_cache_bytes,
+        )
+        .await;
+    }
 
+    // Plaintext media streams to disk, so peak memory is one chunk instead of the whole file.
+    let staging_path = temp_body_path.with_extension("part");
+    match stream_to_staging_file(&mut upstream, temp_dir.clone(), staging_path.clone()).await {
+        StreamOutcome::Written(size) => {
+            drop(permit);
+            let (target_dir, target_body, target_ct, max_bytes) =
+                if size <= max_persistent_cache_bytes {
+                    (
+                        dir,
+                        body_path,
+                        content_type_path,
+                        max_persistent_cache_bytes,
+                    )
+                } else {
+                    (
+                        temp_dir,
+                        temp_body_path,
+                        temp_content_type_path,
+                        max_temp_cache_bytes,
+                    )
+                };
+
+            if promote_staging_file(
+                staging_path,
+                target_dir,
+                target_body.clone(),
+                target_ct,
+                content_type.clone(),
+                max_bytes,
+            )
+            .await
+            {
+                Ok((content_type, None, target_body))
+            } else {
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+        // Cache directory unusable (read-only, full): serve from memory instead of failing.
+        StreamOutcome::Unstorable => {
+            let body = upstream
+                .bytes()
+                .await
+                .map_err(|_| StatusCode::BAD_GATEWAY)?
+                .to_vec();
+            drop(permit);
+            Ok((content_type, Some(Arc::new(body)), temp_body_path))
+        }
+        StreamOutcome::Failed => Err(StatusCode::BAD_GATEWAY),
+    }
+}
+
+enum StreamOutcome {
+    Written(u64),
+    /// The staging file could not be created; nothing was read from the body yet.
+    Unstorable,
+    Failed,
+}
+
+async fn stream_to_staging_file(
+    upstream: &mut tauri_plugin_http::reqwest::Response,
+    temp_dir: PathBuf,
+    staging_path: PathBuf,
+) -> StreamOutcome {
+    if tokio::fs::create_dir_all(&temp_dir).await.is_err() {
+        return StreamOutcome::Unstorable;
+    }
+    let Ok(file) = tokio::fs::File::create(&staging_path).await else {
+        return StreamOutcome::Unstorable;
+    };
+
+    let mut file = tokio::io::BufWriter::new(file);
+    let mut written: u64 = 0;
+
+    loop {
+        match upstream.chunk().await {
+            Ok(Some(chunk)) => {
+                if tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                written += chunk.len() as u64;
+            }
+            Ok(None) => {
+                if tokio::io::AsyncWriteExt::flush(&mut file).await.is_ok() {
+                    return StreamOutcome::Written(written);
+                }
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+
+    let _ = tokio::fs::remove_file(&staging_path).await;
+    StreamOutcome::Failed
+}
+
+// Move a completed staging file into its cache directory and record its content type.
+async fn promote_staging_file(
+    staging_path: PathBuf,
+    target_dir: PathBuf,
+    target_body: PathBuf,
+    target_content_type: PathBuf,
+    content_type: String,
+    max_bytes: u64,
+) -> bool {
+    tokio::task::spawn_blocking(move || {
+        if fs::create_dir_all(&target_dir).is_err() {
+            let _ = fs::remove_file(&staging_path);
+            return false;
+        }
+        if fs::rename(&staging_path, &target_body).is_err() {
+            let _ = fs::remove_file(&staging_path);
+            return false;
+        }
+        if fs::write(&target_content_type, &content_type).is_err() {
+            let _ = fs::remove_file(&target_body);
+            return false;
+        }
+        evict_directory_if_needed(&target_dir, max_bytes);
+        target_body.is_file()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn store_buffered_body(
+    body: Vec<u8>,
+    content_type: String,
+    dir: PathBuf,
+    temp_dir: PathBuf,
+    body_path: PathBuf,
+    content_type_path: PathBuf,
+    temp_body_path: PathBuf,
+    temp_content_type_path: PathBuf,
+    max_persistent_cache_bytes: u64,
+    max_temp_cache_bytes: u64,
+) -> Result<(String, Option<Arc<Vec<u8>>>, PathBuf), StatusCode> {
     if body.len() as u64 > max_temp_cache_bytes {
         return Ok((content_type, Some(Arc::new(body)), temp_body_path));
     }
 
     if body.len() as u64 <= max_persistent_cache_bytes {
         write_cache(
-            dir.clone(),
+            dir,
             body_path.clone(),
             content_type_path,
             body,
@@ -479,12 +814,12 @@ async fn fetch_and_cache(
         .await;
         Ok((content_type, None, body_path))
     } else {
-        // Oversized media: write to temporary session cache for sequential range requests
+        let shared = Arc::new(body);
         let written = write_cache(
-            temp_dir.clone(),
+            temp_dir,
             temp_body_path.clone(),
             temp_content_type_path,
-            body.clone(),
+            shared.as_ref().clone(),
             content_type.clone(),
             max_temp_cache_bytes,
         )
@@ -494,9 +829,25 @@ async fn fetch_and_cache(
             Ok((content_type, None, temp_body_path))
         } else {
             // Storage write failed or evicted; serve from memory fallback
-            Ok((content_type, Some(Arc::new(body)), temp_body_path))
+            Ok((content_type, Some(shared), temp_body_path))
         }
     }
+}
+
+/// Sniff the image MIME type from magic bytes of decrypted content.
+/// Restricted to an image allowlist and never returns SVG (which can carry scripts).
+/// Used as a fallback when the registered content type is missing or octet-stream.
+fn sniff_image_content_type(bytes: &[u8]) -> Option<&'static str> {
+    const ALLOWED: [&str; 5] = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+    ];
+    infer::get(bytes)
+        .filter(|kind| ALLOWED.contains(&kind.mime_type()))
+        .map(|kind| kind.mime_type())
 }
 
 /// Decrypt the body if encryption params exist for this URL.
@@ -524,7 +875,6 @@ fn decrypt_if_encrypted(
     hasher.update(&ciphertext);
     let actual_sha256 = hasher.finalize().to_vec();
     if actual_sha256 != params.expected_sha256 {
-        let _ = state.encryption.write().map(|mut guard| guard.remove(url));
         return Err(StatusCode::BAD_GATEWAY);
     }
 
@@ -542,10 +892,17 @@ fn decrypt_if_encrypted(
         _ => return Err(StatusCode::BAD_REQUEST),
     }
 
-    // Remove encryption params — decrypted content is now cached on disk
-    let _ = state.encryption.write().map(|mut guard| guard.remove(url));
-
-    Ok((plaintext, params.content_type))
+    // Kept for the session: if this file is evicted, the refetch must still decrypt rather
+    // than serve ciphertext. `clear_media_session` drops them.
+    let final_content_type =
+        if params.content_type.is_empty() || params.content_type == "application/octet-stream" {
+            sniff_image_content_type(&plaintext)
+                .map(|s| s.to_owned())
+                .unwrap_or(params.content_type)
+        } else {
+            params.content_type
+        };
+    Ok((plaintext, final_content_type))
 }
 
 async fn write_cache(
@@ -570,11 +927,6 @@ async fn write_cache(
     .unwrap_or(false)
 }
 
-#[allow(dead_code)]
-fn fits_in_cache(len: u64) -> bool {
-    len <= MAX_CACHE_BYTES
-}
-
 // Only a hit when the body file is also present, so a stray `.ct` counts as a miss.
 async fn read_content_type(body_path: PathBuf, content_type_path: PathBuf) -> Option<String> {
     tokio::task::spawn_blocking(move || {
@@ -585,6 +937,34 @@ async fn read_content_type(body_path: PathBuf, content_type_path: PathBuf) -> Op
     })
     .await
     .unwrap_or(None)
+}
+
+/// On a cache hit where the stored content type is octet-stream, re-sniff the
+/// body file's magic bytes and rewrite the .ct file if a real image type is found.
+async fn sniff_and_fix_content_type(
+    body_path: PathBuf,
+    content_type_path: PathBuf,
+    stored_ct: String,
+) -> String {
+    if stored_ct != "application/octet-stream" {
+        return stored_ct;
+    }
+    let ct_for_closure = stored_ct.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut file = match fs::File::open(&body_path) {
+            Ok(f) => f,
+            Err(_) => return ct_for_closure,
+        };
+        let mut buf = [0u8; 64];
+        let n = file.read(&mut buf).unwrap_or(0);
+        if let Some(sniffed) = sniff_image_content_type(&buf[..n]) {
+            let _ = fs::write(&content_type_path, sniffed);
+            return sniffed.to_owned();
+        }
+        ct_for_closure
+    })
+    .await
+    .unwrap_or(stored_ct)
 }
 
 async fn read_full(body_path: PathBuf) -> Result<Vec<u8>, StatusCode> {
@@ -706,15 +1086,16 @@ fn evict_directory_if_needed(dir: &Path, max_bytes: u64) {
 // Shared 200/206 headers. Media is content-addressed and the URL is session-scoped, so
 // it is safe to let the webview cache it as immutable and to advertise Range support.
 fn media_response_builder(status: StatusCode, content_type: &str) -> ResponseBuilder {
+    let cache_control = if content_type == "application/octet-stream" {
+        "no-store"
+    } else {
+        "private, max-age=31536000, immutable"
+    };
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type)
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(
-            header::CACHE_CONTROL,
-            "private, max-age=31536000, immutable",
-        )
+        .header(header::CACHE_CONTROL, cache_control)
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(
             header::CONTENT_SECURITY_POLICY,
@@ -751,16 +1132,22 @@ fn partial_response(
 fn range_not_satisfiable(total: u64) -> Response<Vec<u8>> {
     Response::builder()
         .status(StatusCode::RANGE_NOT_SATISFIABLE)
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CONTENT_RANGE, format!("bytes */{total}"))
         .body(Vec::new())
         .expect("failed to build range error response")
 }
 
+fn session_unavailable_response() -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(header::RETRY_AFTER, "1")
+        .body(Vec::new())
+        .expect("failed to build 503 media response")
+}
+
 fn error_response(status: StatusCode) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(Vec::new())
         .expect("failed to build media error response")
 }
@@ -795,7 +1182,7 @@ mod tests {
     use tauri::http::{header, StatusCode};
 
     use super::{
-        cache_key, fits_in_cache, ok_response, parse_range, partial_response, serve_range_memory,
+        cache_key, ok_response, parse_range, partial_response, serve_range_memory,
         MediaSessionState,
     };
 
@@ -818,22 +1205,132 @@ mod tests {
         assert!(gates.contains_key("third"));
     }
 
-    #[test]
-    fn cache_key_is_stable_and_hex() {
-        let url = "https://matrix.example.org/_matrix/client/v1/media/download/x/y";
-        let key = cache_key("account-a-token", url);
-        assert_eq!(key.len(), 64);
-        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(key, cache_key("account-a-token", url));
+    #[tokio::test]
+    async fn waits_for_a_session_that_arrives_late() {
+        // Mirrors startup: media is requested before the frontend hands over the session.
+        let state = Arc::new(MediaSessionState::default());
+        let writer = Arc::clone(&state);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            {
+                let mut guard = writer.inner.write().unwrap();
+                *guard = Some(super::MediaSession {
+                    origin: "https://matrix.example.org".into(),
+                    token: "token".into(),
+                    scope: "@a:example.org".into(),
+                });
+            }
+            writer
+                .session_ever_set
+                .store(true, std::sync::atomic::Ordering::Release);
+            writer.session_ready.notify_waiters();
+        });
+
+        let session =
+            tokio::time::timeout(std::time::Duration::from_secs(2), state.wait_for_session())
+                .await
+                .expect("wait_for_session hung");
+        assert_eq!(session.map(|s| s.scope), Some("@a:example.org".to_string()));
+    }
+
+    #[tokio::test]
+    async fn does_not_wait_once_a_session_has_been_cleared() {
+        // After logout there is nothing to wait for, so in-flight requests must not hang.
+        let state = MediaSessionState::default();
+        state
+            .session_ever_set
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            state.wait_for_session(),
+        )
+        .await
+        .expect("wait_for_session should fail fast after a clear");
+        assert!(waited.is_none());
     }
 
     #[test]
-    fn cache_key_is_scoped_to_the_session() {
+    fn client_errors_are_remembered_but_server_errors_are_not() {
+        let state = MediaSessionState::default();
+
+        state.note_client_error("cannot-thumbnail", StatusCode::BAD_REQUEST);
+        assert_eq!(
+            state.recent_client_error("cannot-thumbnail"),
+            Some(StatusCode::BAD_REQUEST)
+        );
+
+        state.note_client_error("server-down", StatusCode::BAD_GATEWAY);
+        assert_eq!(state.recent_client_error("server-down"), None);
+    }
+
+    #[test]
+    fn auth_and_rate_limit_failures_stay_retryable() {
+        let state = MediaSessionState::default();
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            state.note_client_error("key", status);
+            assert_eq!(
+                state.recent_client_error("key"),
+                None,
+                "{status} must not be cached"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_session_forgets_remembered_failures() {
+        let state = MediaSessionState::default();
+        state.note_client_error("key", StatusCode::NOT_FOUND);
+        state.forget_client_errors();
+        assert_eq!(state.recent_client_error("key"), None);
+    }
+
+    #[test]
+    fn negative_cache_is_bounded() {
+        let state = MediaSessionState::default();
+        for index in 0..(super::MAX_NEGATIVE_CACHE_ENTRIES + 50) {
+            state.note_client_error(&format!("key-{index}"), StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            state.negative_cache.lock().unwrap().len(),
+            super::MAX_NEGATIVE_CACHE_ENTRIES
+        );
+    }
+
+    #[test]
+    fn cache_key_is_stable_and_hex() {
+        let url = "https://matrix.example.org/_matrix/client/v1/media/download/x/y";
+        let key = cache_key("@a:example.org", url);
+        assert_eq!(key.len(), 64);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(key, cache_key("@a:example.org", url));
+    }
+
+    #[test]
+    fn cache_key_is_scoped_per_account() {
         let url = "https://matrix.example.org/_matrix/client/v1/media/download/x/y";
         assert_ne!(
-            cache_key("account-a-token", url),
-            cache_key("account-b-token", url)
+            cache_key("@a:example.org", url),
+            cache_key("@b:example.org", url)
         );
+    }
+
+    #[test]
+    fn thumbnail_requests_use_their_own_lane() {
+        let thumbnail = super::Url::parse(
+            "https://matrix.example.org/_matrix/client/v1/media/thumbnail/x/y?width=96",
+        )
+        .unwrap();
+        let download =
+            super::Url::parse("https://matrix.example.org/_matrix/client/v1/media/download/x/y")
+                .unwrap();
+        assert!(super::is_thumbnail_request(&thumbnail));
+        assert!(!super::is_thumbnail_request(&download));
     }
 
     #[test]
@@ -893,13 +1390,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_media_is_not_cacheable() {
-        assert!(fits_in_cache(0));
-        assert!(fits_in_cache(super::MAX_CACHE_BYTES));
-        assert!(!fits_in_cache(super::MAX_CACHE_BYTES + 1));
-    }
-
-    #[test]
     fn serve_range_memory_slices_the_in_memory_body() {
         let body: Vec<u8> = (0..200u8).collect();
         let response = serve_range_memory(&body, "application/octet-stream", "bytes=10-19");
@@ -941,6 +1431,19 @@ mod tests {
     }
 
     #[test]
+    fn normalize_encryption_key_strips_android_prefix() {
+        // Android serves the protocol over https, which used to fall through to the bare-URL
+        // branch: the params were then keyed by the sable-media URL, never matched at fetch
+        // time, and encrypted media was served as ciphertext.
+        let input = "https://sable-media.localhost/https%3A%2F%2Fmatrix.example.org%2F_matrix%2Fclient%2Fv1%2Fmedia%2Fdownload%2Fmatrix.org%2Fabc123%3Fallow_redirect%3Dtrue?__sable_media_cache=3&__sable_media_session=%40a%3Aexample.org";
+        let result = super::normalize_encryption_key(input);
+        assert_eq!(
+            result,
+            "https://matrix.example.org/_matrix/client/v1/media/download/matrix.org/abc123?allow_redirect=true"
+        );
+    }
+
+    #[test]
     fn normalize_encryption_key_strips_windows_prefix() {
         let input = "http://sable-media.localhost/https%3A%2F%2Fmatrix.example.org%2F_matrix%2Fclient%2Fv1%2Fmedia%2Fthumbnail%2Fmatrix.org%2Fxyz%3Fwidth%3D96%26height%3D96";
         let result = super::normalize_encryption_key(input);
@@ -955,5 +1458,95 @@ mod tests {
         let input = "https://matrix.example.org/_matrix/client/v1/media/download/matrix.org/abc123";
         let result = super::normalize_encryption_key(input);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn sniff_detects_png() {
+        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert_eq!(
+            super::sniff_image_content_type(&png_header),
+            Some("image/png")
+        );
+    }
+
+    #[test]
+    fn sniff_rejects_unknown() {
+        assert_eq!(super::sniff_image_content_type(&[0x00, 0x01, 0x02]), None);
+    }
+
+    #[test]
+    fn sniff_does_not_detect_svg() {
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'>";
+        assert_eq!(super::sniff_image_content_type(svg), None);
+    }
+
+    #[test]
+    fn octet_stream_response_is_not_cached_immutable() {
+        let response = super::media_response_builder(StatusCode::OK, "application/octet-stream")
+            .body(Vec::<u8>::new())
+            .unwrap();
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+    }
+
+    #[test]
+    fn cors_is_granted_only_to_the_apps_own_webview_origins() {
+        for origin in [
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        ] {
+            let mut response = ok_response(vec![0_u8; 4], "image/png");
+            super::apply_cors_headers(&mut response, Some(origin));
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap(),
+                origin,
+                "{origin} should be granted CORS"
+            );
+            assert_eq!(response.headers().get(header::VARY).unwrap(), "Origin");
+        }
+    }
+
+    #[test]
+    fn cors_is_denied_to_foreign_origins() {
+        for origin in [
+            "https://evil.example.org",
+            "https://tauri.localhost.evil.example.org",
+            "null",
+        ] {
+            let mut response = ok_response(vec![0_u8; 4], "image/png");
+            super::apply_cors_headers(&mut response, Some(origin));
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+                "{origin} must not be granted CORS"
+            );
+        }
+    }
+
+    #[test]
+    fn requests_without_an_origin_get_no_cors_header() {
+        let mut response = ok_response(vec![0_u8; 4], "image/png");
+        super::apply_cors_headers(&mut response, None);
+        assert!(!response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
+
+    #[test]
+    fn image_response_is_cached_immutable() {
+        let response = super::media_response_builder(StatusCode::OK, "image/png")
+            .body(Vec::<u8>::new())
+            .unwrap();
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "private, max-age=31536000, immutable"
+        );
     }
 }

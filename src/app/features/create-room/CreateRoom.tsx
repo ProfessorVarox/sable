@@ -2,7 +2,7 @@ import type { ReactNode, FormEventHandler } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import type { Room } from '$types/matrix-sdk';
 import { MatrixError, JoinRule, RoomType } from '$types/matrix-sdk';
-import { Box, Button, Chip, color, config, Input, Spinner, Switch, Text, TextArea } from 'folds';
+import { Box, Chip, color, config, Input, Switch, Text, TextArea } from 'folds';
 import { SettingTile } from '$components/setting-tile';
 import { SequenceCard } from '$components/sequence-card';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -41,6 +41,7 @@ import {
   knockRestrictedSupported,
 } from '$utils/roomSupport';
 import { ErrorCode } from '../../cs-errorcode';
+import { Button } from '$components/button';
 
 const debugLog = createDebugLogger('CreateRoom');
 
@@ -184,17 +185,15 @@ export function CreateRoomForm({
 
   return (
     <Box as="form" onSubmit={handleSubmit} grow="Yes" direction="Column" gap="500">
-      {!space && (
-        <Box direction="Column" gap="100">
-          <Text size="L400">Type</Text>
-          <CreateRoomTypeSelector
-            value={type}
-            onSelect={setType}
-            disabled={disabled}
-            getIcon={getCreateRoomTypeToIcon}
-          />
-        </Box>
-      )}
+      <Box direction="Column" gap="100">
+        <Text size="L400">Type</Text>
+        <CreateRoomTypeSelector
+          value={type}
+          onSelect={setType}
+          disabled={disabled}
+          getIcon={getCreateRoomTypeToIcon}
+        />
+      </Box>
       <Box direction="Column" gap="100">
         <Text size="L400">Access</Text>
         <CreateRoomAccessSelector
@@ -211,7 +210,6 @@ export function CreateRoomForm({
           required
           before={getCreateRoomAccessToIcon(access, type, '100')}
           name="nameInput"
-          autoFocus
           size="500"
           variant="SurfaceVariant"
           radii="400"
@@ -355,9 +353,11 @@ export function CreateRoomForm({
           variant="Primary"
           radii="400"
           disabled={disabled}
-          before={loading && <Spinner variant="Primary" fill="Solid" size="200" />}
+          loading={loading}
+          spinnerVariant="Primary"
+          spinnerSize="200"
         >
-          <Text size="B500">Create</Text>
+          <Text size="B400">Create Room</Text>
         </Button>
       </Box>
     </Box>

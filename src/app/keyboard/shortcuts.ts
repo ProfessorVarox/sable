@@ -8,6 +8,7 @@ export type ShortcutScope = 'global' | 'composer';
 export type ShortcutId =
   | 'app.searchMessages'
   | 'app.openBookmarks'
+  | 'app.createRoom'
   | 'navigation.nextUnread'
   | 'navigation.cycleNextUnread'
   | 'navigation.cyclePreviousUnread'
@@ -56,6 +57,13 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
     label: 'Open bookmarks',
     category: 'General',
     defaultBinding: 'mod+shift+b',
+    scope: 'global',
+  },
+  {
+    id: 'app.createRoom',
+    label: 'Create a room',
+    category: 'General',
+    defaultBinding: 'mod+shift+n',
     scope: 'global',
   },
   {
@@ -217,8 +225,8 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   },
 ] as const;
 
-export const SHORTCUT_IDS = new Set<ShortcutId>(SHORTCUTS.map(({ id }) => id));
-export const SHORTCUT_BY_ID = new Map(SHORTCUTS.map((shortcut) => [shortcut.id, shortcut]));
+const SHORTCUT_IDS = new Set<ShortcutId>(SHORTCUTS.map(({ id }) => id));
+const SHORTCUT_BY_ID = new Map(SHORTCUTS.map((shortcut) => [shortcut.id, shortcut]));
 
 export const getShortcutBinding = (id: ShortcutId, overrides: ShortcutOverrides): string | null => {
   const override = overrides[id];

@@ -23,15 +23,14 @@ import {
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
 import { getMxIdLocalPart, mxcUrlToHttp } from '$utils/matrix';
+import { getAccountData, getStateEvent } from '$utils/room/hierarchy';
 import {
-  getAccountData,
-  getMemberDisplayName,
   getNotificationType,
-  getStateEvent,
   isNotificationEvent,
   getMDirects,
   isDMRoom,
-} from '$utils/room';
+} from '$utils/room/unread';
+import { getMemberDisplayName } from '$utils/room/display';
 import { NotificationType } from '$types/matrix/room';
 import { createLogger } from '$utils/debug';
 import { createDebugLogger } from '$utils/debugLogger';
@@ -44,20 +43,14 @@ import {
 import * as Sentry from '@sentry/react';
 import { startClient, stopClient } from '$client/initMatrix';
 import { createSessionTokenRefresher } from '$client/oidcTokenRefresher';
-import { mobileOrTablet } from '$utils/user-agent';
-import { isTauri } from '@tauri-apps/api/core';
-import { type as osType } from '@tauri-apps/plugin-os';
+import { isDesktopTauri } from '$utils/platform';
+import { isMobileOrTablet } from '$utils/platform';
 
 const log = createLogger('BackgroundNotifications');
 const debugLog = createDebugLogger('BackgroundNotifications');
 
 const BACKGROUND_SYNC_POLL_TIMEOUT_MS = 60_000;
 const BACKGROUND_STAGGER_DELAY_MS = 5_000;
-
-// Desktop webviews can't show web notifications (WKWebView lacks the API; the
-// Linux CEF runtime never grants it), so desktop routes through the native plugin.
-const DESKTOP_TAURI_OS = new Set(['linux', 'macos', 'windows']);
-const isDesktopTauri = (): boolean => isTauri() && DESKTOP_TAURI_OS.has(osType());
 
 let desktopNotificationSeq = 1;
 const nextDesktopNotificationId = (): number => {
@@ -518,7 +511,7 @@ export function BackgroundNotifications() {
             // Show in-app banner when app is visible, mobile, and in-app notifications enabled
             const canShowInAppBanner =
               document.visibilityState === 'visible' &&
-              mobileOrTablet() &&
+              isMobileOrTablet() &&
               showNotificationsRef.current;
 
             if (canShowInAppBanner) {

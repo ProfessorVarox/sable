@@ -6,7 +6,8 @@ import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
 import { isDesktopTauri } from '$utils/platform';
 import { trimTrailingSlash } from '$utils/common';
-import { getSettingsCloseTarget, type SettingsRouteState } from './navigation';
+import { getShallowCloseTarget } from '$pages/client/shallowRoute';
+import type { SettingsRouteState } from './navigation';
 import { Settings } from './Settings';
 import { isSettingsSectionId, type SettingsSectionId } from './routes';
 
@@ -54,14 +55,6 @@ export function SettingsRoute({ routeSection }: SettingsRouteProps) {
   const shouldCanonicalizeTrailingSlash =
     location.pathname.length > canonicalPathname.length &&
     canonicalPathname.startsWith('/settings');
-  const browserHistoryIndex =
-    typeof window !== 'undefined' && typeof window.history.state?.idx === 'number'
-      ? window.history.state.idx
-      : null;
-  const hasPreviousEntry =
-    (typeof browserHistoryIndex === 'number' && browserHistoryIndex > 0) ||
-    location.key !== 'default';
-
   const activeSection = resolveSettingsSection(section, screenSize, showPersona, showDesktop);
   const shouldRedirectToGeneral = section === undefined && screenSize !== ScreenSize.Mobile;
   const shouldRedirectToIndex = section !== undefined && activeSection === null;
@@ -109,18 +102,7 @@ export function SettingsRoute({ routeSection }: SettingsRouteProps) {
     if (section === undefined) return;
 
     if (screenSize === ScreenSize.Mobile) {
-      if (routeState?.backgroundLocation) {
-        const backTarget = getSettingsCloseTarget(routeState);
-        navigate(backTarget.to, { replace: true, state: backTarget.state });
-        return;
-      }
-
-      if (hasPreviousEntry) {
-        navigate(-1);
-        return;
-      }
-
-      navigate(getSettingsPath(), { replace: true });
+      navigate(getSettingsPath(), { replace: true, state: routeState });
       return;
     }
 
@@ -138,7 +120,7 @@ export function SettingsRoute({ routeSection }: SettingsRouteProps) {
   };
 
   const requestClose = () => {
-    const closeTarget = getSettingsCloseTarget(routeState);
+    const closeTarget = getShallowCloseTarget(routeState);
     navigate(closeTarget.to, { replace: true, state: closeTarget.state });
   };
 

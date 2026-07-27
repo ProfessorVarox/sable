@@ -11,8 +11,8 @@ import {
 } from 'react';
 import type { Editor } from 'slate';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
-import type { Room } from '$types/matrix-sdk';
-import { Direction, EventType } from '$types/matrix-sdk';
+import type { Room, MatrixEvent, EventTimelineSet } from '$types/matrix-sdk';
+import { Direction, EventTimeline, EventType } from '$types/matrix-sdk';
 import classNames from 'classnames';
 import type { VListHandle } from 'virtua';
 import { VList } from 'virtua';
@@ -27,35 +27,27 @@ import { useMessageEdit } from '$hooks/useMessageEdit';
 import { useDocumentFocusChange } from '$hooks/useDocumentFocusChange';
 import { useIsInactivePanel } from '$hooks/useRoom';
 import { markAsRead } from '$utils/notifications';
-import {
-  getReactCustomHtmlParser,
-  LINKIFY_OPTS,
-  makeMentionCustomProps,
-  renderMatrixMention,
-  factoryRenderLinkifyWithMention,
-} from '$plugins/react-custom-html-parser';
+import { isWindowFocused } from '$utils/dom';
 import { today, yesterday, timeDayMonthYear } from '$utils/time';
-import { unwrapRelationJumpTarget } from '$utils/room';
-import { useMemberEventParser } from '$hooks/useMemberEventParser';
-import { usePowerLevelsContext } from '$hooks/usePowerLevels';
-import { useRoomCreators } from '$hooks/useRoomCreators';
-import { useRoomPermissions } from '$hooks/useRoomPermissions';
-import { useGetMemberPowerTag } from '$hooks/useMemberPowerTag';
+import {
+  unwrapRelationJumpTarget,
+  isEditEvent,
+  isReactionEvent,
+  isRedactableMessageType,
+  isMembershipChanged,
+  isThreadRelationEvent,
+  getRedactionTargetEvent,
+  shouldShowRedactionTimelineEvent,
+} from '$utils/room/relations';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { useSlidingSyncRoomLoading } from '$hooks/useSlidingSyncActiveRoom';
-import { useMentionClickHandler } from '$hooks/useMentionClickHandler';
-import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
-import { useSpoilerClickHandler } from '$hooks/useSpoilerClickHandler';
 import { useOpenUserRoomProfile } from '$state/hooks/userRoomProfile';
 import { useSpaceOptionally } from '$hooks/useSpace';
-import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useIgnoredUsers } from '$hooks/useIgnoredUsers';
 import { useImagePackRooms } from '$hooks/useImagePackRooms';
 import { settingsAtom, MessageLayout, type MessageSpacing } from '$state/settings';
-import { useHiddenEventSettings, useSetting } from '$state/hooks/settings';
+import { useSetting } from '$state/hooks/settings';
 import { nicknamesAtom } from '$state/nicknames';
-import { useRoomAbbreviationsContext } from '$hooks/useRoomAbbreviations';
-import { buildAbbrReplaceTextNode } from '$components/message/RenderBody';
 import { profilesCacheAtom } from '$state/userRoomProfile';
 import { roomToParentsAtom } from '$state/room/roomToParents';
 import { roomIdToReplyDraftAtomFamily } from '$state/room/roomInputDrafts';
@@ -72,11 +64,15 @@ import { useTimelineActions } from '$hooks/timeline/useTimelineActions';
 import {
   useProcessedTimeline,
   getProcessedRowIndexForRawTimelineIndex,
+  STANDARD_RENDERED_EVENT_TYPES,
   type ProcessedEvent,
 } from '$hooks/timeline/useProcessedTimeline';
 import { useTimelineEventRenderer } from '$hooks/timeline/useTimelineEventRenderer';
+import { useTimelineRendererContext } from '$hooks/timeline/useTimelineRendererContext';
 import { TimelineScrollingProvider, useScrollActivity } from '$hooks/useTimelineScrollActivity';
 import * as css from './RoomTimeline.css';
+
+const MAX_VIEWPORT_FILL_PAGINATIONS = 5;
 
 const TimelineFloat = as<'div', css.TimelineFloatVariants>(
   ({ position, className, ...props }, ref) => (
@@ -326,85 +322,39 @@ export function RoomTimeline({
   const { navigateRoom } = useRoomNavigate();
   const isInactivePanel = useIsInactivePanel();
 
-  const [hideReads] = useSetting(settingsAtom, 'hideReads');
-  const [messageLayout] = useSetting(settingsAtom, 'messageLayout');
-  const [messageSpacing] = useSetting(settingsAtom, 'messageSpacing');
-  const [hideMembershipEvents] = useSetting(settingsAtom, 'hideMembershipEvents');
-  const [hideNickAvatarEvents] = useSetting(settingsAtom, 'hideNickAvatarEvents');
-  const [mediaAutoLoad] = useSetting(settingsAtom, 'mediaAutoLoad');
-  const [showBundledPreview] = useSetting(settingsAtom, 'bundledPreview');
-  const [urlPreview] = useSetting(settingsAtom, 'urlPreview');
-  const [encUrlPreview] = useSetting(settingsAtom, 'encUrlPreview');
-  const [clientUrlPreview] = useSetting(settingsAtom, 'clientUrlPreview');
-  const [encClientUrlPreview] = useSetting(settingsAtom, 'encClientUrlPreview');
-  const hiddenEvents = useHiddenEventSettings(settingsAtom);
-  const [showDeveloperTools] = useSetting(settingsAtom, 'developerTools');
+  // Shared renderer context — replaces 17+ inline useSetting calls, linkifyOpts,
+  // htmlReactParserOptions, and the permissions block that were duplicated with
+  // ThreadDrawer character-for-character.
+  const rendererCtx = useTimelineRendererContext(room);
+
+  // RoomTimeline keeps these 3 extra settings inline:
+  //   - hideMembershipEvents & hideNickAvatarEvents → already in rendererCtx.settings
+  //   - reducedMotion → used only for scroll logic, NOT passed to the event renderer
   const [reducedMotion] = useSetting(settingsAtom, 'reducedMotion');
-  const [hour24Clock] = useSetting(settingsAtom, 'hour24Clock');
-  const [dateFormatString] = useSetting(settingsAtom, 'dateFormatString');
-  const [autoplayStickers] = useSetting(settingsAtom, 'autoplayStickers');
-  const [autoplayEmojis] = useSetting(settingsAtom, 'autoplayEmojis');
-  const [incomingInlineImagesDefaultHeight] = useSetting(
-    settingsAtom,
-    'incomingInlineImagesDefaultHeight'
-  );
-  const [incomingInlineImagesMaxHeight] = useSetting(settingsAtom, 'incomingInlineImagesMaxHeight');
-  const [hideMemberInReadOnly] = useSetting(settingsAtom, 'hideMembershipInReadOnly');
 
-  const [showInteractiveMap] = useSetting(settingsAtom, 'showInteractiveMap');
-  const [showEncInteractiveMap] = useSetting(settingsAtom, 'showEncInteractiveMap');
-  const showMaps = room.hasEncryptionStateEvent() ? showEncInteractiveMap : showInteractiveMap;
-
-  const showUrlPreview = room.hasEncryptionStateEvent() ? encUrlPreview : urlPreview;
-  const showClientUrlPreview = room.hasEncryptionStateEvent()
-    ? clientUrlPreview && encClientUrlPreview
-    : clientUrlPreview;
-
-  const powerLevels = usePowerLevelsContext();
-  const creators = useRoomCreators(room);
-  const permissions = useRoomPermissions(creators, powerLevels);
-  const isReadOnly = !permissions.message(room.hasEncryptionStateEvent(), mx.getSafeUserId());
-
-  const settings = useMemo(
-    () => ({
-      messageLayout,
-      messageSpacing,
-      hideReads,
-      showDeveloperTools,
-      hour24Clock,
-      dateFormatString,
-      mediaAutoLoad,
-      showBundledPreview,
-      showUrlPreview,
-      showClientUrlPreview,
-      showMaps,
-      autoplayStickers,
-      hideMemberInReadOnly,
+  // Destructure what we need from the shared context
+  const {
+    settings,
+    linkifyOpts,
+    htmlReactParserOptions,
+    permissions: {
+      canRedact,
+      canDeleteOwn,
+      canSendReaction,
+      canPinEvent,
       isReadOnly,
-      hideMembershipEvents,
-      hideNickAvatarEvents,
-      hiddenEvents,
-    }),
-    [
-      messageLayout,
-      messageSpacing,
-      hideReads,
-      showDeveloperTools,
-      hour24Clock,
-      dateFormatString,
-      mediaAutoLoad,
-      showBundledPreview,
-      showUrlPreview,
-      showClientUrlPreview,
-      showMaps,
-      autoplayStickers,
-      hideMemberInReadOnly,
-      isReadOnly,
-      hideMembershipEvents,
-      hideNickAvatarEvents,
-      hiddenEvents,
-    ]
-  );
+      getMemberPowerTag,
+      parseMemberEvent,
+    },
+  } = rendererCtx;
+
+  const hiddenEvents = settings.hiddenEvents;
+  const messageLayout = settings.messageLayout;
+  const messageSpacing = settings.messageSpacing;
+  const hideReads = settings.hideReads;
+  const hideMembershipEvents = settings.hideMembershipEvents;
+  const hideNickAvatarEvents = settings.hideNickAvatarEvents;
+  const hideMemberInReadOnly = settings.hideMemberInReadOnly;
 
   const nicknames = useAtomValue(nicknamesAtom);
   const jotaiStore = useStore();
@@ -415,7 +365,6 @@ export function RoomTimeline({
   const ignoredUsersList = useIgnoredUsers();
   const ignoredUsersSet = useMemo(() => new Set(ignoredUsersList), [ignoredUsersList]);
 
-  const getMemberPowerTag = useGetMemberPowerTag(room, creators, powerLevels);
   const [unreadInfo, setUnreadInfo] = useState(() => getRoomUnreadInfo(room, true));
 
   const readUptoEventIdRef = useRef<string | undefined>(undefined);
@@ -426,16 +375,11 @@ export function RoomTimeline({
   const prevViewportHeightRef = useRef(0);
   const messageListRef = useRef<HTMLDivElement>(null);
 
-  const mediaAuthentication = useMediaAuthentication();
-  const spoilerClickHandler = useSpoilerClickHandler();
-  const mentionClickHandler = useMentionClickHandler(room.roomId);
-  const settingsLinkBaseUrl = useSettingsLinkBaseUrl();
   const openUserRoomProfile = useOpenUserRoomProfile();
   const optionalSpace = useSpaceOptionally();
   const roomParents = useAtomValue(roomToParentsAtom);
   const imagePackRooms = useImagePackRooms(room.roomId, roomParents);
   const pushProcessor = mx.pushProcessor;
-  const parseMemberEvent = useMemberEventParser();
 
   const replyDraftAtom = useMemo(() => roomIdToReplyDraftAtomFamily(room.roomId), [room.roomId]);
   const activeReplyDraft = useAtomValue(replyDraftAtom);
@@ -454,6 +398,18 @@ export function RoomTimeline({
     setAtBottomState(val);
     atBottomRef.current = val;
   }, []);
+
+  // Resizes move the bottom without emitting a scroll event.
+  const syncAtBottom = useCallback(
+    (offset?: number) => {
+      const v = vListRef.current;
+      if (!v) return;
+      const scrollTop = offset ?? v.scrollOffset;
+      const isNowAtBottom = v.scrollSize - scrollTop - v.viewportSize < 100;
+      if (isNowAtBottom !== atBottomRef.current) setAtBottom(isNowAtBottom);
+    },
+    [setAtBottom]
+  );
 
   const [shift, setShift] = useState(false);
   const [topSpacerHeight, setTopSpacerHeight] = useState(0);
@@ -512,6 +468,90 @@ export function RoomTimeline({
     setUnreadInfo,
     hideReadsRef,
     readUptoEventIdRef,
+    isEventVisible: useCallback(
+      (mEvent: MatrixEvent, timelineSet: EventTimelineSet) => {
+        const type = mEvent.getType();
+        const isEdit = isEditEvent(mEvent);
+        const isReaction = isReactionEvent(mEvent);
+        const isRedactionEvt = mEvent.isRedaction();
+
+        if (hideMemberInReadOnly && isReadOnly) {
+          if (isReaction) return false;
+          if (
+            isRedactionEvt &&
+            getRedactionTargetEvent(timelineSet, mEvent)?.getType() ===
+              (EventType.Reaction as string)
+          ) {
+            return false;
+          }
+        }
+
+        if (mEvent.isRedacted()) {
+          const showMessageTombstone =
+            hiddenEvents.showTombstoneEvents && isRedactableMessageType(type);
+          const showReactionTombstone = hiddenEvents.hiddenEventReactionTombstone && isReaction;
+          if (!showMessageTombstone && !showReactionTombstone) return false;
+        }
+
+        if (type === 'm.room.member') {
+          const membershipChanged = isMembershipChanged(mEvent);
+          if (hideMemberInReadOnly && isReadOnly) return false;
+          if (membershipChanged && hideMembershipEvents) return false;
+          if (!membershipChanged && hideNickAvatarEvents) return false;
+        }
+
+        const allowSpecificHiddenEvent =
+          (isEdit && hiddenEvents.hiddenEventEdits) ||
+          (isReaction && !mEvent.isRedacted() && hiddenEvents.hiddenEventReactions) ||
+          (isReaction && mEvent.isRedacted() && hiddenEvents.hiddenEventReactionTombstone) ||
+          (isRedactionEvt &&
+            shouldShowRedactionTimelineEvent(
+              mEvent,
+              timelineSet,
+              hiddenEvents.hiddenEventRedactionTimeline,
+              hiddenEvents.hiddenEventReactionRedactionTimeline
+            ));
+
+        if (!(hiddenEvents.showHiddenEvents && hiddenEvents.hiddenEventOther)) {
+          const isStandardRendered = STANDARD_RENDERED_EVENT_TYPES.has(type);
+          if (!isStandardRendered && !allowSpecificHiddenEvent) {
+            return false;
+          }
+        }
+
+        const threadRootId = mEvent.threadRootId;
+        if (
+          threadRootId !== undefined &&
+          threadRootId !== mEvent.getId() &&
+          isThreadRelationEvent(mEvent, threadRootId)
+        ) {
+          return false;
+        }
+
+        if (isEdit && !hiddenEvents.hiddenEventEdits) return false;
+        if (isReaction) {
+          if (mEvent.isRedacted()) {
+            if (!hiddenEvents.hiddenEventReactionTombstone) return false;
+          } else if (!hiddenEvents.hiddenEventReactions) {
+            return false;
+          }
+        }
+        if (
+          isRedactionEvt &&
+          !shouldShowRedactionTimelineEvent(
+            mEvent,
+            timelineSet,
+            hiddenEvents.hiddenEventRedactionTimeline,
+            hiddenEvents.hiddenEventReactionRedactionTimeline
+          )
+        ) {
+          return false;
+        }
+
+        return true;
+      },
+      [hiddenEvents, hideMemberInReadOnly, isReadOnly, hideMembershipEvents, hideNickAvatarEvents]
+    ),
   });
 
   timelineSyncRef.current = timelineSync;
@@ -521,6 +561,7 @@ export function RoomTimeline({
 
   const canPaginateBackRef = useRef(timelineSync.canPaginateBack);
   canPaginateBackRef.current = timelineSync.canPaginateBack;
+  const viewportFillCountRef = useRef(0);
 
   const liveTimelineLinkedRef = useRef(timelineSync.liveTimelineLinked);
   liveTimelineLinkedRef.current = timelineSync.liveTimelineLinked;
@@ -713,18 +754,36 @@ export function RoomTimeline({
       const atBottom = atBottomRef.current;
       const shrank = newHeight < prev;
 
-      if (shrank && atBottom) {
-        const lastIndex = processedEventsRef.current.length - 1;
-        if (lastIndex >= 0) {
-          vListRef.current?.scrollToIndex(lastIndex, { align: 'end' });
-        }
-      }
       prevViewportHeightRef.current = newHeight;
+
+      const lastIndex = processedEventsRef.current.length - 1;
+      if (shrank && atBottom && lastIndex >= 0) {
+        // Geometry is still pre-scroll here; the repin's own scroll event resyncs.
+        vListRef.current?.scrollToIndex(lastIndex, { align: 'end' });
+        return;
+      }
+      syncAtBottom();
     });
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [syncAtBottom]);
+
+  // Decrypting rows and late-loading images grow without changing eventsLength,
+  // so useTimelineSync's auto-scroll never re-fires for them.
+  const lastScrollSizeRef = useRef(0);
+  useLayoutEffect(() => {
+    const v = vListRef.current;
+    if (!v) return;
+
+    const grew = v.scrollSize > lastScrollSizeRef.current;
+    lastScrollSizeRef.current = v.scrollSize;
+
+    if (!grew || !atBottomRef.current || !liveTimelineLinkedRef.current) return;
+
+    const lastIndex = processedEventsRef.current.length - 1;
+    if (lastIndex >= 0) v.scrollToIndex(lastIndex, { align: 'end' });
+  });
 
   const actions = useTimelineActions({
     room,
@@ -785,57 +844,6 @@ export function RoomTimeline({
     },
   });
 
-  const linkifyOpts = useMemo(
-    () => ({
-      ...LINKIFY_OPTS,
-      render: factoryRenderLinkifyWithMention(
-        settingsLinkBaseUrl,
-        (href) =>
-          renderMatrixMention(
-            mx,
-            room.roomId,
-            href,
-            makeMentionCustomProps(mentionClickHandler),
-            nicknames
-          ),
-        mentionClickHandler
-      ),
-    }),
-    [mx, room.roomId, mentionClickHandler, nicknames, settingsLinkBaseUrl]
-  );
-
-  const abbrMap = useRoomAbbreviationsContext();
-
-  const htmlReactParserOptions = useMemo(
-    () =>
-      getReactCustomHtmlParser(mx, room.roomId, {
-        settingsLinkBaseUrl,
-        linkifyOpts,
-        useAuthentication: mediaAuthentication,
-        handleSpoilerClick: spoilerClickHandler,
-        handleMentionClick: mentionClickHandler,
-        nicknames,
-        autoplayEmojis,
-        incomingInlineImagesDefaultHeight,
-        incomingInlineImagesMaxHeight,
-        replaceTextNode: buildAbbrReplaceTextNode(abbrMap, linkifyOpts),
-      }),
-    [
-      mx,
-      room.roomId,
-      linkifyOpts,
-      autoplayEmojis,
-      incomingInlineImagesDefaultHeight,
-      incomingInlineImagesMaxHeight,
-      mentionClickHandler,
-      nicknames,
-      mediaAuthentication,
-      spoilerClickHandler,
-      settingsLinkBaseUrl,
-      abbrMap,
-    ]
-  );
-
   const renderMatrixEvent = useTimelineEventRenderer({
     room,
     mx,
@@ -846,10 +854,10 @@ export function RoomTimeline({
     settings,
     state: { focusItem: timelineSync.focusItem, editId, activeReplyId, openThreadId },
     permissions: {
-      canRedact: permissions.action('redact', mx.getSafeUserId()),
-      canDeleteOwn: permissions.event('m.room.redaction', mx.getSafeUserId()),
-      canSendReaction: permissions.event('m.reaction', mx.getSafeUserId()),
-      canPinEvent: permissions.stateEvent('m.room.pinned_events', mx.getSafeUserId()),
+      canRedact,
+      canDeleteOwn,
+      canSendReaction,
+      canPinEvent,
     },
     callbacks: {
       onUserClick: actions.handleUserClick,
@@ -896,8 +904,7 @@ export function RoomTimeline({
   );
 
   useEffect(() => {
-    if (atBottomState && document.hasFocus() && timelineSync.liveTimelineLinked)
-      tryAutoMarkAsRead();
+    if (atBottomState && isWindowFocused() && timelineSync.liveTimelineLinked) tryAutoMarkAsRead();
   }, [
     atBottomState,
     timelineSync.liveTimelineLinked,
@@ -912,10 +919,7 @@ export function RoomTimeline({
       if (!v) return;
 
       const distanceFromBottom = v.scrollSize - offset - v.viewportSize;
-      const isNowAtBottom = distanceFromBottom < 100;
-      if (isNowAtBottom !== atBottomRef.current) {
-        setAtBottom(isNowAtBottom);
-      }
+      syncAtBottom(offset);
 
       if (offset < 500 && canPaginateBackRef.current && backwardStatusRef.current === 'idle') {
         void timelineSyncRef.current.handleTimelinePagination(true);
@@ -928,7 +932,7 @@ export function RoomTimeline({
         void timelineSyncRef.current.handleTimelinePagination(false);
       }
     },
-    [notifyScroll, setAtBottom]
+    [notifyScroll, syncAtBottom]
   );
 
   const showLoadingPlaceholders =
@@ -991,7 +995,10 @@ export function RoomTimeline({
     timelineSync.backwardStatus === 'loading' && timelineSync.eventsLength > 0;
   const showFrontPaginationSpinner =
     timelineSync.forwardStatus === 'loading' && timelineSync.eventsLength > 0;
-  const hasPowerLevelState = !!room.currentState.getStateEvents(EventType.RoomPowerLevels, '');
+  const hasPowerLevelState = !!room
+    .getLiveTimeline()
+    ?.getState(EventTimeline.FORWARDS)
+    ?.getStateEvents(EventType.RoomPowerLevels, '');
   const hideTimelineForRoomState = roomSyncLoading && hideMemberInReadOnly && !hasPowerLevelState;
   const timelineBottomFloatLift =
     !atBottomState && isReady ? { bottom: `calc(${config.space.S400} + ${toRem(52)})` } : undefined;
@@ -1056,24 +1063,18 @@ export function RoomTimeline({
   }, [onEditLastMessageRef, mx, actions]);
 
   useEffect(() => {
-    const v = vListRef.current;
-    if (!v) return;
-    if (
-      canPaginateBackRef.current &&
-      backwardStatusRef.current === 'idle' &&
-      v.scrollSize <= v.viewportSize
-    ) {
-      void timelineSyncRef.current.handleTimelinePagination(true);
-    }
-  }, [timelineSync.eventsLength, timelineSync.backwardStatus]);
+    viewportFillCountRef.current = 0;
+    lastScrollSizeRef.current = 0;
+  }, [room.roomId]);
 
+  // Re-enters on every length change, so an unfillable viewport pages to the start of the
+  // room. Scrolling up is handled by handleVListScroll.
   useEffect(() => {
     if (!canPaginateBackRef.current) return () => {};
 
     let rafId: number;
     let attempts = 0;
     const MAX_ATTEMPTS = 20;
-    const processedLengthAtEffectStart = processedEvents.length;
 
     const check = () => {
       const v = vListRef.current;
@@ -1088,18 +1089,17 @@ export function RoomTimeline({
       if (!canPaginateBackRef.current) return;
       if (backwardStatusRef.current !== 'idle') return;
 
-      const atTop = v.scrollOffset < 500;
-      const noVisibleGrowth = processedEvents.length === processedLengthAtEffectStart;
-      const hasRealScrollRoom = v.scrollSize > v.viewportSize + 300;
+      if (viewportFillCountRef.current >= MAX_VIEWPORT_FILL_PAGINATIONS) return;
 
-      if (!hasRealScrollRoom || (atTop && noVisibleGrowth)) {
+      if (v.scrollSize <= v.viewportSize + 300) {
+        viewportFillCountRef.current += 1;
         void timelineSyncRef.current.handleTimelinePagination(true);
       }
     };
 
     rafId = requestAnimationFrame(check);
     return () => cancelAnimationFrame(rafId);
-  }, [timelineSync.eventsLength, timelineSync.backwardStatus, processedEvents.length]);
+  }, [room.roomId, timelineSync.eventsLength, timelineSync.backwardStatus]);
 
   return (
     <Box grow="Yes" style={{ position: 'relative' }}>
@@ -1172,7 +1172,7 @@ export function RoomTimeline({
                 room={room}
                 messageLayout={messageLayout}
                 messageSpacing={messageSpacing}
-                settings={settings}
+                settings={settings as unknown as Record<string, unknown>}
                 renderMatrixEvent={renderMatrixEvent}
                 focusItem={timelineSync.focusItem}
                 editId={editId}

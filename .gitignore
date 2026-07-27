@@ -54,6 +54,12 @@ src-tauri/gen/apple/*
 # the following line was added with nvim by Shea because its annoying to clear every so often
 .vscode/bookmarks.json
 
+# Playwright visual regression
+/test-results
+/playwright-report
+/blob-report
+/tests/e2e/.auth
+
 # Nix things
 ## nix build output
 result

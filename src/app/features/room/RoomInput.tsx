@@ -106,20 +106,17 @@ import { UploadBoard, UploadBoardContent, UploadBoardHeader } from '$components/
 import type { Upload, UploadSuccess } from '$state/upload';
 import { UploadStatus, createUploadFamilyObserverAtom } from '$state/upload';
 import { loadImageElementFromMediaUrl } from '$utils/dom';
-import { safeFile } from '$utils/mimeTypes';
+import { isImageMimeType, safeUploadFile } from '$utils/mimeTypes';
 import { fulfilledPromiseSettledResult } from '$utils/common';
 import { useSetting } from '$state/hooks/settings';
+import type { EditorButtonId } from '$state/settings';
 import { settingsAtom } from '$state/settings';
 import { matchesShortcut } from '../../keyboard/shortcuts';
-import {
-  getEditedEvent,
-  getMentionContent,
-  isThreadRelationEvent,
-  reactionOrEditEvent,
-} from '$utils/room';
+import { getEditedEvent, getMentionContent, getThreadReplyEvents } from '$utils/room/relations';
+import { buildReplacementContent } from './buildReplacementContent';
 import { htmlToMarkdown } from '$plugins/markdown';
 import { Command, SHRUG, TABLEFLIP, UNFLIP, useCommands } from '$hooks/useCommands';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { Reply, ThreadIndicator } from '$components/message';
 import { roomToParentsAtom } from '$state/room/roomToParents';
 import { nicknamesAtom } from '$state/nicknames';
@@ -152,6 +149,7 @@ import { useRoomPermissions } from '$hooks/useRoomPermissions';
 import { AutocompleteNotice } from '$components/editor/autocomplete/AutocompleteNotice';
 import {
   convertPerMessageProfileToBeeperFormat,
+  getCurrentlyUsedPerMessageProfileForAccount,
   getCurrentlyUsedPerMessageProfileForRoom,
 } from '$hooks/usePerMessageProfile';
 import {
@@ -189,6 +187,7 @@ import {
   getImagePackReferencesForMxcWrappedInMap,
 } from '$utils/msc4459helper';
 import { ImageUsage } from '$plugins/custom-emoji';
+import { getPackImageInfo } from '$plugins/custom-emoji/utils';
 import { SerializableMap } from '$types/wrapper/SerializableMap';
 import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
 import { AttachmentSheet } from '$components/attachment-sheet/AttachmentSheet';
@@ -214,7 +213,7 @@ import { AudioMessageRecorder } from './AudioMessageRecorder';
 import * as prefix from '$unstable/prefixes';
 import { PollDialog } from './poll-modals';
 import { useClientConfig } from '$hooks/useClientConfig';
-import { PersonaPicker } from './persona-picker/PersonaPicker.tsx';
+import { PersonaPicker, type PersonaPickerTab } from './persona-picker/PersonaPicker.tsx';
 
 const LocationDialog = lazy(() =>
   import('./location-modal').then((module) => ({ default: module.LocationDialog }))
@@ -222,33 +221,9 @@ const LocationDialog = lazy(() =>
 
 // Returns the event ID of the most recent non-reaction/non-edit event in a thread,
 // falling back to the thread root if no replies exist yet.
-export const getLatestThreadEventId = (room: Room, threadRootId: string): string => {
-  const thread = room.getThread(threadRootId);
-  const threadEvents: MatrixEvent[] = thread?.events ?? [];
-  const filtered = threadEvents.filter(
-    (ev) =>
-      ev.getId() !== threadRootId &&
-      !reactionOrEditEvent(ev) &&
-      isThreadRelationEvent(ev, threadRootId)
-  );
-  if (filtered.length > 0) {
-    return filtered[filtered.length - 1]!.getId() ?? threadRootId;
-  }
-  // Fall back to the live timeline if the Thread object hasn't been registered yet
-  const liveEvents = room
-    .getUnfilteredTimelineSet()
-    .getLiveTimeline()
-    .getEvents()
-    .filter(
-      (ev) =>
-        ev.getId() !== threadRootId &&
-        !reactionOrEditEvent(ev) &&
-        isThreadRelationEvent(ev, threadRootId)
-    );
-  if (liveEvents.length > 0) {
-    return liveEvents.at(-1)!.getId() ?? threadRootId;
-  }
-  return threadRootId;
+const getLatestThreadEventId = (room: Room, threadRootId: string): string => {
+  const replies = getThreadReplyEvents(room, threadRootId);
+  return replies.at(-1)?.getId() ?? threadRootId;
 };
 
 export const getReplyContent = (
@@ -364,6 +339,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [pmpPickerEnable] = useSetting(settingsAtom, 'pmpPicker');
 
     const emojiBtnRef = useRef<HTMLButtonElement>(null);
+    const gifBtnRef = useRef<HTMLButtonElement>(null);
+    const stickerBtnRef = useRef<HTMLButtonElement>(null);
     const micBtnRef = useRef<HTMLButtonElement>(null);
     // Preserve stable list keys across metadata/description replacements without
     // storing UI-only IDs in the upload draft state.
@@ -450,9 +427,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const handleFiles = useCallback(
       async (files: File[], audioMeta?: { waveform: number[]; audioDuration: number }) => {
         setUploadBoard(true);
-        const safeFiles = files.map(safeFile);
+        const safeFiles = await Promise.all(files.map(safeUploadFile));
         // Eager-read to avoid Android content URI expiry after SAF picker
-        const blobbedFiles = mobileOrTablet()
+        const blobbedFiles = isMobileOrTablet()
           ? await Promise.all(
               safeFiles.map(async (f) => {
                 try {
@@ -539,6 +516,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [emojiBoardTab, setEmojiBoardTab] = useState<EmojiBoardTab | undefined>(undefined);
     // Android back closes the mobile emoji board instead of navigating away.
     useDismissOnBack(() => setEmojiBoardTab(undefined), emojiBoardTab !== undefined);
+
+    const toggleEmojiBoardTab = useCallback((tab: EmojiBoardTab) => {
+      setEmojiBoardTab((prev) => (prev === tab ? undefined : tab));
+    }, []);
+
+    const [personaPickerTab, setPersonaPickerTab] = useState<PersonaPickerTab | undefined>(
+      undefined
+    );
+
     const [enableMediaGalleries] = useSetting(settingsAtom, 'enableMediaGalleries');
     const [sendIndividualAttachmentAsCaption] = useSetting(
       settingsAtom,
@@ -602,7 +588,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const prevEditingEventId = useRef<string>();
     const preEditDraftRef = useRef<Editor['children']>();
     useEffect(() => {
-      if (!mobileOrTablet()) {
+      if (!isMobileOrTablet()) {
         prevEditingEventId.current = undefined;
         preEditDraftRef.current = undefined;
         return;
@@ -832,7 +818,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
        * This allows the server to apply the correct profile-based transformations (e.g. font size adjustments) when processing the message,
        * and also allows clients to display an accurate preview of how the message will look with the profile applied while it's being composed.
        */
-      const perMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      const globalPerMessageProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
+      const roomPerMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      const perMessageProfile = roomPerMessageProfile ?? globalPerMessageProfile;
 
       if (perMessageProfile) {
         contents.forEach((c) => {
@@ -927,7 +915,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       const fileItem = selectedFiles.find((f) => f.file === upload.file);
       if (!fileItem) throw new Error('Broken upload');
 
-      if (fileItem.file.type.startsWith('image')) {
+      if (isImageMimeType(fileItem.file.type)) {
         return getImageMsgContent(mx, fileItem, upload.mxc);
       }
       if (fileItem.file.type.startsWith('video')) {
@@ -1046,7 +1034,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     );
 
     const submit = useCallback(async () => {
-      if (editingEvent && mobileOrTablet()) {
+      if (editingEvent && isMobileOrTablet()) {
         let plainText = toPlainText(editor.children).trim();
         if (!plainText) {
           onCancelEdit?.();
@@ -1064,33 +1052,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         const eventId = editingEvent.getId();
         if (!eventId) return;
 
-        const msgtype = oldContent.msgtype ?? MsgType.Text;
-        const newContent: IContent = {
-          msgtype,
-          body: plainText,
-        };
-
         const rawPmp =
           currentContent['com.beeper.per_message_profile'] ??
           oldContent['com.beeper.per_message_profile'];
-        const pmpDisplayname =
-          rawPmp !== null &&
-          typeof rawPmp === 'object' &&
-          'displayname' in rawPmp &&
-          typeof rawPmp.displayname === 'string' &&
-          rawPmp.displayname.length > 0
-            ? rawPmp.displayname
-            : undefined;
-
-        if (pmpDisplayname) {
-          const bodyPrefix = `${pmpDisplayname}: `;
-          if (!plainText.startsWith(bodyPrefix)) plainText = bodyPrefix + plainText;
-
-          const htmlPrefix = `<strong data-mx-profile-fallback>${sanitizeText(pmpDisplayname)}: </strong>`;
-          if (!customHtml.startsWith(htmlPrefix)) customHtml = htmlPrefix + customHtml;
-          newContent.body = plainText;
-          newContent['com.beeper.per_message_profile'] = rawPmp;
-        }
 
         const mentionData = getMentions(mx, roomId, editor);
         const previousMentions = currentContent['m.mentions'];
@@ -1105,50 +1069,21 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           });
         }
         const mMentions = getMentionContent(Array.from(mentionData.users), mentionData.room);
-        newContent['m.mentions'] = mMentions;
 
-        const content: IContent = {
-          ...oldContent,
-          'm.relates_to': {
-            event_id: eventId,
-            rel_type: RelationType.Replace,
-          },
-          body: `* ${plainText}`,
-          'm.mentions': mMentions,
-          'm.new_content': newContent,
-        };
+        const linkPreviews =
+          getLinks(editor.children)?.map((matchedUrl) => ({
+            matched_url: matchedUrl,
+          })) ?? [];
 
-        if (pmpDisplayname || !customHtmlEqualsPlainText(customHtml, plainText)) {
-          newContent.format = 'org.matrix.custom.html';
-          newContent.formatted_body = customHtml;
-          content.format = 'org.matrix.custom.html';
-          content.formatted_body = `* ${customHtml}`;
-        } else {
-          delete content.format;
-          delete content.formatted_body;
-        }
-
-        if (oldContent.info !== undefined && oldContent.msgtype !== MsgType.Text) {
-          const filename = 'filename' in oldContent ? oldContent.filename : oldContent.body;
-          content.filename = filename;
-          newContent.filename = filename;
-          content.info = oldContent.info;
-          newContent.info = oldContent.info;
-          if (oldContent.file !== undefined) newContent.file = oldContent.file;
-          if (oldContent.url !== undefined) newContent.url = oldContent.url;
-
-          const spoilerKey = 'page.codeberg.everypizza.msc4193.spoiler';
-          if (oldContent[spoilerKey] !== undefined) {
-            content[spoilerKey] = oldContent[spoilerKey];
-            newContent[spoilerKey] = oldContent[spoilerKey];
-          }
-        }
-
-        const linkPreviews = getLinks(editor.children)?.map((matchedUrl) => ({
-          matched_url: matchedUrl,
-        }));
-        content['com.beeper.linkpreviews'] = linkPreviews ?? [];
-        newContent['com.beeper.linkpreviews'] = linkPreviews ?? [];
+        const content = buildReplacementContent(
+          oldContent,
+          plainText,
+          customHtml,
+          eventId,
+          mMentions,
+          linkPreviews,
+          rawPmp
+        );
 
         await mx.sendMessage(roomId, content as RoomMessageEventContent);
         onCancelEdit?.();
@@ -1246,7 +1181,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         serializedChildren = transform.apply(serializedChildren, outgoingTransformContext);
       });
 
-      let plainText = toPlainText(serializedChildren, true, nicknameReplacement).trim();
+      let plainText = toPlainText(serializedChildren, true, true, nicknameReplacement).trim();
 
       /**
        * the html we will send
@@ -1320,7 +1255,16 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         proxiedPerMessageProfile =
           await pluralkitProxyMessageHandler.getPmpBasedOnMessage(plainText);
         if (proxiedPerMessageProfile) {
-          const stripped = pluralkitProxyMessageHandler.stripProxyFromMessage(plainText);
+          // normal plainText has spoilers stripped, but this breaks spoilers with a proxy tag.
+          // here we get a new 'unsanitized' plainText without spoiler stripping
+          let unsanitizedPlainText = toPlainText(
+            serializedChildren,
+            true,
+            false,
+            nicknameReplacement
+          ).trim();
+
+          const stripped = pluralkitProxyMessageHandler.stripProxyFromMessage(unsanitizedPlainText);
           if (stripped !== undefined) {
             // Re-run the normal outgoing pipeline on the stripped content so the message
             // goes through the same transforms/parsers as any other message.
@@ -1331,7 +1275,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
               serializedChildren = transform.apply(serializedChildren, outgoingTransformContext);
             });
 
-            plainText = toPlainText(serializedChildren, true, nicknameReplacement).trim();
+            plainText = toPlainText(serializedChildren, true, true, nicknameReplacement).trim();
             customHtml = trimCustomHtml(
               toMatrixCustomHTML(serializedChildren, {
                 stripNickname: true,
@@ -1379,7 +1323,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
        * This allows the server to apply the correct profile-based transformations (e.g. font size adjustments) when processing the message,
        * and also allows clients to display an accurate preview of how the message will look with the profile applied while it's being composed.
        */
-      let perMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      const globalPerMessageProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
+      const roomPerMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      let perMessageProfile = roomPerMessageProfile ?? globalPerMessageProfile;
+
       if (pmpProxyingEnable) {
         if (proxiedPerMessageProfile) perMessageProfile = proxiedPerMessageProfile;
       }
@@ -1619,7 +1566,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         }
         if (isKeyHotkey('escape', evt)) {
           evt.preventDefault();
-          if (editingEvent && mobileOrTablet()) {
+          if (editingEvent && isMobileOrTablet()) {
             onCancelEdit?.();
             resetEditor(editor);
             resetEditorHistory(editor);
@@ -1719,16 +1666,26 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     };
 
     const handleStickerSelect = async (mxc: string, shortcode: string, label: string) => {
-      const stickerUrl = mxcUrlToHttp(mx, mxc, useAuthentication);
-      if (!stickerUrl) return;
+      // Packs declare their own info, so sending does not need the file. Measuring it instead made
+      // the send fail outright whenever the media fetch did.
+      let info = getPackImageInfo(mx, room, ImageUsage.Sticker, mxc);
 
-      const { blob, image } = await loadImageElementFromMediaUrl(stickerUrl);
-      const info = getImageInfo(image, blob);
+      if (!info) {
+        const stickerUrl = mxcUrlToHttp(mx, mxc, useAuthentication);
+        if (stickerUrl) {
+          try {
+            const { blob, image } = await loadImageElementFromMediaUrl(stickerUrl);
+            info = getImageInfo(image, blob);
+          } catch (error) {
+            log.error('failed to measure sticker, sending without info', { mxc }, error);
+          }
+        }
+      }
 
       const content: StickerEventContent & ReplyEventContent & IContent & IGenericMSC4459 = {
         body: label,
         url: mxc,
-        info,
+        info: info ?? {},
       };
 
       // add the image pack reference
@@ -1740,7 +1697,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
        * This allows the server to apply the correct profile-based transformations (e.g. font size adjustments) when processing the message,
        * and also allows clients to display an accurate preview of how the message will look with the profile applied while it's being composed.
        */
-      const perMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      const globalPerMessageProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
+      const roomPerMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
+      const perMessageProfile = roomPerMessageProfile ?? globalPerMessageProfile;
 
       if (perMessageProfile) {
         content[prefix.MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME] =
@@ -1755,7 +1714,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           content['m.mentions'] = { ['user_ids']: [replyDraft.userId] };
         setReplyDraft(replyDraftBase);
       }
-      mx.sendEvent(roomId, EventType.Sticker, content);
+      try {
+        await mx.sendEvent(roomId, EventType.Sticker, content);
+      } catch (error) {
+        log.error('failed to send sticker', { roomId }, error);
+      }
     };
 
     const handleGifSelect = async (gif: GifData, spoiler?: boolean) => {
@@ -1954,7 +1917,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   </Box>
                 </div>
               )}
-              {editingEvent && mobileOrTablet() && (
+              {editingEvent && isMobileOrTablet() && (
                 <div>
                   <Box
                     alignItems="Center"
@@ -2071,7 +2034,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           }
           before={
             <>
-              {mobileOrTablet() ? (
+              {isMobileOrTablet() ? (
                 <>
                   <IconButton
                     onClick={() => setShowAttachmentSheet(true)}
@@ -2089,7 +2052,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     open={showAttachmentSheet}
                     onClose={() => setShowAttachmentSheet(false)}
                     onPickPhotos={() => {
-                      pickFile('image/*');
+                      pickFile('image/*,.tgs');
                       setShowAttachmentSheet(false);
                     }}
                     onPickFile={() => {
@@ -2151,7 +2114,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                               size="300"
                               radii="300"
                               onClick={() => {
-                                pickFile('image/*');
+                                pickFile('image/*,.tgs');
                                 setAddMenuAnchor(undefined);
                               }}
                               before={menuIcon(ImageIcon)}
@@ -2194,9 +2157,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
               )}
               {pmpPickerEnable && (
                 <PersonaPicker
+                  tab={personaPickerTab}
                   mx={mx}
                   roomId={roomId}
                   suppressEditorRefocus={suppressEditorRefocus}
+                  onTabChange={setPersonaPickerTab}
                 />
               )}
             </>
@@ -2211,20 +2176,12 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       onTabChange={setEmojiBoardTab}
                       imagePackRooms={imagePackRooms}
                       returnFocusOnDeactivate={false}
-                      isFullWidth={mobileOrTablet()}
+                      isFullWidth={isMobileOrTablet()}
                       onEmojiSelect={handleEmoticonSelect}
                       onCustomEmojiSelect={handleEmoticonSelect}
                       onStickerSelect={handleStickerSelect}
                       onGifSelect={handleGifSelect}
-                      requestClose={() => {
-                        setEmojiBoardTab((t) => {
-                          if (t) {
-                            if (!mobileOrTablet()) ReactEditor.focus(editor);
-                            return undefined;
-                          }
-                          return t;
-                        });
-                      }}
+                      requestClose={() => setEmojiBoardTab(undefined)}
                     />
                   );
                   const triggers = (
@@ -2234,8 +2191,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                         if (id === 'gif' && editorGifButton) {
                           button = (
                             <IconButton
+                              ref={gifBtnRef}
                               aria-pressed={emojiBoardTab === EmojiBoardTab.Gif}
-                              onClick={() => setEmojiBoardTab(EmojiBoardTab.Gif)}
+                              onClick={() => toggleEmojiBoardTab(EmojiBoardTab.Gif)}
                               onPointerDown={suppressEditorRefocus}
                               variant="SurfaceVariant"
                               size="300"
@@ -2252,8 +2210,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                         } else if (id === 'sticker' && editorStickerButton) {
                           button = (
                             <IconButton
+                              ref={stickerBtnRef}
                               aria-pressed={emojiBoardTab === EmojiBoardTab.Sticker}
-                              onClick={() => setEmojiBoardTab(EmojiBoardTab.Sticker)}
+                              onClick={() => toggleEmojiBoardTab(EmojiBoardTab.Sticker)}
                               onPointerDown={suppressEditorRefocus}
                               variant="SurfaceVariant"
                               size="300"
@@ -2272,8 +2231,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                           button = (
                             <IconButton
                               ref={emojiBtnRef}
-                              aria-pressed={emojiBoardTab !== undefined}
-                              onClick={() => setEmojiBoardTab(EmojiBoardTab.Emoji)}
+                              aria-pressed={emojiBoardTab === EmojiBoardTab.Emoji}
+                              onClick={() => toggleEmojiBoardTab(EmojiBoardTab.Emoji)}
                               onPointerDown={suppressEditorRefocus}
                               variant="SurfaceVariant"
                               size="300"
@@ -2283,7 +2242,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                               aria-label="Open emoji board"
                             >
                               {composerIcon(Smiley, {
-                                weight: emojiBoardTab !== undefined ? 'fill' : 'regular',
+                                weight: emojiBoardTab === EmojiBoardTab.Emoji ? 'fill' : 'regular',
                               })}
                             </IconButton>
                           );
@@ -2292,7 +2251,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       })}
                     </>
                   );
-                  if (mobileOrTablet()) {
+                  if (isMobileOrTablet()) {
                     return (
                       <>
                         {triggers}
@@ -2319,11 +2278,23 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       alignOffset={-44}
                       position="Top"
                       align="End"
-                      anchor={
-                        emojiBoardTab === undefined
-                          ? undefined
-                          : (emojiBtnRef.current?.getBoundingClientRect() ?? undefined)
-                      }
+                      anchor={(() => {
+                        if (emojiBoardTab === undefined) return undefined;
+                        const buttonRefs: Record<EditorButtonId, RefObject<HTMLButtonElement>> = {
+                          gif: gifBtnRef,
+                          sticker: stickerBtnRef,
+                          emoji: emojiBtnRef,
+                        };
+                        for (let i = editorButtonOrder.length - 1; i >= 0; i--) {
+                          const id = editorButtonOrder[i];
+                          if (!id) continue;
+                          const btnRef = buttonRefs[id];
+                          if (btnRef?.current) {
+                            return btnRef.current.getBoundingClientRect();
+                          }
+                        }
+                        return undefined;
+                      })()}
                       content={emojiBoard}
                     >
                       {triggers}
@@ -2371,7 +2342,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     return;
                   }
                   if (!editorMicButton) return;
-                  if (mobileOrTablet()) return;
+                  if (isMobileOrTablet()) return;
                   setShowAudioRecorder(true);
                 }}
                 onMouseDown={(e: MouseEvent) => {
@@ -2381,7 +2352,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   if (showAudioRecorder) return;
                   if (hasContent) {
                     isLongPress.current = false;
-                    if (mobileOrTablet() && delayedEventsSupported) {
+                    if (isMobileOrTablet() && delayedEventsSupported) {
                       longPressTimer.current = setTimeout(() => {
                         isLongPress.current = true;
                         setShowSchedulePicker(true);
@@ -2390,7 +2361,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     return;
                   }
                   if (!editorMicButton) return;
-                  if (!mobileOrTablet()) return;
+                  if (!isMobileOrTablet()) return;
                   micHoldStartRef.current = Date.now();
                   setShowAudioRecorder(true);
 
@@ -2496,7 +2467,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   </FocusTrap>
                 }
               />
-              {delayedEventsSupported && !mobileOrTablet() && (
+              {delayedEventsSupported && !isMobileOrTablet() && (
                 <IconButton
                   onClick={(evt: MouseEvent<HTMLButtonElement>) => {
                     setScheduleMenuAnchor(evt.currentTarget.getBoundingClientRect());

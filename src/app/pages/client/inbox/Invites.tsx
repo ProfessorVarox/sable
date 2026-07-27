@@ -1,20 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
-  Avatar,
-  Badge,
-  Box,
-  Button,
-  Chip,
-  IconButton,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
-  Scroll,
-  Spinner,
-  Text,
-  color,
-  config,
-} from 'folds';
+import { Avatar, Badge, Box, Chip, IconButton, Scroll, Spinner, Text, config } from 'folds';
 import { useAtom, useAtomValue } from 'jotai';
 import {
   ArrowLeft,
@@ -36,7 +21,6 @@ import type {
   Room,
   AccountDataEvents,
 } from '$types/matrix-sdk';
-import FocusTrap from 'focus-trap-react';
 import {
   Page,
   PageContent,
@@ -49,17 +33,14 @@ import {
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { allInvitesAtom } from '$state/room-list/inviteList';
 import { SequenceCard } from '$components/sequence-card';
+import { getAccountData, getStateEvent, isSpace } from '$utils/room/hierarchy';
+import { isDirectInvite } from '$utils/room/unread';
+import { bannedInRooms, getCommonRooms } from '$utils/room/relations';
 import {
-  bannedInRooms,
-  getAccountData,
-  getCommonRooms,
   getDirectRoomAvatarUrl,
   getMemberDisplayName,
   getRoomAvatarUrl,
-  getStateEvent,
-  isDirectInvite,
-  isSpace,
-} from '$utils/room';
+} from '$utils/room/display';
 import { nameInitials } from '$utils/common';
 import { RoomAvatar } from '$components/room-avatar';
 import {
@@ -70,9 +51,10 @@ import {
 } from '$utils/matrix';
 import { Time } from '$components/message';
 import { useElementSizeObserver } from '$hooks/useElementSizeObserver';
-import { onEnterOrSpace, stopPropagation } from '$utils/keyboard';
+import { onEnterOrSpace } from '$utils/keyboard';
 import { RoomTopicViewer } from '$components/room-topic-viewer';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import { AsyncError } from '$components/AsyncError';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
 import { BackRouteHandler } from '$components/BackRouteHandler';
@@ -88,10 +70,12 @@ import { EventType } from '$types/matrix-sdk';
 import { CustomAccountDataEvent } from '$types/matrix/accountData';
 import { updateInviteList } from '$state/updateInvites';
 import { useDismissedInviteList } from '$hooks/useDismissedInvites';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import { Button } from '$components/button';
 
 const COMPACT_CARD_WIDTH = 548;
 
-export type InviteData = {
+type InviteData = {
   room: Room;
   roomId: string;
   roomName: string;
@@ -109,7 +93,7 @@ export type InviteData = {
   isEncrypted: boolean;
 };
 
-export const makeInviteData = (
+const makeInviteData = (
   mx: MatrixClient,
   room: Room,
   useAuthentication: boolean,
@@ -310,35 +294,16 @@ function InviteCard({
                   {invite.roomTopic}
                 </Text>
               )}
-              <Overlay open={viewTopic} backdrop={<OverlayBackdrop />}>
-                <OverlayCenter>
-                  <FocusTrap
-                    focusTrapOptions={{
-                      initialFocus: false,
-                      clickOutsideDeactivates: true,
-                      onDeactivate: closeTopic,
-                      escapeDeactivates: stopPropagation,
-                    }}
-                  >
-                    <RoomTopicViewer
-                      name={invite.roomName}
-                      topic={invite.roomTopic ?? ''}
-                      requestClose={closeTopic}
-                    />
-                  </FocusTrap>
-                </OverlayCenter>
-              </Overlay>
+              <ModalOverlay open={viewTopic} requestClose={closeTopic}>
+                <RoomTopicViewer
+                  name={invite.roomName}
+                  topic={invite.roomTopic ?? ''}
+                  requestClose={closeTopic}
+                />
+              </ModalOverlay>
             </Box>
-            {joinState.status === AsyncStatus.Error && (
-              <Text size="T200" style={{ color: color.Critical.Main }}>
-                {joinState.error.message}
-              </Text>
-            )}
-            {leaveState.status === AsyncStatus.Error && (
-              <Text size="T200" style={{ color: color.Critical.Main }}>
-                {leaveState.error.message}
-              </Text>
-            )}
+            <AsyncError state={joinState} />
+            <AsyncError state={leaveState} />
           </Box>
           <Box gap="200" shrink="No" alignItems="Center">
             <Button
@@ -354,25 +319,30 @@ function InviteCard({
               <Text size="B300">{isDismissed ? 'Undismiss' : 'Dismiss'}</Text>
             </Button>
             <Button
-              onClick={leave}
+              loading={leaving}
+              spinnerSize="100"
+              spinnerVariant="Secondary"
               size="300"
               variant="Secondary"
               radii="300"
               fill="Soft"
-              disabled={joining || leaving}
-              before={leaving ? <Spinner variant="Secondary" size="100" /> : undefined}
+              disabled={joining}
+              onClick={leave}
             >
               <Text size="B300">Decline</Text>
             </Button>
             <Button
-              onClick={join}
+              loading={joining}
+              spinnerSize="100"
+              spinnerVariant="Success"
+              spinnerFill="Soft"
               size="300"
               variant="Success"
               fill="Soft"
               radii="300"
               outlined
-              disabled={joining || leaving}
-              before={joining ? <Spinner variant="Success" fill="Soft" size="100" /> : undefined}
+              disabled={leaving}
+              onClick={join}
             >
               <Text size="B300">Accept</Text>
             </Button>
@@ -408,7 +378,7 @@ function InviteCard({
   );
 }
 
-export enum InviteFilter {
+enum InviteFilter {
   Known,
   Unknown,
   Spam,
@@ -656,7 +626,6 @@ function SpamInvites({
   const declining = declineAllStatus.status === AsyncStatus.Loading;
   const reporting = reportAllStatus.status === AsyncStatus.Loading;
   const blocking = blockAllStatus.status === AsyncStatus.Loading;
-  const loading = blocking || reporting || declining;
 
   return (
     <Box direction="Column" gap="200">
@@ -682,8 +651,11 @@ function SpamInvites({
                     fill="Solid"
                     radii="300"
                     onClick={declineAll}
-                    before={declining && <Spinner size="100" variant="Critical" fill="Solid" />}
-                    disabled={loading}
+                    loading={declining}
+                    spinnerSize="100"
+                    spinnerVariant="Critical"
+                    spinnerFill="Solid"
+                    disabled={reporting || blocking}
                   >
                     <Text size="B300" truncate>
                       Decline All
@@ -696,8 +668,11 @@ function SpamInvites({
                       fill="Solid"
                       radii="300"
                       onClick={reportAll}
-                      before={reporting && <Spinner size="100" variant="Secondary" fill="Solid" />}
-                      disabled={loading}
+                      loading={reporting}
+                      spinnerSize="100"
+                      spinnerVariant="Secondary"
+                      spinnerFill="Solid"
+                      disabled={declining || blocking}
                     >
                       <Text size="B300" truncate>
                         Report All
@@ -710,9 +685,12 @@ function SpamInvites({
                       variant="Secondary"
                       fill="Solid"
                       radii="300"
-                      disabled={loading}
+                      disabled={declining || reporting}
+                      loading={blocking}
+                      spinnerSize="100"
+                      spinnerVariant="Secondary"
+                      spinnerFill="Solid"
                       onClick={blockAll}
-                      before={blocking && <Spinner size="100" variant="Secondary" fill="Solid" />}
                     >
                       <Text size="B300" truncate>
                         Block All

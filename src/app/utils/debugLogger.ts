@@ -6,6 +6,7 @@
  */
 
 import * as Sentry from '@sentry/react';
+import { versionLabel } from '$utils/platform';
 import { sanitizeSentryPayload } from './sentryScrubbers';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -292,7 +293,7 @@ class DebugLoggerService {
     return JSON.stringify(
       {
         exportedAt: new Date().toISOString(),
-        build: `v${APP_VERSION}${BUILD_HASH ? ` (${BUILD_HASH})` : ''}`,
+        build: versionLabel({ includeNightly: false }),
         logsCount: this.logs.length,
         logs: this.logs.map((log) => ({
           ...log,

@@ -1,5 +1,5 @@
 import type { MatrixClient, MSC3575RoomData, SlidingSync } from '$types/matrix-sdk';
-import { EventType, MatrixEvent, SlidingSyncEvent } from '$types/matrix-sdk';
+import { EventType, KnownMembership, MatrixEvent, SlidingSyncEvent } from '$types/matrix-sdk';
 import { CustomAccountDataEvent } from '$types/matrix/accountData';
 import { CustomStateEvent } from '$types/matrix/room';
 
@@ -74,31 +74,58 @@ const mergeStateEvents = (
   return [...merged.values()];
 };
 
+const selfMembership = (events: StateEvent[] | undefined, userId: string): string | undefined => {
+  const event = events?.find((e) => e.type === 'm.room.member' && e.state_key === userId);
+  const content = event?.content;
+  return content && typeof content === 'object'
+    ? (content as { membership?: string }).membership
+    : undefined;
+};
+
+// The SDK derives an invite from invite_state and ignores required_state, so a
+// server that keeps sending invite_state after a join (Continuwuity) would
+// resurrect a stale invite. required_state membership is authoritative here.
+const resolveInviteState = (
+  requiredState: StateEvent[] | undefined,
+  inviteState: StateEvent[] | undefined,
+  userId: string
+): StateEvent[] | undefined =>
+  selfMembership(requiredState, userId) === KnownMembership.Join ? undefined : inviteState;
+
 const mergeRoomData = (
   previous: MSC3575RoomData | undefined,
   incoming: MSC3575RoomData,
   userId: string
-): MSC3575RoomData => ({
-  ...previous,
-  ...incoming,
-  name: incoming.name ?? previous?.name ?? '',
-  heroes: incoming.heroes ?? previous?.heroes,
-  notification_count: incoming.notification_count ?? previous?.notification_count,
-  highlight_count: incoming.highlight_count ?? previous?.highlight_count,
-  joined_count: incoming.joined_count ?? previous?.joined_count,
-  invited_count: incoming.invited_count ?? previous?.invited_count,
-  is_dm: incoming.is_dm ?? previous?.is_dm,
-  bump_stamp: incoming.bump_stamp ?? previous?.bump_stamp,
-  required_state: mergeStateEvents(previous?.required_state, incoming.required_state, userId),
-  invite_state: incoming.invite_state
+): MSC3575RoomData => {
+  const required_state = mergeStateEvents(
+    previous?.required_state,
+    incoming.required_state,
+    userId
+  );
+  const invite_state = incoming.invite_state
     ? mergeStateEvents(previous?.invite_state, incoming.invite_state, userId)
-    : previous?.invite_state,
-  timeline: [],
-  initial: true,
-  limited: false,
-  num_live: 0,
-  prev_batch: undefined,
-});
+    : previous?.invite_state;
+
+  return {
+    ...previous,
+    ...incoming,
+    name: incoming.name ?? previous?.name ?? '',
+    heroes: incoming.heroes ?? previous?.heroes,
+    notification_count: incoming.notification_count ?? previous?.notification_count,
+    highlight_count: incoming.highlight_count ?? previous?.highlight_count,
+    joined_count: incoming.joined_count ?? previous?.joined_count,
+    invited_count: incoming.invited_count ?? previous?.invited_count,
+    is_dm: incoming.is_dm ?? previous?.is_dm,
+    bump_stamp: incoming.bump_stamp ?? previous?.bump_stamp,
+    required_state,
+    invite_state: resolveInviteState(required_state, invite_state, userId),
+    timeline: [],
+    initial: true,
+    limited: false,
+    num_live: 0,
+    prev_batch: undefined,
+  };
+};
 
 const parseCache = (value: string | null): SidebarCacheData => {
   if (!value) return emptyCache();
@@ -179,6 +206,34 @@ export class SlidingSyncSidebarCache {
     return removedRoomIds;
   }
 
+  // Backstop for rooms the server confirms joined but whose required_state still
+  // reads invite (e.g. joined on another client), which resolveInviteState misses.
+  public clearInviteStateForRooms(roomIds: readonly string[]): void {
+    let changed = false;
+    for (const roomId of roomIds) {
+      const room = this.data.rooms[roomId];
+      if (room?.invite_state !== undefined) {
+        room.invite_state = undefined;
+        changed = true;
+      }
+    }
+    if (changed) this.scheduleWrite();
+  }
+
+  // Heal a cache that persisted invite_state for a room required_state already
+  // shows as joined, so recovery happens offline on hydration.
+  private sanitizeInviteState(): void {
+    let changed = false;
+    for (const room of Object.values(this.data.rooms)) {
+      if (room.invite_state === undefined) continue;
+      if (resolveInviteState(room.required_state, room.invite_state, this.userId) === undefined) {
+        room.invite_state = undefined;
+        changed = true;
+      }
+    }
+    if (changed) this.scheduleWrite();
+  }
+
   public cacheAccountData(event: MatrixEvent): void {
     if (!CACHED_ACCOUNT_DATA_TYPES.has(event.getType())) return;
     this.data.accountData[event.getType()] = event.getContent<Record<string, unknown>>();
@@ -186,6 +241,7 @@ export class SlidingSyncSidebarCache {
   }
 
   public async hydrate(mx: MatrixClient, slidingSync: SlidingSync): Promise<boolean> {
+    this.sanitizeInviteState();
     const rooms = Object.entries(this.data.rooms);
     const accountData = Object.entries(this.data.accountData);
     if (rooms.length === 0 && accountData.length === 0) return false;

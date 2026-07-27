@@ -13,7 +13,7 @@ import { useEditor, resetEditor } from '$components/editor';
 import { Page } from '$components/page';
 import { useKeyDown } from '$hooks/useKeyDown';
 import { editableActiveElement } from '$utils/dom';
-import { mobileOrTablet } from '$utils/user-agent';
+import { isMobileOrTablet } from '$utils/platform';
 import { settingsAtom } from '$state/settings';
 import { useSetting } from '$state/hooks/settings';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
@@ -99,7 +99,7 @@ export function RoomView({ eventId }: { eventId?: string }) {
   const { editId, handleEdit } = useMessageEdit(editor, {
     onReset: handleResetEditor,
     alive,
-    focusOnCancel: !mobileOrTablet(),
+    focusOnCancel: !isMobileOrTablet(),
   });
 
   useDelayedEventsSupport();

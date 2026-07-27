@@ -15,19 +15,35 @@ fn main() {
                 "sable-media".into(),
             ],
             deep_link_schemes: vec!["moe.sable.app".into(), "sable".into()],
-            command_line_args: vec![
-                ("--disable-gpu-sandbox".into(), None),
-                ("--disable-font-subpixel-positioning".into(), None),
-                ("--enable-font-antialiasing".into(), None),
-                ("autoplay-policy".into(), Some("no-user-gesture-required".into())),
-                ("enable-features".into(), Some("SharedArrayBuffer".into())),
-                ("--disable-background-timer-throttling".into(), None),
-                ("--disable-renderer-backgrounding".into(), None),
-                ("--disable-backgrounding-occluded-windows".into(), None),
-                ("disable-features".into(), Some(
-                    "SpareRendererForSitePerProcess,IntensiveWakeUpThrottling,CalculateNativeWinOcclusion,AutofillActorMode,GlicActorUi,LensOverlay".into()
-                )),
-            ],
+            command_line_args: {
+                let mut args = vec![
+                    ("--disable-gpu-sandbox".into(), None),
+                    ("--disable-font-subpixel-positioning".into(), None),
+                    ("--enable-font-antialiasing".into(), None),
+                    (
+                        "autoplay-policy".into(),
+                        Some("no-user-gesture-required".into()),
+                    ),
+                    (
+                        "enable-features".into(),
+                        Some("SharedArrayBuffer".into()),
+                    ),
+                    ("--disable-background-timer-throttling".into(), None),
+                    ("--skia-resource-cache-limit-mb".into(), Some("64".into())),
+                    ("--renderer-process-limit".into(), Some("2".into())),
+                    (
+                        "disable-features".into(),
+                        Some("SpareRendererForSitePerProcess,IntensiveWakeUpThrottling,AutofillActorMode,GlicActorUi,LensOverlay,LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSocket,LocalNetworkAccessChecksWebRTC".into()),
+                    ),
+                ];
+
+                // Remote debugging via SABLE_DEVTOOLS=port env var.
+                // Open chrome://inspect in Chrome to connect.
+                if let Ok(port) = std::env::var("SABLE_DEVTOOLS") {
+                    args.push(("--remote-debugging-port".into(), Some(port)));
+                }
+                args
+            },
             ..Default::default()
         });
 

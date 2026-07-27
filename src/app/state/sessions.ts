@@ -60,7 +60,7 @@ export function setFallbackSession(
   localStorage.setItem('cinny_hs_base_url', baseUrl);
   notifySessionChanged();
 }
-export const removeFallbackSession = () => {
+const removeFallbackSession = () => {
   localStorage.removeItem('cinny_hs_base_url');
   localStorage.removeItem('cinny_user_id');
   localStorage.removeItem('cinny_device_id');
@@ -219,7 +219,7 @@ export const activeSessionIdAtom = atom<string | undefined, [string | undefined]
   }
 );
 
-export type PendingNotification = {
+type PendingNotification = {
   roomId: string;
   eventId?: string;
   targetSessionId?: string;

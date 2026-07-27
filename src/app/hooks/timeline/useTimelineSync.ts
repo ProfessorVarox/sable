@@ -7,6 +7,7 @@ import type {
   Room,
   MatrixEvent,
   EventTimeline,
+  EventTimelineSet,
   EventTimelineSetHandlerMap,
   IRoomTimelineData,
   RoomEventHandlerMap,
@@ -14,6 +15,7 @@ import type {
 import { Direction, RoomEvent, RelationType, ThreadEvent } from '$types/matrix-sdk';
 
 import { useAlive } from '$hooks/useAlive';
+import { useMatrixEvent } from '$hooks/useMatrixEvent';
 import { markAsRead } from '$utils/notifications';
 import {
   getInitialTimeline,
@@ -25,12 +27,13 @@ import {
   getRoomUnreadInfo,
   PAGINATION_LIMIT,
 } from '$utils/timeline';
+import { isWindowFocused } from '$utils/dom';
 
-export const EVENT_TIMELINE_LOAD_TIMEOUT_MS = 12000;
+const EVENT_TIMELINE_LOAD_TIMEOUT_MS = 12000;
 
-export type PaginationStatus = 'idle' | 'loading' | 'error';
+type PaginationStatus = 'idle' | 'loading' | 'error';
 
-export type TimelineState = {
+type TimelineState = {
   linkedTimelines: EventTimeline[];
 };
 
@@ -99,11 +102,53 @@ const useEventTimelineLoader = (
     [mx, room, onLoad, onError]
   );
 
+// Unbounded, a run of entirely hidden pages recurses until the room's history runs out.
+const MAX_AUTO_CONTINUATIONS = 3;
+
+// Rendered events among the `count` just-fetched ones: head of the chain when
+// paginating backwards, tail when forwards.
+export const countVisibleAmongNewest = (
+  linkedTimelines: EventTimeline[],
+  count: number,
+  backwards: boolean,
+  isEventVisible: (mEvent: MatrixEvent, timelineSet: EventTimelineSet) => boolean
+): number => {
+  let remaining = count;
+  let visible = 0;
+
+  if (backwards) {
+    for (const timeline of linkedTimelines) {
+      const events = timeline.getEvents() ?? [];
+      const timelineSet = timeline.getTimelineSet();
+      for (let i = 0; i < events.length && remaining > 0; i += 1) {
+        const mEvent = events[i];
+        remaining -= 1;
+        if (mEvent && isEventVisible(mEvent, timelineSet)) visible += 1;
+      }
+      if (remaining === 0) break;
+    }
+    return visible;
+  }
+
+  for (let t = linkedTimelines.length - 1; t >= 0 && remaining > 0; t -= 1) {
+    const timeline = linkedTimelines[t];
+    const events = timeline?.getEvents() ?? [];
+    const timelineSet = timeline?.getTimelineSet();
+    for (let i = events.length - 1; i >= 0 && remaining > 0; i -= 1) {
+      const mEvent = events[i];
+      remaining -= 1;
+      if (mEvent && timelineSet && isEventVisible(mEvent, timelineSet)) visible += 1;
+    }
+  }
+  return visible;
+};
+
 const useTimelinePagination = (
   mx: MatrixClient,
   timeline: TimelineState,
   setTimeline: Dispatch<SetStateAction<TimelineState>>,
-  limit: number
+  limit: number,
+  isEventVisible?: (mEvent: MatrixEvent, timelineSet: EventTimelineSet) => boolean
 ) => {
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
@@ -121,7 +166,7 @@ const useTimelinePagination = (
       startTransition(() => setTimeline(() => ({ linkedTimelines: newLTimelines })));
     };
 
-    return async (backwards: boolean) => {
+    return async (backwards: boolean, autoContinuations = 0) => {
       const directionKey = backwards ? 'backward' : 'forward';
       if (fetchingRef.current[directionKey]) return;
 
@@ -183,8 +228,18 @@ const useTimelinePagination = (
           const countAfter = getTimelinesEventsCount(getLinkedTimelines(firstTimeline));
           const fetched = countAfter - countBefore;
 
+          let visibleFetched = fetched;
+          if (isEventVisible && fetched > 0) {
+            visibleFetched = countVisibleAmongNewest(
+              getLinkedTimelines(firstTimeline),
+              fetched,
+              backwards,
+              isEventVisible
+            );
+          }
+
           let willContinue = false;
-          if (fetched > 0 && fetched < 5) {
+          if (fetched > 0 && visibleFetched < 5 && autoContinuations < MAX_AUTO_CONTINUATIONS) {
             const checkTimeline = backwards
               ? freshLTimelines[0]
               : freshLTimelines[freshLTimelines.length - 1];
@@ -202,7 +257,7 @@ const useTimelinePagination = (
               fetchingRef.current[directionKey] = false;
               continuing = true;
               willContinue = true;
-              paginate(backwards);
+              paginate(backwards, autoContinuations + 1);
               // At this point the inner paginate has synchronously set
               // fetchingRef.current[directionKey] = true before hitting its own
               // await.  The finally below will skip the reset.
@@ -223,7 +278,7 @@ const useTimelinePagination = (
         }
       }
     };
-  }, [mx, alive, setTimeline, limit, setBackwardStatus, setForwardStatus]);
+  }, [mx, alive, setTimeline, limit, setBackwardStatus, setForwardStatus, isEventVisible]);
 
   return { paginate, backwardStatus, forwardStatus };
 };
@@ -286,8 +341,8 @@ const useRelationUpdate = (room: Room, onRelation: () => void) => {
   const onRelationRef = useRef(onRelation);
   onRelationRef.current = onRelation;
 
-  useEffect(() => {
-    const handleTimelineEvent: EventTimelineSetHandlerMap[RoomEvent.Timeline] = (
+  const handleTimelineEvent = useCallback(
+    (
       mEvent: MatrixEvent,
       eventRoom: Room | undefined,
       _toStartOfTimeline: boolean | undefined,
@@ -298,12 +353,11 @@ const useRelationUpdate = (room: Room, onRelation: () => void) => {
       if (mEvent.getRelation()?.rel_type === RelationType.Replace) {
         onRelationRef.current();
       }
-    };
-    room.on(RoomEvent.Timeline, handleTimelineEvent);
-    return () => {
-      room.removeListener(RoomEvent.Timeline, handleTimelineEvent);
-    };
-  }, [room]);
+    },
+    [room]
+  );
+
+  useMatrixEvent(room, RoomEvent.Timeline, handleTimelineEvent);
 };
 
 const useLiveTimelineRefresh = (room: Room, onRefresh: () => void) => {
@@ -357,6 +411,7 @@ export interface UseTimelineSyncOptions {
   setUnreadInfo: Dispatch<SetStateAction<ReturnType<typeof getRoomUnreadInfo>>>;
   hideReadsRef: React.MutableRefObject<boolean>;
   readUptoEventIdRef: React.MutableRefObject<string | undefined>;
+  isEventVisible?: (mEvent: MatrixEvent, timelineSet: EventTimelineSet) => boolean;
 }
 
 export function useTimelineSync({
@@ -370,6 +425,7 @@ export function useTimelineSync({
   setUnreadInfo,
   hideReadsRef,
   readUptoEventIdRef,
+  isEventVisible,
 }: UseTimelineSyncOptions) {
   const alive = useAlive();
 
@@ -402,7 +458,7 @@ export function useTimelineSync({
     paginate: handleTimelinePagination,
     backwardStatus,
     forwardStatus,
-  } = useTimelinePagination(mx, timeline, setTimeline, PAGINATION_LIMIT);
+  } = useTimelinePagination(mx, timeline, setTimeline, PAGINATION_LIMIT, isEventVisible);
 
   const prevEventsLengthRef = useRef(eventsLength);
   useEffect(() => {
@@ -480,20 +536,20 @@ export function useTimelineSync({
 
         if (isAtBottomRef.current && atLiveEndRef.current) {
           if (
-            document.hasFocus() &&
+            isWindowFocused() &&
             (!unreadInfo?.readUptoEventId || mEvt.getSender() === mx.getUserId())
           ) {
             requestAnimationFrame(() => markAsRead(mx, mEvt.getRoomId()!, hideReadsRef.current));
           }
 
-          if (!document.hasFocus() && !unreadInfo) {
+          if (!isWindowFocused() && !unreadInfo) {
             setUnreadInfo(getRoomUnreadInfo(room));
           }
 
           // Own messages should feel immediate, and unfocused windows throttle
           // scroll animations, which can leave the view stuck mid-scroll.
           pendingAutoScrollBehaviorRef.current =
-            mEvt.getSender() === mx.getUserId() || !document.hasFocus() ? 'instant' : 'smooth';
+            mEvt.getSender() === mx.getUserId() || !isWindowFocused() ? 'instant' : 'smooth';
 
           setTimeline((ct) => ({ ...ct }));
           return;
@@ -508,20 +564,15 @@ export function useTimelineSync({
     )
   );
 
-  useEffect(() => {
-    const handleLocalEchoUpdated: RoomEventHandlerMap[RoomEvent.LocalEchoUpdated] = (
-      _mEvent: MatrixEvent,
-      eventRoom: Room | undefined
-    ) => {
+  const handleLocalEchoUpdated = useCallback(
+    (_mEvent: MatrixEvent, eventRoom: Room | undefined) => {
       if (eventRoom?.roomId !== room.roomId) return;
       setTimeline((ct) => ({ ...ct }));
-    };
+    },
+    [room, setTimeline]
+  );
 
-    room.on(RoomEvent.LocalEchoUpdated, handleLocalEchoUpdated);
-    return () => {
-      room.removeListener(RoomEvent.LocalEchoUpdated, handleLocalEchoUpdated);
-    };
-  }, [room, setTimeline]);
+  useMatrixEvent(room, RoomEvent.LocalEchoUpdated, handleLocalEchoUpdated);
 
   useLiveTimelineRefresh(
     room,

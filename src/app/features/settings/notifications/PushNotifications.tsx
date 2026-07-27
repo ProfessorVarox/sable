@@ -33,9 +33,7 @@ export async function enablePushNotifications(
   clientConfig: ClientConfig,
   pushSubscriptionAtom: PushSubscriptionState
 ): Promise<void> {
-  if (isTauri()) {
-    throw new Error('Push notifications are disabled in Tauri runtime.');
-  }
+  if (isTauri()) return;
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     debugLog.error(
       'notification',

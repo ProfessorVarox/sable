@@ -805,6 +805,33 @@ describe('SlidingSyncManager local membership reconciliation', () => {
     expect(reconcileRooms).not.toHaveBeenCalled();
   });
 
+  it('re-asserts join for a joined room hydrated from cache as invite', async () => {
+    const updateMyMembership = vi.fn<(m: string) => void>();
+    const room = {
+      getMyMembership: vi.fn<() => string>().mockReturnValue(KnownMembership.Invite),
+      updateMyMembership,
+    };
+    const getJoinedRooms = vi
+      .fn<() => Promise<{ joined_rooms: string[] }>>()
+      .mockResolvedValue({ joined_rooms: ['!joined:example.com'] });
+    const manager = makeManager(
+      makeMockMx({
+        getJoinedRooms,
+        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
+      })
+    );
+    const internals = manager as unknown as {
+      reconcileSidebarCacheMembership: () => void;
+      sidebarCache: { reconcileRooms: (roomIds: ReadonlySet<string>) => string[] };
+    };
+    vi.spyOn(internals.sidebarCache, 'reconcileRooms').mockReturnValue([]);
+
+    internals.reconcileSidebarCacheMembership();
+    await vi.waitFor(() => expect(getJoinedRooms).toHaveBeenCalledOnce());
+
+    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
+  });
+
   it('subscribes an optimistically joined room and tracks it for re-assertion', () => {
     const updateMyMembership = vi.fn<() => void>();
     const manager = makeManager(

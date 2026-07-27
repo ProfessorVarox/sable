@@ -10,9 +10,6 @@ import {
   config,
   Spinner,
   Text,
-  Overlay,
-  OverlayBackdrop,
-  OverlayCenter,
   IconButton,
   PopOut,
   Menu,
@@ -36,6 +33,7 @@ import {
 import { stopPropagation } from '$utils/keyboard';
 import { useAuthMetadata } from '$hooks/useAuthMetadata';
 import { getAccountManagementUrl, useAccountManagementActions } from '$hooks/useAccountManagement';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 
 type VerificationStatusBadgeProps = {
   verificationStatus: VerificationStatus;
@@ -236,19 +234,13 @@ export function EnableVerification({ visible }: EnableVerificationProps) {
         </Button>
       )}
       {open && (
-        <Overlay open backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                clickOutsideDeactivates: false,
-                escapeDeactivates: false,
-              }}
-            >
-              <DeviceVerificationSetup onCancel={handleCancel} />
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
+        <ModalOverlay
+          requestClose={handleCancel}
+          dismissOnClickOutside={false}
+          escapeDeactivates={false}
+        >
+          <DeviceVerificationSetup onCancel={handleCancel} />
+        </ModalOverlay>
       )}
     </>
   );
@@ -257,6 +249,7 @@ export function EnableVerification({ visible }: EnableVerificationProps) {
 export function DeviceVerificationOptions() {
   const [menuCords, setMenuCords] = useState<RectCords>();
   const authMetadata = useAuthMetadata();
+  const mx = useMatrixClient();
   const accountManagementActions = useAccountManagementActions();
 
   const [reset, setReset] = useState(false);
@@ -272,16 +265,20 @@ export function DeviceVerificationOptions() {
   const handleReset = () => {
     setMenuCords(undefined);
 
-    const url = getAccountManagementUrl(authMetadata, accountManagementActions.crossSigningReset);
+    const url = getAccountManagementUrl(
+      authMetadata,
+      accountManagementActions.crossSigningReset,
+      undefined,
+      mx.getHomeserverUrl()
+    );
     if (url) {
       if (isTauri()) {
         import('@tauri-apps/plugin-opener')
           .then(({ openUrl }) => openUrl(url))
           .catch(() => window.open(url, '_blank'));
-        return;
+      } else {
+        window.open(url, '_blank');
       }
-      window.open(url, '_blank');
-      return;
     }
 
     setReset(true);
@@ -335,19 +332,13 @@ export function DeviceVerificationOptions() {
         }
       />
       {reset && (
-        <Overlay open backdrop={<OverlayBackdrop />}>
-          <OverlayCenter>
-            <FocusTrap
-              focusTrapOptions={{
-                initialFocus: false,
-                clickOutsideDeactivates: false,
-                escapeDeactivates: false,
-              }}
-            >
-              <DeviceVerificationReset onCancel={handleCancelReset} />
-            </FocusTrap>
-          </OverlayCenter>
-        </Overlay>
+        <ModalOverlay
+          requestClose={handleCancelReset}
+          dismissOnClickOutside={false}
+          escapeDeactivates={false}
+        >
+          <DeviceVerificationReset onCancel={handleCancelReset} />
+        </ModalOverlay>
       )}
     </>
   );

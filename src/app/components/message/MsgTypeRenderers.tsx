@@ -3,7 +3,7 @@ import { ArrowSquareOut, sizedIcon, Link } from '$components/icons/phosphor';
 import { Box, Chip, Text, toRem } from 'folds';
 import { type IContent, type IPreviewUrlResponse, type MatrixClient } from '$types/matrix-sdk';
 import { isJumboEmojiText } from '$utils/emojiDetection';
-import { trimReplyFromBody } from '$utils/room';
+import { trimReplyFromBody } from '$utils/room/display';
 import type {
   IAudioContent,
   IAudioInfo,
@@ -108,7 +108,7 @@ export function UnsupportedContent({ body }: BrokenContentProps) {
   );
 }
 
-export function BrokenContent({ body }: BrokenContentProps) {
+function BrokenContent({ body }: BrokenContentProps) {
   return (
     <Text>
       <MessageBrokenContent body={body} />
@@ -445,31 +445,35 @@ export function MImage({ content, renderImageContent, outlined, fitParent }: MIm
   if (!mxcUrl) {
     return <BrokenContent body={content.body ?? content.filename} />;
   }
+  const MIN_SIZE = 150;
   const MAX_SIZE = 400;
-  const imgW = imgInfo?.w ?? MAX_SIZE;
-  const imgH = imgInfo?.h ?? MAX_SIZE;
-  const aspectRatio = imgInfo?.w && imgInfo?.h ? `${imgW} / ${imgH}` : undefined;
-  // this garbage is for portrait images, we cap the width so the card doesn't exceed the bounds of the image
-  const displayWidth = imgH > imgW ? Math.round(MAX_SIZE * (imgW / imgH)) : MAX_SIZE;
-  const height = scaleYDimension(imgInfo?.w || 400, displayWidth, imgInfo?.h || 400);
   const filename = getAttachmentFilename(content.filename, content.body, 'Image');
+
+  // lazy approach to make sure that both horizontal and vertical images fit
+  // checks whether the image has width and height and if it does it sets a width that matches the aspect ratio
+  const portraitWidth =
+    !imgInfo || !imgInfo.w || !imgInfo.h || imgInfo.w > imgInfo.h
+      ? undefined
+      : toRem((MAX_SIZE * imgInfo.w) / imgInfo.h);
 
   return (
     <Attachment
       style={{
-        flexGrow: 1,
         flexShrink: 0,
-        width: fitParent ? '100%' : toRem(displayWidth),
-        height: fitParent ? '100%' : 'auto',
+        width: fitParent ? '100%' : portraitWidth,
+        height: fitParent ? '100%' : undefined,
+        maxWidth: fitParent ? undefined : toRem(MAX_SIZE),
+        maxHeight: fitParent ? undefined : toRem(MAX_SIZE),
+        minWidth: fitParent ? undefined : MIN_SIZE,
+        minHeight: fitParent ? undefined : MIN_SIZE,
       }}
       outlined={outlined}
     >
       <AttachmentBox
         style={{
           flexGrow: 1,
-          aspectRatio: fitParent ? undefined : aspectRatio,
-          width: fitParent ? '100%' : toRem(displayWidth),
-          height: fitParent ? '100%' : toRem(height < 48 ? 48 : height),
+          width: fitParent ? '100%' : portraitWidth,
+          height: fitParent ? '100%' : undefined,
         }}
       >
         {renderImageContent({

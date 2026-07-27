@@ -102,6 +102,8 @@ async fn wait_for_abort_signal(receiver: &mut watch::Receiver<bool>) {
     std::future::pending::<()>().await;
 }
 
+/// Base64 rather than raw bytes because Android has no `InvokeBody::Raw`: a
+/// `Uint8Array` degrades to a JSON `number[]` there and OOM-kills the renderer.
 #[tauri::command]
 pub async fn upload_write_chunk<R: Runtime>(
     app: AppHandle<R>,
@@ -180,6 +182,9 @@ async fn run_upload(
         return Err("native_upload only allows http(s) URLs".into());
     }
 
+    // Registered before any awaiting work so an abort arriving during setup is not missed.
+    let mut abort_receiver = register_abort_sender(request_id);
+
     let file = File::open(path)
         .await
         .map_err(|_| "no upload data for this request".to_string())?;
@@ -213,7 +218,6 @@ async fn run_upload(
         builder = builder.header(AUTHORIZATION, auth);
     }
 
-    let mut abort_receiver = register_abort_sender(request_id);
     let response = tokio::select! {
         response = builder.send() => response.map_err(|err| err.to_string())?,
         _ = wait_for_abort_signal(&mut abort_receiver) => return Err("Upload aborted".into()),
