@@ -10,7 +10,8 @@ import { SyncConnectionStatusBanner } from '$components/SyncConnectionStatus';
 import { useDesktopSetting } from '$state/hooks/desktopSettings';
 import { hasCustomDesktopTitlebar } from '$utils/tauriTitlebar';
 
-const DISCONNECTED_GRACE_MS = 2000;
+const DISCONNECTED_SHOW_DELAY_MS = 2000;
+const DISCONNECTED_HIDE_DELAY_MS = 3000;
 
 type StateData = {
   current: SyncState | null;
@@ -32,6 +33,39 @@ export const shouldShowConnecting = (
 export const shouldShowInlineSyncStatus = (hasCustomTitleBar: boolean): boolean =>
   !hasCustomTitleBar;
 
+export const useStickyDisconnected = (syncCurrent: SyncState | null): SyncState | null => {
+  const degraded =
+    syncCurrent === SyncState.Reconnecting || syncCurrent === SyncState.Error ? syncCurrent : null;
+  const showStartedAtRef = useRef<number | null>(null);
+  const [stickyDisconnected, setStickyDisconnected] = useState<SyncState | null>(null);
+
+  useEffect(() => {
+    if (degraded) {
+      if (stickyDisconnected) {
+        showStartedAtRef.current = null;
+        if (stickyDisconnected !== degraded) setStickyDisconnected(degraded);
+        return undefined;
+      }
+
+      const startedAt = showStartedAtRef.current ?? Date.now();
+      showStartedAtRef.current = startedAt;
+      const remaining = Math.max(0, DISCONNECTED_SHOW_DELAY_MS - (Date.now() - startedAt));
+      const id = setTimeout(() => {
+        showStartedAtRef.current = null;
+        setStickyDisconnected(degraded);
+      }, remaining);
+      return () => clearTimeout(id);
+    }
+
+    showStartedAtRef.current = null;
+    if (!stickyDisconnected) return undefined;
+    const id = setTimeout(() => setStickyDisconnected(null), DISCONNECTED_HIDE_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [degraded, stickyDisconnected]);
+
+  return stickyDisconnected;
+};
+
 type SyncStatusProps = {
   mx: MatrixClient;
 };
@@ -44,20 +78,8 @@ export function SyncStatus({ mx }: SyncStatusProps) {
     previous: undefined,
     showConnecting: false,
   });
-  const [showDisconnected, setShowDisconnected] = useState(false);
+  const stickyDisconnected = useStickyDisconnected(stateData.current);
   const { isHydrating, progress } = useSlidingSyncHydrating(mx);
-
-  const isDisconnected =
-    stateData.current === SyncState.Reconnecting || stateData.current === SyncState.Error;
-
-  useEffect(() => {
-    if (!isDisconnected) {
-      setShowDisconnected(false);
-      return undefined;
-    }
-    const timeoutId = setTimeout(() => setShowDisconnected(true), DISCONNECTED_GRACE_MS);
-    return () => clearTimeout(timeoutId);
-  }, [isDisconnected]);
 
   useSyncState(
     mx,
@@ -91,13 +113,14 @@ export function SyncStatus({ mx }: SyncStatusProps) {
   );
 
   const view = useMemo<TitlebarStatusView | null>(() => {
-    if (showDisconnected && stateData.current === SyncState.Error) {
+    if (stickyDisconnected === SyncState.Error) {
       return { text: 'Connection Lost!', variant: 'Critical' };
     }
-    if (showDisconnected && stateData.current === SyncState.Reconnecting) {
+    if (stickyDisconnected === SyncState.Reconnecting) {
       return { text: 'Connection Lost! Reconnecting...', variant: 'Warning' };
     }
-    if (stateData.showConnecting) return { text: 'Connecting...', variant: 'Success' };
+    if (!stickyDisconnected && stateData.showConnecting)
+      return { text: 'Connecting...', variant: 'Success' };
     if (
       isHydrating &&
       (stateData.current === SyncState.Syncing ||
@@ -108,10 +131,14 @@ export function SyncStatus({ mx }: SyncStatusProps) {
       if (progress && progress.totalRooms > 0) {
         percentage = Math.min(100, Math.floor((progress.loadedRooms / progress.totalRooms) * 100));
       }
-      return { text: 'Syncing room data...', variant: 'Success', progress: percentage };
+      return {
+        text: 'Syncing room data...',
+        variant: 'Success',
+        progress: percentage,
+      };
     }
     return null;
-  }, [stateData, showDisconnected, isHydrating, progress]);
+  }, [stateData, stickyDisconnected, isHydrating, progress]);
 
   // Publish to the atom that feeds the custom desktop titlebar's status pill.
   useEffect(() => {

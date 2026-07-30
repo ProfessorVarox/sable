@@ -25,14 +25,52 @@ export const Base = recipe({
       true: {
         maxWidth: '100vw',
         width: `calc(100vw - ${config.borderWidth.B300})`,
+        display: 'flex',
+        flexDirection: 'row',
+      },
+    },
+    sheet: {
+      true: {
+        backgroundColor: 'transparent',
+        border: 'none',
+        borderRadius: 0,
+        boxShadow: 'none',
+        height: '100%',
+        flex: 1,
+        minHeight: 0,
       },
     },
   },
 });
 
+export const Main = style({
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 0,
+});
+
+export const Body = style({
+  display: 'flex',
+  flexDirection: 'column',
+  flex: 1,
+  minHeight: 0,
+});
+
+export const ContentScroll = style({
+  flex: 1,
+  minHeight: 0,
+  // Keeps a fling that reaches either end from chaining out into the sheet.
+  overscrollBehavior: 'contain',
+});
+
 export const Header = style({
   padding: config.space.S300,
   paddingBottom: 0,
+});
+
+export const SheetHeader = style({
+  paddingTop: 0,
 });
 
 /**

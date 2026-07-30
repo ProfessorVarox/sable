@@ -127,6 +127,23 @@ describe('useMenuAnchor', () => {
     });
   });
 
+  describe('open', () => {
+    it('moves an already open menu to another element instead of closing it', () => {
+      const { result } = renderHook(() => useMenuAnchor());
+
+      act(() => {
+        result.current.open(createMockElement({ x: 10 }));
+      });
+      expect(result.current.anchor?.x).toBe(10);
+
+      // The toggling `openAt` would close here, stranding the caller's new target.
+      act(() => {
+        result.current.open(createMockElement({ x: 90 }));
+      });
+      expect(result.current.anchor?.x).toBe(90);
+    });
+  });
+
   describe('onClick', () => {
     it('opens the menu at the clicked element', () => {
       const { result } = renderHook(() => useMenuAnchor());
@@ -233,6 +250,70 @@ describe('useMenuAnchor', () => {
       // Should remain anchored to the long-press element position.
       expect(result.current.anchor).not.toBeUndefined();
       expect(result.current.anchor!.x).toBe(50);
+    });
+
+    it('stays open when the native contextmenu beats the long-press timer', () => {
+      const { result } = renderHook(() => useMenuAnchor());
+      const element = createMockElement({ x: 50, y: 100 });
+
+      act(() => {
+        result.current.triggerProps.onTouchStart({
+          currentTarget: element,
+          touches: [{ clientX: 50, clientY: 100 } as Touch],
+          changedTouches: [{ clientX: 50, clientY: 100 } as Touch],
+          preventDefault: vi.fn<() => void>(),
+          nativeEvent: new TouchEvent('touchstart'),
+        } as unknown as React.TouchEvent<HTMLElement>);
+      });
+
+      // The platform's own long press lands just before our timer does.
+      act(() => {
+        result.current.triggerProps.onContextMenu({
+          currentTarget: element,
+          preventDefault: vi.fn<() => void>(),
+          stopPropagation: vi.fn<() => void>(),
+          nativeEvent: { clientX: 120, clientY: 300 } as MouseEvent,
+        } as unknown as React.MouseEvent<HTMLElement>);
+      });
+      expect(result.current.anchor).not.toBeUndefined();
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      act(() => {
+        result.current.triggerProps.onTouchEnd();
+      });
+
+      expect(result.current.anchor).not.toBeUndefined();
+      expect(result.current.anchor!.x).toBe(120);
+    });
+
+    it('cancels a pending custom long press when its contextmenu path consumes the event', () => {
+      const onLongPress = vi.fn<() => void>();
+      const { result } = renderHook(() => useMenuAnchor({ onLongPress }));
+      const element = createMockElement();
+
+      act(() => {
+        result.current.triggerProps.onTouchStart({
+          currentTarget: element,
+          touches: [{ clientX: 50, clientY: 100 } as Touch],
+          changedTouches: [{ clientX: 50, clientY: 100 } as Touch],
+          preventDefault: vi.fn<() => void>(),
+          nativeEvent: new TouchEvent('touchstart'),
+        } as unknown as React.TouchEvent<HTMLElement>);
+      });
+
+      let longPressFired: boolean | undefined;
+      act(() => {
+        longPressFired = result.current.consumeLongPressFired();
+      });
+      expect(longPressFired).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(onLongPress).not.toHaveBeenCalled();
     });
   });
 

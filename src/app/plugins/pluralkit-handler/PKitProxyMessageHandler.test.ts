@@ -24,15 +24,9 @@ describe('PKitProxyMessageHandler', () => {
   });
 
   it('matches a proxied message, returns pmp, and strips content', async () => {
-    const proxyRegex = /^\[(.+)\]$/;
-
     (mocked.getAllPerMessageProfileProxies as unknown as Mock).mockResolvedValueOnce([
-      { profileId: 'p1', regexString: proxyRegex.toString() },
+      { profileId: 'p1', prefix: '[', suffix: ']' },
     ]);
-    (mocked.parsePerMessageProfileProxyAssociation as unknown as Mock).mockReturnValueOnce({
-      profileId: 'p1',
-      regex: proxyRegex,
-    });
     (mocked.getPerMessageProfileById as unknown as Mock).mockResolvedValueOnce({
       id: 'p1',
       name: 'Test',
@@ -46,5 +40,8 @@ describe('PKitProxyMessageHandler', () => {
     // getPmpBasedOnMessage refreshes/init() so we should be inited now
     expect(handler.isAProxiedMessage('[hello]')).toBe(true);
     expect(handler.stripProxyFromMessage('[hello]')).toBe('hello');
+
+    expect(handler.isAProxiedMessage('[hello\nworld]')).toBe(true);
+    expect(handler.stripProxyFromMessage('[hello\nworld]')).toBe('hello\nworld');
   });
 });

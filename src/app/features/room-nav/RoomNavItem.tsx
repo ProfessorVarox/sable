@@ -379,6 +379,7 @@ export function RoomNavItem({
   };
 
   const handleNavItemClick: MouseEventHandler<HTMLElement> = (evt) => {
+    if (menu.consumeLongPressFired() || menu.anchor) return;
     if (room.isCallRoom()) {
       if (!livekitSupport(autoDiscoveryInfo) && callMembers.length === 0) return;
       if (callEmbed && !isActiveCall) return;

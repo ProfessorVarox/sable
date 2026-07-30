@@ -80,6 +80,8 @@ targets:
       {{~#each ios-additional-targets}}
       - path: {{prefix-path this}}{{/each}}
       - path: LaunchScreen.storyboard
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
       # UNNotificationSound resolves names from the bundle root, not tauri's assets/ dir.
       - path: ../../resources/notification.caf
         buildPhase: resources
@@ -90,6 +92,9 @@ targets:
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
+        UIBackgroundModes: [audio]
+        NSMicrophoneUsageDescription: Sable uses your microphone for calls.
+        NSCameraUsageDescription: Sable uses your camera for video calls.
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -102,6 +107,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: {{apple.bundle-version-short}}
         CFBundleVersion: "{{apple.bundle-version}}"
+        UIBackgroundModes: [audio]
+        NSPhotoLibraryAddUsageDescription: Sable saves images you download to your photo library.
         # Mirrors plugins.deep-link in tauri.conf.json: the plugin only patches
         # these in when cargo reruns its build script, so a fresh `tauri ios
         # init` silently loses them unless they live here.

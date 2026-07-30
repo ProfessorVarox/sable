@@ -22,7 +22,7 @@ import {
   createUnifiedPushMessageListener,
   parseUnifiedPushMessage,
 } from './UnifiedPushMessageListener';
-import { addPluginListener } from '@tauri-apps/api/core';
+import { addPluginListener, invoke } from '@tauri-apps/api/core';
 import type { PushTransportConfig } from './NotificationTransport';
 import { getTauriNotificationsApi, isMobileTauri } from './TauriNotificationsApiClient';
 import {
@@ -305,6 +305,7 @@ type NotificationSettings = {
 const NOTIF_GROUP_KEY = 'matrix_messages';
 const MAX_MESSAGES = 10;
 const MAX_SEEN_EVENT_IDS = 200;
+const ENCRYPTED_PREVIEW_OBSERVATION_DEADLINE_MS = 2_500;
 
 type NotifPerson = {
   name: string;
@@ -362,20 +363,17 @@ async function decryptPreviewFromPayload(
 ): Promise<MatrixEvent | undefined> {
   const crypto = mx.getCrypto();
   if (!crypto || !pushData.content) return undefined;
-  try {
-    const mEvent = new MatrixEvent({
-      type: 'm.room.encrypted',
-      content: pushData.content,
-      room_id: roomId,
-      event_id: eventId,
-      sender: pushData.sender,
-      origin_server_ts: Date.now(),
-    });
-    await mEvent.attemptDecryption(crypto as CryptoBackend);
-    return mEvent;
-  } catch {
-    return undefined;
-  }
+  const mEvent = new MatrixEvent({
+    type: 'm.room.encrypted',
+    content: pushData.content,
+    room_id: roomId,
+    event_id: eventId,
+    sender: pushData.sender,
+    origin_server_ts: Date.now(),
+  });
+  await mEvent.attemptDecryption(crypto as CryptoBackend);
+  if (mEvent.isDecryptionFailure()) throw new Error('Encrypted preview decryption failed');
+  return mEvent;
 }
 
 const roomNotifId = (userId: string, roomId: string) => hashCode(`${userId}\u0000${roomId}`);
@@ -383,13 +381,49 @@ const summaryNotifId = (userId: string) => hashCode(`sable-group-summary\u0000${
 
 type RoomNotifCache = {
   key: string;
+  generation: number;
   roomName: string;
   messages: NotifMessage[];
+  pendingEventIds: Set<string>;
   seenEventIds: Set<string>;
   isGroupConversation: boolean;
 };
 
 const roomNotifCaches = new Map<string, RoomNotifCache>();
+const roomNotifGenerations = new Map<string, number>();
+const roomNotifQueues = new Map<string, Promise<void>>();
+const accountSummaryQueues = new Map<string, Promise<void>>();
+
+function enqueueRoomOperation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = roomNotifQueues.get(key) ?? Promise.resolve();
+  const task = previous.then(operation, operation);
+  const completion = task.then(
+    () => undefined,
+    () => undefined
+  );
+  roomNotifQueues.set(key, completion);
+  void completion.then(() => {
+    if (roomNotifQueues.get(key) === completion) roomNotifQueues.delete(key);
+  });
+  return task;
+}
+
+function enqueueAccountSummaryOperation<T>(
+  userId: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const previous = accountSummaryQueues.get(userId) ?? Promise.resolve();
+  const task = previous.then(operation, operation);
+  const completion = task.then(
+    () => undefined,
+    () => undefined
+  );
+  accountSummaryQueues.set(userId, completion);
+  void completion.then(() => {
+    if (accountSummaryQueues.get(userId) === completion) accountSummaryQueues.delete(userId);
+  });
+  return task;
+}
 
 function resolveAvatarUrl(mx: MatrixClient, roomId: string, userId: string): string | undefined {
   const room = mx.getRoom(roomId);
@@ -403,33 +437,113 @@ function getOrCreateRoomCache(userId: string, roomId: string, roomName: string):
   const key = `${userId}\u0000${roomId}`;
   let cache = roomNotifCaches.get(key);
   if (!cache) {
-    cache = { key, roomName, messages: [], seenEventIds: new Set(), isGroupConversation: false };
+    cache = {
+      key,
+      generation: roomNotifGenerations.get(key) ?? 0,
+      roomName,
+      messages: [],
+      pendingEventIds: new Set(),
+      seenEventIds: new Set(),
+      isGroupConversation: false,
+    };
     roomNotifCaches.set(key, cache);
   }
   cache.roomName = roomName;
   return cache;
 }
 
+function isCurrentRoomCache(cache: RoomNotifCache): boolean {
+  return (
+    roomNotifCaches.get(cache.key) === cache &&
+    (roomNotifGenerations.get(cache.key) ?? 0) === cache.generation
+  );
+}
+
+export function resetUnifiedPushNotificationStateForTests(): void {
+  roomNotifCaches.clear();
+  roomNotifGenerations.clear();
+  roomNotifQueues.clear();
+  accountSummaryQueues.clear();
+}
+
+async function refreshAccountSummary(
+  userId: string,
+  removeWhenEmpty: boolean,
+  isCurrent?: () => boolean
+): Promise<void> {
+  await enqueueAccountSummaryOperation(userId, async () => {
+    let notificationsApi: Awaited<ReturnType<typeof getTauriNotificationsApi>>;
+    try {
+      notificationsApi = await getTauriNotificationsApi();
+    } catch {
+      return;
+    }
+    if (isCurrent && !isCurrent()) return;
+
+    const accountCaches = Array.from(roomNotifCaches.entries()).filter(([key]) =>
+      key.startsWith(`${userId}\u0000`)
+    );
+    const roomCount = accountCaches.length;
+    if (roomCount <= 1) {
+      if (removeWhenEmpty) {
+        try {
+          await notificationsApi.removeActive([{ id: summaryNotifId(userId) }]);
+        } catch {
+          // already dismissed
+        }
+      }
+      return;
+    }
+
+    const totalMessages = accountCaches
+      .map(([, accountCache]) => accountCache)
+      .reduce((sum, accountCache) => sum + accountCache.messages.length, 0);
+    const summaryText = `${totalMessages} messages in ${roomCount} chats`;
+    const summaryLines: string[] = [];
+    accountCaches.forEach(([, accountCache]) => {
+      const latest = accountCache.messages[accountCache.messages.length - 1];
+      if (latest) {
+        summaryLines.push(
+          `${accountCache.roomName}: ${latest.sender?.name ?? 'You'}: ${latest.text}`
+        );
+      }
+    });
+
+    if (isCurrent && !isCurrent()) return;
+    try {
+      await notificationsApi.sendNotification({
+        id: summaryNotifId(userId),
+        title: summaryText,
+        body: '',
+        summary: summaryText,
+        inboxLines: summaryLines.slice(-5),
+        channelId: 'messages',
+        group: NOTIF_GROUP_KEY,
+        groupSummary: true,
+        icon: 'notification_icon',
+        silent: true,
+        autoCancel: true,
+      });
+    } catch {
+      // The room notification was already posted; a summary is best effort.
+    }
+  });
+}
+
 /** Clears accumulated messages for a room and dismisses its notification. */
 export async function clearRoomNotification(userId: string, roomId: string) {
-  roomNotifCaches.delete(`${userId}\u0000${roomId}`);
-  try {
-    const notificationsApi = await getTauriNotificationsApi();
-    await notificationsApi.removeActive([{ id: roomNotifId(userId, roomId) }]);
-  } catch {
-    // already dismissed
-  }
-  const accountRoomCount = Array.from(roomNotifCaches.keys()).filter((key) =>
-    key.startsWith(`${userId}\u0000`)
-  ).length;
-  if (accountRoomCount <= 1) {
+  const key = `${userId}\u0000${roomId}`;
+  await enqueueRoomOperation(key, async () => {
+    roomNotifCaches.delete(key);
+    roomNotifGenerations.set(key, (roomNotifGenerations.get(key) ?? 0) + 1);
     try {
       const notificationsApi = await getTauriNotificationsApi();
-      await notificationsApi.removeActive([{ id: summaryNotifId(userId) }]);
+      await notificationsApi.removeActive([{ id: roomNotifId(userId, roomId) }]);
     } catch {
-      // ignore
+      // already dismissed
     }
-  }
+    await refreshAccountSummary(userId, true);
+  });
 }
 
 async function postRoomNotification(
@@ -437,9 +551,11 @@ async function postRoomNotification(
   roomId: string,
   cache: RoomNotifCache,
   isSilent: boolean,
-  extra: Record<string, unknown>
-) {
+  extra: Record<string, unknown>,
+  isCurrent?: () => boolean
+): Promise<boolean> {
   const notificationsApi = await getTauriNotificationsApi();
+  if (isCurrent && !isCurrent()) return false;
   const { messages, roomName } = cache;
   const latestMsg = messages[messages.length - 1];
   const latestBody = latestMsg ? `${latestMsg.sender?.name ?? 'You'}: ${latestMsg.text}` : '';
@@ -460,46 +576,16 @@ async function postRoomNotification(
     inboxLines: inboxLines.length > 1 ? inboxLines : undefined,
     largeBody: inboxLines.length > 1 ? undefined : latestBody,
   });
-
-  const accountCaches = Array.from(roomNotifCaches.entries()).filter(([key]) =>
-    key.startsWith(`${userId}\u0000`)
-  );
-  const roomCount = accountCaches.length;
-  if (roomCount > 1) {
-    const totalMessages = accountCaches
-      .map(([, accountCache]) => accountCache)
-      .reduce((sum, c) => sum + c.messages.length, 0);
-    const summaryText = `${totalMessages} messages in ${roomCount} chats`;
-    const summaryLines: string[] = [];
-    accountCaches
-      .map(([, accountCache]) => accountCache)
-      .forEach((c) => {
-        const latest = c.messages[c.messages.length - 1];
-        if (latest) {
-          summaryLines.push(`${c.roomName}: ${latest.sender?.name ?? 'You'}: ${latest.text}`);
-        }
-      });
-    await notificationsApi.sendNotification({
-      id: summaryNotifId(userId),
-      title: summaryText,
-      body: '',
-      summary: summaryText,
-      inboxLines: summaryLines.slice(-5),
-      channelId: 'messages',
-      group: NOTIF_GROUP_KEY,
-      groupSummary: true,
-      icon: 'notification_icon',
-      silent: true,
-      autoCancel: true,
-    });
-  }
+  await refreshAccountSummary(userId, false, isCurrent);
+  return true;
 }
 
 /** Handles a rich push payload containing full event details (type, room_name, content, etc.). */
 async function handleRichPushPayload(
   pushData: UnifiedPushPayload,
   settings: NotificationSettings,
-  userId: string
+  userId: string,
+  getSettings: () => NotificationSettings
 ) {
   const eventType = pushData.type as EventType;
 
@@ -539,6 +625,8 @@ async function handleRichPushPayload(
 
       const eventId: string | undefined = pushData?.event_id;
 
+      let needsEncryptedPreviewEnrichment = false;
+
       if (
         previewText === ENCRYPTED_MESSAGE_PREVIEW &&
         eventId &&
@@ -559,19 +647,10 @@ async function handleRichPushPayload(
             showMessageContent: settings.showMessageContent,
             showEncryptedMessageContent: settings.showEncryptedMessageContent,
           });
+          needsEncryptedPreviewEnrichment =
+            mEvent.getType() === EventType.RoomMessageEncrypted.toString();
         } else {
-          // Decrypt the ciphertext from the push payload locally — no
-          // homeserver fetch needed. The Megolm keys are in the crypto store.
-          const decrypted = await decryptPreviewFromPayload(settings.mx, roomId, eventId, pushData);
-          if (decrypted) {
-            previewText = resolveNotificationPreviewText({
-              content: decrypted.getContent(),
-              eventType: decrypted.getType(),
-              isEncryptedRoom: true,
-              showMessageContent: settings.showMessageContent,
-              showEncryptedMessageContent: settings.showEncryptedMessageContent,
-            });
-          }
+          needsEncryptedPreviewEnrichment = true;
         }
       }
 
@@ -589,26 +668,71 @@ async function handleRichPushPayload(
         sender,
       };
 
-      const cache = getOrCreateRoomCache(userId, roomId, roomName);
+      const key = `${userId}\u0000${roomId}`;
+      let enrichmentCache: RoomNotifCache | undefined;
+      let enrichmentMessage: NotifMessage | undefined;
+      const posted = await enqueueRoomOperation(key, async () => {
+        const cache = getOrCreateRoomCache(userId, roomId, roomName);
+        if (eventId && (cache.pendingEventIds.has(eventId) || cache.seenEventIds.has(eventId))) {
+          return false;
+        }
+        if (eventId) cache.pendingEventIds.add(eventId);
+        const previousMessages = cache.messages.slice();
+        cache.messages.push(message);
+        if (cache.messages.length > MAX_MESSAGES) {
+          cache.messages = cache.messages.slice(-MAX_MESSAGES);
+        }
 
-      if (eventId && cache.seenEventIds.has(eventId)) break;
-      if (eventId) cache.seenEventIds.add(eventId);
+        const currentRoom = settings.mx.getRoom(roomId);
+        if (currentRoom) {
+          cache.isGroupConversation = (currentRoom.getJoinedMemberCount() ?? 0) > 2;
+        }
 
-      cache.messages.push(message);
-      if (cache.messages.length > MAX_MESSAGES) {
-        cache.messages = cache.messages.slice(-MAX_MESSAGES);
-      }
+        try {
+          await postRoomNotification(userId, roomId, cache, isSilent, {
+            room_id: roomId,
+            event_id: pushData?.event_id,
+            user_id: pushData?.user_id,
+          });
+        } catch {
+          cache.messages = previousMessages;
+          if (eventId) cache.pendingEventIds.delete(eventId);
+          if (cache.messages.length === 0) roomNotifCaches.delete(cache.key);
+          await refreshAccountSummary(userId, true);
+          unifiedPushLog.warn('notification', 'UnifiedPush baseline notification failed');
+          return false;
+        }
 
-      const room = settings.mx.getRoom(roomId);
-      if (room) {
-        cache.isGroupConversation = (room.getJoinedMemberCount() ?? 0) > 2;
-      }
-
-      await postRoomNotification(userId, roomId, cache, isSilent, {
-        room_id: roomId,
-        event_id: pushData?.event_id,
-        user_id: pushData?.user_id,
+        if (eventId) {
+          cache.pendingEventIds.delete(eventId);
+          cache.seenEventIds.add(eventId);
+          if (cache.seenEventIds.size > MAX_SEEN_EVENT_IDS) {
+            const oldest = cache.seenEventIds.values().next().value;
+            if (oldest !== undefined) cache.seenEventIds.delete(oldest);
+          }
+        }
+        enrichmentCache = cache;
+        enrichmentMessage = message;
+        return true;
       });
+
+      if (
+        posted &&
+        needsEncryptedPreviewEnrichment &&
+        eventId &&
+        enrichmentCache &&
+        enrichmentMessage
+      ) {
+        scheduleEncryptedPreviewEnrichment(
+          pushData,
+          roomId,
+          eventId,
+          enrichmentCache,
+          enrichmentMessage,
+          userId,
+          getSettings
+        );
+      }
       break;
     }
     case EventType.RoomMember: {
@@ -643,6 +767,116 @@ async function handleRichPushPayload(
   }
 }
 
+function scheduleEncryptedPreviewEnrichment(
+  pushData: UnifiedPushPayload,
+  roomId: string,
+  eventId: string,
+  cache: RoomNotifCache,
+  message: NotifMessage,
+  userId: string,
+  getSettings: () => NotificationSettings
+): void {
+  const initialSettings = getSettings();
+  if (!initialSettings.showMessageContent || !initialSettings.showEncryptedMessageContent) return;
+
+  let settled = false;
+  let deadlineExpired = false;
+  const deadlineTimer = setTimeout(() => {
+    if (!settled) {
+      deadlineExpired = true;
+      unifiedPushLog.warn(
+        'notification',
+        'Encrypted preview decryption exceeded observation deadline'
+      );
+    }
+  }, ENCRYPTED_PREVIEW_OBSERVATION_DEADLINE_MS);
+
+  const enrichment = decryptPreviewFromPayload(initialSettings.mx, roomId, eventId, pushData);
+  void enrichment
+    .then(async (decrypted) => {
+      if (deadlineExpired || !decrypted) return;
+
+      await enqueueRoomOperation(cache.key, async () => {
+        const liveSettings = getSettings();
+        const isAllowed =
+          liveSettings.showMessageContent &&
+          liveSettings.showEncryptedMessageContent &&
+          !(document.visibilityState === 'visible' && liveSettings.useInAppNotifications);
+        if (!isAllowed || !isCurrentRoomCache(cache) || !cache.messages.includes(message)) {
+          return;
+        }
+
+        const enrichedPreview = resolveNotificationPreviewText({
+          content: decrypted.getContent(),
+          eventType: decrypted.getType(),
+          isEncryptedRoom: true,
+          showMessageContent: liveSettings.showMessageContent,
+          showEncryptedMessageContent: liveSettings.showEncryptedMessageContent,
+        });
+        if (!enrichedPreview || enrichedPreview === ENCRYPTED_MESSAGE_PREVIEW) return;
+
+        const liveRoom = liveSettings.mx.getRoom(roomId);
+        const decryptedSender = decrypted.getSender();
+        const senderName = decryptedSender
+          ? (liveRoom?.getMember(decryptedSender)?.name ??
+            getMxIdLocalPart(decryptedSender) ??
+            decryptedSender)
+          : undefined;
+        const previousText = message.text;
+        const previousSender = message.sender;
+        message.text = enrichedPreview;
+        message.sender = senderName
+          ? {
+              name: senderName,
+              key: decryptedSender,
+              iconUrl: decryptedSender
+                ? resolveAvatarUrl(liveSettings.mx, roomId, decryptedSender)
+                : undefined,
+            }
+          : message.sender;
+
+        const current = () => {
+          const currentSettings = getSettings();
+          return (
+            isCurrentRoomCache(cache) &&
+            cache.messages.includes(message) &&
+            currentSettings.showMessageContent &&
+            currentSettings.showEncryptedMessageContent &&
+            !(document.visibilityState === 'visible' && currentSettings.useInAppNotifications)
+          );
+        };
+        try {
+          const posted = await postRoomNotification(
+            userId,
+            roomId,
+            cache,
+            true,
+            {
+              room_id: roomId,
+              event_id: eventId,
+              user_id: pushData?.user_id,
+            },
+            current
+          );
+          if (!posted) {
+            message.text = previousText;
+            message.sender = previousSender;
+          }
+        } catch {
+          message.text = previousText;
+          message.sender = previousSender;
+        }
+      });
+    })
+    .catch(() => {
+      unifiedPushLog.warn('notification', 'Encrypted preview decryption failed');
+    })
+    .finally(() => {
+      settled = true;
+      clearTimeout(deadlineTimer);
+    });
+}
+
 /**
  * Handles a minimal push payload (event_id + room_id + counts) from
  * the public UnifiedPush gateway, looking up context from local SDK state.
@@ -650,7 +884,8 @@ async function handleRichPushPayload(
 async function handleMinimalPushPayload(
   pushData: UnifiedPushPayload,
   settings: NotificationSettings,
-  userId: string
+  userId: string,
+  getSettings: () => NotificationSettings
 ) {
   const roomId: string | undefined = pushData?.room_id;
   const eventId: string | undefined = pushData?.event_id;
@@ -712,31 +947,50 @@ async function handleMinimalPushPayload(
     sender,
   };
 
-  const cache = getOrCreateRoomCache(userId, roomId, roomName);
-
-  if (eventId && cache.seenEventIds.has(eventId)) return;
-  if (eventId) {
-    cache.seenEventIds.add(eventId);
-    if (cache.seenEventIds.size > MAX_SEEN_EVENT_IDS) {
-      const oldest = cache.seenEventIds.values().next().value;
-      if (oldest !== undefined) cache.seenEventIds.delete(oldest);
+  const key = `${userId}\u0000${roomId}`;
+  let baselineCache: RoomNotifCache | undefined;
+  const posted = await enqueueRoomOperation(key, async () => {
+    const cache = getOrCreateRoomCache(userId, roomId, roomName);
+    if (eventId && (cache.pendingEventIds.has(eventId) || cache.seenEventIds.has(eventId)))
+      return false;
+    if (eventId) cache.pendingEventIds.add(eventId);
+    const previousMessages = cache.messages.slice();
+    cache.messages.push(message);
+    if (cache.messages.length > MAX_MESSAGES) {
+      cache.messages = cache.messages.slice(-MAX_MESSAGES);
     }
-  }
 
-  cache.messages.push(message);
-  if (cache.messages.length > MAX_MESSAGES) {
-    cache.messages = cache.messages.slice(-MAX_MESSAGES);
-  }
+    if (room) {
+      cache.isGroupConversation = (room.getJoinedMemberCount() ?? 0) > 2;
+    }
 
-  if (room) {
-    cache.isGroupConversation = (room.getJoinedMemberCount() ?? 0) > 2;
-  }
+    try {
+      await postRoomNotification(userId, roomId, cache, !settings.notificationSoundEnabled, {
+        room_id: roomId,
+        event_id: eventId,
+        user_id: pushData?.user_id,
+      });
+    } catch (error) {
+      cache.messages = previousMessages;
+      if (eventId) cache.pendingEventIds.delete(eventId);
+      if (cache.messages.length === 0) roomNotifCaches.delete(cache.key);
+      await refreshAccountSummary(userId, true);
+      throw error;
+    }
 
-  await postRoomNotification(userId, roomId, cache, !settings.notificationSoundEnabled, {
-    room_id: roomId,
-    event_id: eventId,
-    user_id: pushData?.user_id,
+    if (eventId) {
+      cache.pendingEventIds.delete(eventId);
+      cache.seenEventIds.add(eventId);
+      if (cache.seenEventIds.size > MAX_SEEN_EVENT_IDS) {
+        const oldest = cache.seenEventIds.values().next().value;
+        if (oldest !== undefined) cache.seenEventIds.delete(oldest);
+      }
+    }
+    baselineCache = cache;
+    return true;
   });
+  if (!posted || !baselineCache) return;
+  const cache = baselineCache;
 
   if (
     !hasInMemoryPreview &&
@@ -746,43 +1000,79 @@ async function handleMinimalPushPayload(
   ) {
     resolvePreviewEvent(settings.mx, roomId, eventId)
       .then(async (fetched) => {
-        // Skip if the notification was dismissed/replaced or the message evicted while fetching.
-        if (!fetched || roomNotifCaches.get(cache.key) !== cache) return;
-        if (!cache.messages.includes(message)) return;
+        if (!fetched) return;
 
-        // Trust the fetched event's own encryption, not the (possibly-absent) room.
-        const eventEncrypted = isEncryptedRoom || fetched.isEncrypted();
-        const enrichedPreview = resolveNotificationPreviewText({
-          content: fetched.getContent(),
-          eventType: fetched.getType(),
-          isEncryptedRoom: eventEncrypted,
-          showMessageContent: settings.showMessageContent,
-          showEncryptedMessageContent: settings.showEncryptedMessageContent,
-        });
-        if (!enrichedPreview) return;
+        await enqueueRoomOperation(cache.key, async () => {
+          const liveSettings = getSettings();
+          const eventEncrypted = isEncryptedRoom || fetched.isEncrypted();
+          const isAllowed =
+            liveSettings.showMessageContent &&
+            (!eventEncrypted || liveSettings.showEncryptedMessageContent) &&
+            !(document.visibilityState === 'visible' && liveSettings.useInAppNotifications);
+          if (!isAllowed || !isCurrentRoomCache(cache) || !cache.messages.includes(message)) {
+            return;
+          }
 
-        const fetchedSender = fetched.getSender();
-        if (fetchedSender) {
-          senderName =
-            room?.getMember(fetchedSender)?.name ??
-            getMxIdLocalPart(fetchedSender) ??
-            fetchedSender;
-          senderId = fetchedSender;
-        }
-        message.text = enrichedPreview;
-        message.sender = senderName
-          ? {
-              name: senderName,
-              key: senderId,
-              iconUrl:
-                senderId && roomId ? resolveAvatarUrl(settings.mx, roomId, senderId) : undefined,
+          const enrichedPreview = resolveNotificationPreviewText({
+            content: fetched.getContent(),
+            eventType: fetched.getType(),
+            isEncryptedRoom: eventEncrypted,
+            showMessageContent: liveSettings.showMessageContent,
+            showEncryptedMessageContent: liveSettings.showEncryptedMessageContent,
+          });
+          if (!enrichedPreview) return;
+
+          const fetchedSender = fetched.getSender();
+          const liveRoom = liveSettings.mx.getRoom(roomId);
+          const nextSenderName = fetchedSender
+            ? (liveRoom?.getMember(fetchedSender)?.name ??
+              getMxIdLocalPart(fetchedSender) ??
+              fetchedSender)
+            : undefined;
+          const previousText = message.text;
+          const previousSender = message.sender;
+          message.text = enrichedPreview;
+          message.sender = nextSenderName
+            ? {
+                name: nextSenderName,
+                key: fetchedSender,
+                iconUrl: fetchedSender
+                  ? resolveAvatarUrl(liveSettings.mx, roomId, fetchedSender)
+                  : undefined,
+              }
+            : sender;
+
+          const current = () => {
+            const currentSettings = getSettings();
+            return (
+              isCurrentRoomCache(cache) &&
+              cache.messages.includes(message) &&
+              currentSettings.showMessageContent &&
+              (!eventEncrypted || currentSettings.showEncryptedMessageContent) &&
+              !(document.visibilityState === 'visible' && currentSettings.useInAppNotifications)
+            );
+          };
+          try {
+            const sent = await postRoomNotification(
+              userId,
+              roomId,
+              cache,
+              true,
+              {
+                room_id: roomId,
+                event_id: eventId,
+                user_id: pushData?.user_id,
+              },
+              current
+            );
+            if (!sent) {
+              message.text = previousText;
+              message.sender = previousSender;
             }
-          : sender;
-
-        await postRoomNotification(userId, roomId, cache, true, {
-          room_id: roomId,
-          event_id: eventId,
-          user_id: pushData?.user_id,
+          } catch {
+            message.text = previousText;
+            message.sender = previousSender;
+          }
         });
       })
       .catch((error) => {
@@ -811,13 +1101,15 @@ async function handleUnifiedPushPayload(
   const userId = pushData?.user_id ?? settings.mx.getUserId() ?? '';
 
   if (eventType) {
-    await handleRichPushPayload(pushData, settings, userId);
+    await handleRichPushPayload(pushData, settings, userId, getSettings);
   } else {
-    await handleMinimalPushPayload(pushData, settings, userId);
+    await handleMinimalPushPayload(pushData, settings, userId, getSettings);
   }
 }
 
-export function listenForUnifiedPushMessages(getSettings: () => NotificationSettings) {
+const SET_PUSH_MESSAGE_LISTENER_ACTIVE = 'plugin:notifications|set_push_message_listener_active';
+
+export async function listenForUnifiedPushMessages(getSettings: () => NotificationSettings) {
   const dispatch = createUnifiedPushMessageListener(
     (notification) => handleUnifiedPushPayload(notification, getSettings),
     (error) => {
@@ -829,8 +1121,25 @@ export function listenForUnifiedPushMessages(getSettings: () => NotificationSett
     }
   );
 
-  return addPluginListener('notifications', 'push-message', (data: unknown) => {
+  const listener = await addPluginListener('notifications', 'push-message', (data: unknown) => {
     const notification = parseUnifiedPushMessage(data);
     if (notification) dispatch(notification);
   });
+
+  try {
+    await invoke(SET_PUSH_MESSAGE_LISTENER_ACTIVE, { active: true });
+  } catch (error) {
+    await listener.unregister().catch(() => {});
+    throw error;
+  }
+
+  return {
+    unregister: async () => {
+      try {
+        await invoke(SET_PUSH_MESSAGE_LISTENER_ACTIVE, { active: false });
+      } finally {
+        await listener.unregister();
+      }
+    },
+  };
 }

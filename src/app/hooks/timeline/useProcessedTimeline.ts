@@ -16,6 +16,7 @@ import {
 } from '$utils/room/relations';
 import { inSameDay, minuteDifference } from '$utils/time';
 import type { ResolvedHiddenEventSettings } from '$state/hooks/settings';
+import { M_POLL_START } from 'matrix-js-sdk';
 
 export interface UseProcessedTimelineOptions {
   items: number[];
@@ -79,6 +80,7 @@ export const STANDARD_RENDERED_EVENT_TYPES = new Set([
   'm.room.message',
   'm.room.message.encrypted',
   'm.sticker',
+  M_POLL_START.name,
   'm.room.member',
   'm.room.name',
   'm.room.topic',
@@ -631,8 +633,11 @@ export function useProcessedTimeline({
       previous.itemsLength === previous.timelineEvents.length &&
       items.length > previous.itemsLength &&
       items.every((item, index) => item === index) &&
-      previous.timelineEvents[0]?.mEvent === timelineEvents[0]?.mEvent &&
-      previous.timelineEvents.at(-1)?.mEvent === timelineEvents[previous.itemsLength - 1]?.mEvent &&
+      // Cached rows are reused verbatim, so anchoring on the first and last event
+      // alone would accept a run that both inserted and removed within the prefix.
+      previous.timelineEvents.every(
+        (entry, index) => entry.mEvent === timelineEvents[index]?.mEvent
+      ) &&
       (appendedEntries.length === 0 ||
         (previous.timelineEvents.at(-1)?.mEvent.getTs() ?? 0) <=
           (appendedEntries[0]?.getTs() ?? 0)) &&

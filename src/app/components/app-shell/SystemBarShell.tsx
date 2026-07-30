@@ -10,6 +10,7 @@ const safeAreaLeft = 'var(--safe-area-inset-left, env(safe-area-inset-left, 0px)
 const safeAreaRight = 'var(--safe-area-inset-right, env(safe-area-inset-right, 0px))';
 
 const TRANSPARENT = /^(transparent$|rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\))/;
+export const SYSTEM_BAR_REFRESH_EVENT = 'sable-system-bar-refresh';
 
 // First non-transparent background color painted at (x, y).
 function readSurfaceColor(x: number, y: number): string | undefined {
@@ -71,6 +72,7 @@ function useBarColor(
       frame = requestAnimationFrame(sample);
     };
     const schedule = () => {
+      runSample();
       window.clearTimeout(timer);
       timer = window.setTimeout(runSample, 120);
     };
@@ -86,12 +88,14 @@ function useBarColor(
     });
     observer.observe(document.head, { childList: true }); // remote-theme css
     window.addEventListener('resize', schedule);
+    window.addEventListener(SYSTEM_BAR_REFRESH_EVENT, sample);
 
     return () => {
       window.clearTimeout(timer);
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener('resize', schedule);
+      window.removeEventListener(SYSTEM_BAR_REFRESH_EVENT, sample);
     };
   }, [probeRef, edge, android, enabled]);
 

@@ -162,6 +162,20 @@ export type NativeTauriNotification = {
   icon?: string;
 };
 
+// String-coerce `data` into the plugin's Record<string, string> extra, dropping
+// nullish keys and any value that isn't a string/number/boolean (objects would
+// stringify to '[object Object]').
+export function buildNotificationExtra(data: unknown): Record<string, string> {
+  const extra: Record<string, string> = {};
+  if (data && typeof data === 'object') {
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+      if (typeof v === 'string') extra[k] = v;
+      else if (typeof v === 'number' || typeof v === 'boolean') extra[k] = String(v);
+    }
+  }
+  return extra;
+}
+
 export async function sendNativeTauriNotification({
   title,
   body,

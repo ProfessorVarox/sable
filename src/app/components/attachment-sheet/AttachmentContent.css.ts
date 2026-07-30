@@ -1,51 +1,23 @@
 import { style } from '@vanilla-extract/css';
 import { color, toRem } from 'folds';
 
-export const Backdrop = style({
-  position: 'absolute',
-  inset: 0,
-  zIndex: 1000,
-  background: 'rgba(0, 0, 0, 0.42)',
-  touchAction: 'none',
-});
-
 export const Sheet = style({
-  position: 'absolute',
-  left: 0,
-  right: 0,
-  bottom: 0,
-  zIndex: 1001,
   display: 'flex',
   flexDirection: 'column',
   width: '100%',
   minWidth: 0,
   boxSizing: 'border-box',
-  background: color.Surface.Container,
-  borderTopLeftRadius: toRem(20),
-  borderTopRightRadius: toRem(20),
-  paddingBottom: `calc(${toRem(12)} + env(safe-area-inset-bottom, 0px))`,
-  maxHeight: '100%',
+  // The panel supplies the safe-area inset; this is just the gutter under the actions.
+  paddingBottom: toRem(12),
   overflowX: 'hidden',
   overflowY: 'auto',
-  boxShadow: '0 -4px 24px rgba(0, 0, 0, 0.15)',
+  overscrollBehavior: 'contain',
 });
 
 export const SheetHeader = style({
   position: 'relative',
   flexShrink: 0,
-  padding: `${toRem(22)} ${toRem(16)} ${toRem(8)}`,
-});
-
-export const DragHandle = style({
-  position: 'absolute',
-  top: toRem(8),
-  left: '50%',
-  width: toRem(40),
-  height: toRem(4),
-  borderRadius: toRem(4),
-  background: color.Surface.OnContainer,
-  opacity: 0.3,
-  transform: 'translateX(-50%)',
+  padding: `0 ${toRem(16)} ${toRem(8)}`,
 });
 
 export const Heading = style({

@@ -86,10 +86,8 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
               <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
               <Text>{' accepted '}</Text>
               <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-              <Text>
-                {`'s join request `}
-                {reason}
-              </Text>
+              <Text>{`'s join request`}</Text>
+              <Text>{reason ? `(${reason})` : null}</Text>
             </>
           ),
         };
@@ -102,7 +100,7 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
             <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
             <Text>{' invited '}</Text>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-            <Text>{reason}</Text>
+            <Text>{reason ? `(${reason})` : null}</Text>
           </>
         ),
       };
@@ -114,10 +112,8 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
         body: (
           <>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-            <Text>
-              {' requested to join room: '}
-              <i>{reason}</i>
-            </Text>
+            <Text>{' requested to join room'}</Text>
+            <Text>{reason ? `(${reason})` : null}</Text>
           </>
         ),
       };
@@ -130,6 +126,7 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
           <>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
             <Text>{' joined the room'}</Text>
+            <Text>{reason ? `(${reason})` : null}</Text>
           </>
         ),
       };
@@ -143,20 +140,16 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
             senderId === userId ? (
               <>
                 <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-                <Text>
-                  {' rejected the invitation '}
-                  {reason}
-                </Text>
+                <Text>{' rejected the invitation'}</Text>
+                <Text>{reason ? `(${reason})` : null}</Text>
               </>
             ) : (
               <>
                 <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
                 <Text>{' rejected '}</Text>
                 <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-                <Text>
-                  {`'s join request `}
-                  {reason}
-                </Text>
+                <Text>{`'s join request`}</Text>
+                <Text>{reason ? `(${reason})` : null}</Text>
               </>
             ),
         };
@@ -169,20 +162,16 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
             senderId === userId ? (
               <>
                 <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-                <Text>
-                  {' revoked joined request '}
-                  {reason}
-                </Text>
+                <Text>{' revoked joined request'}</Text>
+                <Text>{reason ? `(${reason})` : null}</Text>
               </>
             ) : (
               <>
                 <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
                 {' revoked '}
                 <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-                <Text>
-                  {`'s invite `}
-                  {reason}
-                </Text>
+                <Text>{`'s invite`}</Text>
+                <Text>{reason ? `(${reason})` : null}</Text>
               </>
             ),
         };
@@ -196,7 +185,7 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
               <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
               <Text>{' unbanned '}</Text>
               <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-              <Text>{reason}</Text>
+              <Text>{reason ? `(${reason})` : null}</Text>
             </>
           ),
         };
@@ -208,17 +197,15 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
           senderId === userId ? (
             <>
               <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-              <Text>
-                {' left the room '}
-                {reason}
-              </Text>
+              <Text>{' left the room '}</Text>
+              <Text>{reason ? `(${reason})` : null}</Text>
             </>
           ) : (
             <>
               <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
               <Text>{' kicked '}</Text>
               <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-              <Text>{reason}</Text>
+              <Text>{reason ? `(${reason})` : null}</Text>
             </>
           ),
       };
@@ -232,7 +219,7 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
             <DecoratedUser roomId={roomId ?? ''} userId={senderId} userName={senderName} />
             <Text>{' banned '}</Text>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-            <Text>{reason}</Text>
+            <Text>{reason ? `(${reason})` : null}</Text>
           </>
         ),
       };
@@ -257,7 +244,7 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
         ) : (
           <>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={prevUserName} />
-            <Text>{' removed their display name '}</Text>
+            <Text>{' removed their display name'}</Text>
           </>
         ),
     };
@@ -274,7 +261,7 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
         ) : (
           <>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
-            <Text>{' removed their avatar '}</Text>
+            <Text>{' removed their avatar'}</Text>
           </>
         ),
     };

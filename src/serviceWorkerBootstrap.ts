@@ -5,8 +5,25 @@ import { getFallbackSession, MATRIX_SESSIONS_KEY, ACTIVE_SESSION_KEY } from './a
 import { getLocalStorageItem } from './app/state/utils/atomWithLocalStorage';
 import { hasServiceWorker } from './app/utils/platform';
 import { pushSessionToSW } from './sw-session';
+import { waitForSessionTokenRefresh } from './client/oidcTokenRefresher';
 
 const log = createLogger('service-worker-bootstrap');
+const REFRESH_WAIT_TIMEOUT_MS = 2500;
+
+const waitForRefreshWithTimeout = async (userId: string): Promise<void> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(resolve, REFRESH_WAIT_TIMEOUT_MS);
+  });
+  await Promise.race([waitForSessionTokenRefresh(userId), timeout]);
+  if (timeoutId !== undefined) clearTimeout(timeoutId);
+};
+
+const getActiveSession = () => {
+  const sessions = getLocalStorageItem<Sessions>(MATRIX_SESSIONS_KEY, []);
+  const activeId = getLocalStorageItem<string | undefined>(ACTIVE_SESSION_KEY, undefined);
+  return sessions.find((s) => s.userId === activeId) ?? sessions[0] ?? getFallbackSession();
+};
 
 const showUpdateAvailablePrompt = (registration: ServiceWorkerRegistration) => {
   const DONT_SHOW_PROMPT_KEY = 'cinny_dont_show_sw_update_prompt';
@@ -23,11 +40,11 @@ const showUpdateAvailablePrompt = (registration: ServiceWorkerRegistration) => {
   );
 };
 
-const sendSessionToSW = () => {
-  const sessions = getLocalStorageItem<Sessions>(MATRIX_SESSIONS_KEY, []);
-  const activeId = getLocalStorageItem<string | undefined>(ACTIVE_SESSION_KEY, undefined);
-  const active = sessions.find((s) => s.userId === activeId) ?? sessions[0] ?? getFallbackSession();
-  pushSessionToSW(active?.baseUrl, active?.accessToken, active?.userId);
+const sendSessionToSW = async () => {
+  const active = getActiveSession();
+  if (active) await waitForRefreshWithTimeout(active.userId);
+  const current = getActiveSession();
+  await pushSessionToSW(current?.baseUrl, current?.accessToken, current?.userId);
 };
 
 export function registerAppServiceWorker() {
@@ -76,7 +93,7 @@ export function registerAppServiceWorker() {
     const { type } = data as { type?: unknown };
 
     if (type === 'requestSession') {
-      sendSessionToSW();
+      void sendSessionToSW();
     }
 
     if (data.type === 'token' && data.id) {

@@ -78,6 +78,16 @@ function makeManager(mx: ReturnType<typeof makeMockMx>): SlidingSyncManager {
   return new SlidingSyncManager(mx, 'https://sliding.example.com');
 }
 
+function makeRoomWithTimeline(eventCount: number) {
+  const events = Array.from({ length: eventCount }, () => ({ status: null }));
+  return {
+    getLiveTimeline: vi.fn<() => { getEvents: () => typeof events }>(() => ({
+      getEvents: () => events,
+    })),
+    resetLiveTimeline: vi.fn<() => void>(),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
@@ -129,7 +139,7 @@ describe('SlidingSyncManager initial request', () => {
       required_state: [[EventType.RoomMember, '$ME']],
       filters: { is_invite: false },
     });
-    expect(defaultSubscription.timeline_limit).toBe(30);
+    expect(defaultSubscription.timeline_limit).toBe(50);
     expect(defaultSubscription.required_state).toContainEqual([EventType.RoomMember, '$LAZY']);
     expect(defaultSubscription.required_state).not.toContainEqual([EventType.RoomMember, '*']);
     expect(mocks.slidingSyncConstructorArgs?.[4]).toBe(45000);
@@ -590,6 +600,24 @@ describe('SlidingSyncManager room subscription coordination', () => {
     );
   });
 
+  it('registers a 50-event active room subscription and a single-event sidebar subscription', () => {
+    makeManager(makeMockMx());
+
+    const calls = mocks.slidingSyncInstance.addCustomSubscription.mock.calls as unknown as [
+      string,
+      { timeline_limit: number; required_state: [string, string][] },
+    ][];
+    const activeRoom = calls.find(([name]) => name === 'active_room');
+    const sidebarRoom = calls.find(([name]) => name === 'sidebar_room');
+
+    expect(activeRoom).toBeDefined();
+    expect(activeRoom![1].timeline_limit).toBe(50);
+    expect(activeRoom![1].required_state).toContainEqual([EventType.RoomMember, '$LAZY']);
+
+    expect(sidebarRoom).toBeDefined();
+    expect(sidebarRoom![1].timeline_limit).toBe(1);
+  });
+
   it('registers the composite space+image-pack subscription', () => {
     makeManager(makeMockMx());
 
@@ -743,9 +771,14 @@ describe('SlidingSyncManager local membership reconciliation', () => {
     const updateMyMembership = vi.fn<() => void>();
     const manager = makeManager(
       makeMockMx({
-        getRoom: vi.fn<() => { updateMyMembership: typeof updateMyMembership }>().mockReturnValue({
-          updateMyMembership,
-        }),
+        getRoom: vi
+          .fn<() => { updateMyMembership: typeof updateMyMembership; getLiveTimeline: unknown }>()
+          .mockReturnValue({
+            updateMyMembership,
+            getLiveTimeline: vi.fn<() => { getEvents: () => unknown[] }>(() => ({
+              getEvents: () => [],
+            })),
+          }),
       })
     );
     manager.subscribeToRoom('!room:example.com');
@@ -940,9 +973,14 @@ describe('SlidingSyncManager local membership reconciliation', () => {
     const updateMyMembership = vi.fn<() => void>();
     const manager = makeManager(
       makeMockMx({
-        getRoom: vi.fn<() => { updateMyMembership: typeof updateMyMembership }>().mockReturnValue({
-          updateMyMembership,
-        }),
+        getRoom: vi
+          .fn<() => { updateMyMembership: typeof updateMyMembership; getLiveTimeline: unknown }>()
+          .mockReturnValue({
+            updateMyMembership,
+            getLiveTimeline: vi.fn<() => { getEvents: () => unknown[] }>(() => ({
+              getEvents: () => [],
+            })),
+          }),
       })
     );
     manager.subscribeToRoom('!room:example.com');
@@ -952,6 +990,27 @@ describe('SlidingSyncManager local membership reconciliation', () => {
 
     expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Leave);
     expect(manager.isRoomActive('!room:example.com')).toBe(false);
+  });
+});
+
+describe('SlidingSyncManager room deactivation', () => {
+  it('removes the active subscription without resetting the live timeline', () => {
+    const roomId = '!room:example.com';
+    const room = makeRoomWithTimeline(151);
+    const manager = makeManager(
+      makeMockMx({
+        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
+      })
+    );
+
+    manager.subscribeToRoom(roomId);
+    mocks.slidingSyncInstance.modifyRoomSubscriptions.mockClear();
+    manager.unsubscribeFromRoom(roomId);
+
+    expect(manager.isRoomActive(roomId)).toBe(false);
+    expect(manager.getActiveRoomSubscriptionIds()).toEqual([]);
+    expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenCalledWith(new Set());
+    expect(room.resetLiveTimeline).not.toHaveBeenCalled();
   });
 });
 

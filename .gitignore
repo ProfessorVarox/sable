@@ -42,6 +42,7 @@ src-tauri/target/
 src-tauri/gen/android/app/build/
 # Tauri Apple outputs
 src-tauri/gen/apple/*
+!src-tauri/gen/apple/PrivacyInfo.xcprivacy
 # Tauri Android release keystore
 *.jks
 

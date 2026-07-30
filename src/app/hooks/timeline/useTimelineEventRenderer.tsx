@@ -870,7 +870,7 @@ export function useTimelineEventRenderer({
                       )}
                     />
                   );
-                if (type === (EventType.RoomMessage as string)) {
+                if (type === (EventType.RoomMessage as string) || type === M_POLL_START.name) {
                   const editedEvent = getEditedEvent(mEventId, mEvent, timelineSet);
                   let editedNewContent: unknown;
                   if (editedEvent) {
@@ -903,6 +903,7 @@ export function useTimelineEventRenderer({
                       htmlReactParserOptions={htmlReactParserOptions}
                       linkifyOpts={linkifyOpts}
                       outlineAttachment={messageLayout === MessageLayout.Bubble}
+                      mEvent={mEvent}
                       mx={mx}
                       room={room}
                     />

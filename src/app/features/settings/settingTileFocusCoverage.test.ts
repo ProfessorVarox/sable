@@ -114,6 +114,22 @@ describe('settings tile focus coverage', () => {
       expect(offenders, '<SettingTile> or <SettingToggle> tags missing focusId prop').toEqual([]);
     });
 
+    it('focusIds exists for a specific SettingTile', () => {
+      const missing: {
+        file: string;
+        focusId: string;
+      }[] = [];
+
+      for (const [file, source] of fileContents) {
+        for (const focusId of extractLiteralFocusIds(source)) {
+          if (!allLinkMapIds.has(focusId)) {
+            missing.push({ file, focusId });
+          }
+        }
+      }
+      expect(missing, 'focusId expected to exist in settingsLinkFocusIdsBySection').toEqual([]);
+    });
+
     it('literal focusIds in a component directory belong to the correct section', () => {
       const mismatches: {
         file: string;

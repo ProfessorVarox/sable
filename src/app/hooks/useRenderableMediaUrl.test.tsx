@@ -3,9 +3,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { Provider, createStore } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const platform = vi.hoisted(() => ({
-  hasServiceWorker: vi.fn<() => boolean>(),
-  hasControllingServiceWorker: vi.fn<() => boolean>(),
+const swMediaAuth = vi.hoisted(() => ({
+  getCachedSWMediaAuthSupport: vi.fn<() => boolean | undefined>(),
+  probeSWMediaAuthSupport: vi.fn<() => Promise<boolean>>(async () => false),
+  subscribeSWMediaAuthSupport: vi.fn<() => () => void>(() => () => {}),
 }));
 
 const mediaTransport = vi.hoisted(() => ({
@@ -21,15 +22,19 @@ const tauriApi = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock('$utils/platform', () => platform);
+vi.mock('$utils/swMediaAuth', () => swMediaAuth);
 vi.mock('$utils/mediaTransport', () => mediaTransport);
 vi.mock('@tauri-apps/api/core', () => tauriApi);
 
 describe('useRenderableMediaUrl', () => {
   beforeEach(() => {
     vi.resetModules();
-    platform.hasServiceWorker.mockReset();
-    platform.hasControllingServiceWorker.mockReset();
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReset();
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(false);
+    swMediaAuth.probeSWMediaAuthSupport.mockReset();
+    swMediaAuth.probeSWMediaAuthSupport.mockResolvedValue(false);
+    swMediaAuth.subscribeSWMediaAuthSupport.mockReset();
+    swMediaAuth.subscribeSWMediaAuthSupport.mockReturnValue(() => {});
     mediaTransport.fetchMediaBlob.mockReset();
     mediaTransport.getCurrentMediaSessionScope.mockReset();
     mediaTransport.getCurrentMediaSessionScope.mockReturnValue('anonymous');
@@ -55,9 +60,8 @@ describe('useRenderableMediaUrl', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns the original url when a service worker runtime is available', async () => {
-    platform.hasServiceWorker.mockReturnValue(true);
-    platform.hasControllingServiceWorker.mockReturnValue(true);
+  it('returns the original url when the service worker acks media-auth support', async () => {
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(true);
     const { useRenderableMediaUrl } = await import('./useRenderableMediaUrl');
 
     const { result } = renderHook(() => useRenderableMediaUrl('https://example.org/media.png'));
@@ -66,9 +70,8 @@ describe('useRenderableMediaUrl', () => {
     expect(mediaTransport.fetchMediaBlob).not.toHaveBeenCalled();
   }, 20_000);
 
-  it('rejects non-browser-safe media urls in service worker runtimes', async () => {
-    platform.hasServiceWorker.mockReturnValue(true);
-    platform.hasControllingServiceWorker.mockReturnValue(true);
+  it('rejects non-browser-safe media urls when media-auth support is confirmed', async () => {
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(true);
     const { useRenderableMediaUrl } = await import('./useRenderableMediaUrl');
     const javascriptUrlValue = ['javascript', 'alert(1)'].join(':');
 
@@ -82,9 +85,7 @@ describe('useRenderableMediaUrl', () => {
     expect(mediaTransport.fetchMediaBlob).not.toHaveBeenCalled();
   });
 
-  it('returns a blob url in no-service-worker runtimes', async () => {
-    platform.hasServiceWorker.mockReturnValue(false);
-    platform.hasControllingServiceWorker.mockReturnValue(false);
+  it('returns a blob url while media-auth support is unconfirmed', async () => {
     mediaTransport.fetchMediaBlob.mockResolvedValue(new Blob(['media'], { type: 'image/png' }));
     const { useRenderableMediaUrl } = await import('./useRenderableMediaUrl');
 
@@ -98,9 +99,7 @@ describe('useRenderableMediaUrl', () => {
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
   });
 
-  it('does not fetch invalid media urls in no-service-worker runtimes', async () => {
-    platform.hasServiceWorker.mockReturnValue(false);
-    platform.hasControllingServiceWorker.mockReturnValue(false);
+  it('does not fetch invalid media urls while media-auth support is unconfirmed', async () => {
     const { useRenderableMediaUrl } = await import('./useRenderableMediaUrl');
 
     const { result } = renderHook(() => useRenderableMediaUrl('data:text/html,boom'));
@@ -110,9 +109,7 @@ describe('useRenderableMediaUrl', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
-  it('returns existing blob urls unchanged in no-service-worker runtimes', async () => {
-    platform.hasServiceWorker.mockReturnValue(false);
-    platform.hasControllingServiceWorker.mockReturnValue(false);
+  it('returns existing blob urls unchanged while media-auth support is unconfirmed', async () => {
     const { useRenderableMediaUrl } = await import('./useRenderableMediaUrl');
 
     const { result } = renderHook(() =>
@@ -124,9 +121,7 @@ describe('useRenderableMediaUrl', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
-  it('uses the blob-backed path until the service worker controls the page', async () => {
-    platform.hasServiceWorker.mockReturnValue(true);
-    platform.hasControllingServiceWorker.mockReturnValue(false);
+  it('uses the blob-backed path until the service worker acks media-auth support', async () => {
     mediaTransport.fetchMediaBlob.mockResolvedValue(new Blob(['media'], { type: 'image/png' }));
     const { useRenderableMediaUrl } = await import('./useRenderableMediaUrl');
 
@@ -140,8 +135,6 @@ describe('useRenderableMediaUrl', () => {
   });
 
   it('refetches blob-backed media when the active session changes', async () => {
-    platform.hasServiceWorker.mockReturnValue(false);
-    platform.hasControllingServiceWorker.mockReturnValue(false);
     mediaTransport.fetchMediaBlob
       .mockResolvedValueOnce(new Blob(['alice'], { type: 'image/png' }))
       .mockResolvedValueOnce(new Blob(['bob'], { type: 'image/png' }));
@@ -186,8 +179,6 @@ describe('useRenderableMediaUrl', () => {
   });
 
   it('retains the object url in LRU cache when consumers unmount and revokes on cache clear', async () => {
-    platform.hasServiceWorker.mockReturnValue(false);
-    platform.hasControllingServiceWorker.mockReturnValue(false);
     mediaTransport.fetchMediaBlob.mockResolvedValue(new Blob(['media'], { type: 'image/png' }));
     const { useRenderableMediaUrl, clearRenderableMediaUrlCache } =
       await import('./useRenderableMediaUrl');

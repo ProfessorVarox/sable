@@ -1,8 +1,8 @@
 import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
-import { Box, Button, Text, Avatar, config, IconButton, Input } from 'folds';
-import { menuIcon, X } from '$components/icons/phosphor';
+import { Box, Button, Text, Avatar, config, IconButton, Input, toRem, Spinner, color } from 'folds';
+import { menuIcon, Trash, X } from '$components/icons/phosphor';
 import type { MatrixClient } from '$types/matrix-sdk';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { nameInitials } from '$utils/common';
 import { mxcUrlToHttp } from '$utils/matrix';
 import { useFilePicker } from '$hooks/useFilePicker';
@@ -13,12 +13,302 @@ import { UserAvatar } from '$components/user-avatar';
 import { CompactUploadCardRenderer } from '$components/upload-card';
 import {
   addOrUpdatePerMessageProfile,
+  associateProxyWithProfile,
+  createProxyKey,
   deletePerMessageProfile,
+  dropProxyAssociationForPMP,
+  getAllPerMessageProfileProxies,
+  getAllProxiesForPMP,
+  getPerMessageProfileById,
+  type PerMessageProfileProxyAssociationV2,
   renamePerMessageProfile,
 } from '$hooks/usePerMessageProfile';
 import type { PronounSet } from '$utils/pronouns';
 import { parsePronounsStringToPronounsSetArray } from '$utils/pronouns';
+import { generateShortId } from '$utils/shortIdGen';
 import { SettingTile } from '$components/setting-tile';
+import { type AsyncState, AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+
+const constructProxyString = (s: Shorthand) => {
+  return `${s.prefix ?? ''}text${s.suffix ?? ''}`;
+};
+
+type Shorthand = { id: string; prefix?: string; suffix?: string };
+type ShorthandRow = Shorthand & { rowId: string };
+
+type ShorthandListItemProps = Shorthand & {
+  onDelete: (shorthandId: string) => void;
+  onSave: (shorthandId: string, shorthand: Shorthand) => void;
+  deleteState: AsyncState<void>;
+  saveState: AsyncState<void>;
+};
+function ShorthandListItem({
+  id,
+  prefix,
+  suffix,
+  onDelete,
+  onSave,
+  deleteState,
+  saveState,
+}: ShorthandListItemProps) {
+  const [currentPrefix] = useState(prefix);
+  const [currentSuffix] = useState(suffix);
+  const [newPrefix, setNewPrefix] = useState(prefix);
+  const [newSuffix, setNewSuffix] = useState(suffix);
+
+  const [prefixWarn, setPrefixWarn] = useState(false);
+  const [suffixWarn, setSuffixWarn] = useState(false);
+
+  const handlePrefixChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewPrefix(e.target.value);
+  }, []);
+  const handleSuffixChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewSuffix(e.target.value);
+  }, []);
+
+  const hasChanges = useMemo(
+    () =>
+      (newPrefix ?? '') !== (currentPrefix ?? '') || (newSuffix ?? '') !== (currentSuffix ?? ''),
+    [newPrefix, newSuffix, currentPrefix, currentSuffix]
+  );
+  const isBlank = useMemo(() => !newPrefix && !newSuffix, [newPrefix, newSuffix]);
+
+  useEffect(() => {
+    setPrefixWarn((newPrefix ?? '').endsWith(' '));
+    setSuffixWarn((newSuffix ?? '').startsWith(' '));
+  }, [newPrefix, newSuffix]);
+
+  const handleSave = () =>
+    onSave(id, {
+      id: createProxyKey(newPrefix, newSuffix),
+      prefix: newPrefix?.trimStart(),
+      suffix: newSuffix?.trimEnd(),
+    });
+
+  return (
+    <SequenceCard
+      className={SequenceCardStyle}
+      variant="Surface"
+      style={{ padding: toRem(8) }}
+      gap="100"
+    >
+      <Box
+        direction="Column"
+        style={{ width: '100%' }} /* sorry, complex layout, idk what's happening */
+      >
+        {(prefixWarn || suffixWarn) && (
+          <Text size="T200" style={{ color: color.Warning.Main }}>
+            Whitespace inside of a shorthand will require whitespace{' '}
+            {prefixWarn && suffixWarn
+              ? 'before/after'
+              : prefixWarn
+                ? 'before'
+                : suffixWarn
+                  ? 'after'
+                  : 'before/after'}{' '}
+            text to match.
+          </Text>
+        )}
+        <Box direction="Row" gap="100">
+          <Input
+            value={newPrefix}
+            style={{ flexGrow: 1, height: '2rem' }}
+            placeholder="Prefix..."
+            variant={prefixWarn ? 'Warning' : 'Secondary'}
+            radii="300"
+            onChange={handlePrefixChange}
+          />
+          <Input
+            value={newSuffix}
+            style={{ flexGrow: 1, height: '2rem' }}
+            placeholder="Suffix..."
+            variant={suffixWarn ? 'Warning' : 'Secondary'}
+            radii="300"
+            onChange={handleSuffixChange}
+          />
+          <Box gap="100" style={{ marginLeft: toRem(6) }}>
+            <Button
+              onClick={() => onDelete(id)}
+              size="300"
+              variant="Critical"
+              disabled={isBlank}
+              fill="Soft"
+              outlined
+              radii="300"
+              aria-label="Delete shorthand"
+            >
+              {deleteState.status === AsyncStatus.Loading ? (
+                <Spinner size="100" variant="Primary" fill="Solid" />
+              ) : (
+                menuIcon(Trash)
+              )}
+            </Button>
+            <Button
+              onClick={handleSave}
+              size="300"
+              variant="Primary"
+              disabled={!hasChanges}
+              fill="Soft"
+              outlined
+              radii="300"
+              aria-label="Update shorthand"
+            >
+              {saveState.status === AsyncStatus.Loading ? (
+                <Spinner size="100" variant="Primary" fill="Solid" />
+              ) : (
+                <Text size="B300">Save</Text>
+              )}
+            </Button>
+          </Box>
+        </Box>
+      </Box>
+    </SequenceCard>
+  );
+}
+
+type ShorthandEditorProps = {
+  mx: MatrixClient;
+  profileId: string;
+};
+function ShorthandEditor({ mx, profileId }: ShorthandEditorProps) {
+  const [shorthands, setShorthands] = useState<ShorthandRow[]>();
+
+  const containsBlankShorthand = useMemo(
+    () => shorthands && shorthands.some((shorthand) => !shorthand.prefix && !shorthand.suffix),
+    [shorthands]
+  );
+
+  const handleAddShorthand = () => {
+    if (shorthands !== undefined) {
+      setShorthands([...shorthands, { id: 'blank', rowId: generateShortId(16) }]);
+    }
+  };
+
+  const [deleteShorthandState, handleDeleteShorthand] = useAsyncCallback(
+    useCallback(
+      async (id: string) => {
+        if (shorthands === undefined) return;
+
+        const shorthandToDelete = shorthands.find((shorthand) => shorthand.id === id);
+        if (!shorthandToDelete) return;
+
+        const proxy = constructProxyString(shorthandToDelete);
+
+        await dropProxyAssociationForPMP(mx, proxy);
+
+        setShorthands((s) => s?.filter((shorthand) => shorthand.id !== id));
+      },
+      [mx, shorthands]
+    )
+  );
+
+  const [saveShorthandState, handleSaveShorthand] = useAsyncCallback<
+    void,
+    Error,
+    [string, Shorthand]
+  >(
+    useCallback(
+      async (oldId: string, shorthand: Shorthand) => {
+        if (shorthands === undefined) return;
+
+        const shorthandAssociation = (await getAllPerMessageProfileProxies(mx)).find(
+          (association) => createProxyKey(association.prefix, association.suffix) === shorthand.id
+        );
+        const shorthandAssociatedProfile = shorthandAssociation
+          ? await getPerMessageProfileById(mx, shorthandAssociation.profileId)
+          : undefined;
+        if (shorthandAssociatedProfile) {
+          throw new Error(
+            `Shorthand is already associated with profile ${shorthandAssociatedProfile.name} (${shorthandAssociatedProfile.id})`
+          );
+        }
+
+        if (oldId !== 'blank') {
+          await dropProxyAssociationForPMP(mx, oldId);
+        }
+        await associateProxyWithProfile(mx, profileId, shorthand.prefix, shorthand.suffix, false);
+
+        setShorthands((currentShorthands) => {
+          if (currentShorthands === undefined) return currentShorthands;
+
+          const oldShorthandIdx = currentShorthands.findIndex((s) => s.id === oldId);
+          if (oldShorthandIdx < 0) return currentShorthands;
+          const oldShorthand = currentShorthands[oldShorthandIdx];
+          if (oldShorthand === undefined) return currentShorthands;
+
+          return currentShorthands.with(oldShorthandIdx, {
+            ...shorthand,
+            rowId: oldShorthand.rowId,
+          });
+        });
+      },
+      [mx, shorthands, profileId]
+    )
+  );
+
+  useEffect(() => {
+    const fetchShorthands = async () => {
+      const fetchedShorthands: PerMessageProfileProxyAssociationV2[] = await getAllProxiesForPMP(
+        mx,
+        profileId
+      );
+      const enumeratedShorthands: ShorthandRow[] = fetchedShorthands.map((v) => {
+        return { id: createProxyKey(v.prefix, v.suffix), rowId: generateShortId(16), ...v };
+      });
+      setShorthands(enumeratedShorthands);
+    };
+    fetchShorthands();
+  }, [mx, profileId]);
+
+  return (
+    <>
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="400"
+      >
+        <SettingTile
+          title="Shorthands"
+          description="Use this persona for a single message using a prefix or suffix."
+          focusId={`shorthandsInput-${profileId}`}
+        >
+          {saveShorthandState.status === AsyncStatus.Error && (
+            <Text size="T200" style={{ color: color.Critical.Main }}>
+              {saveShorthandState.error.toString()}
+            </Text>
+          )}
+          {shorthands === undefined ? (
+            <Spinner size="400" />
+          ) : (
+            shorthands.map((shorthand: ShorthandRow) => (
+              <ShorthandListItem
+                key={shorthand.rowId}
+                id={shorthand.id}
+                prefix={shorthand.prefix}
+                suffix={shorthand.suffix}
+                onDelete={handleDeleteShorthand}
+                onSave={handleSaveShorthand}
+                deleteState={deleteShorthandState}
+                saveState={saveShorthandState}
+              />
+            ))
+          )}
+          <Button
+            onClick={handleAddShorthand}
+            size="400"
+            radii="300"
+            variant="Primary"
+            disabled={containsBlankShorthand}
+            /* add aria label and title pls */
+          >
+            <Text size="B300">Add new shorthand</Text>
+          </Button>
+        </SettingTile>
+      </SequenceCard>
+    </>
+  );
+}
 
 /**
  * the props we use for the per-message profile editor, which is used to edit a per-message profile. This is used in the settings page when the user wants to edit a profile.
@@ -29,6 +319,7 @@ type PerMessageProfileEditorProps = {
   avatarMxcUrl?: string;
   displayName?: string;
   pronouns?: PronounSet[];
+  shorthands?: Shorthand[];
   onDelete?: (profileId: string) => void;
 };
 
@@ -135,13 +426,15 @@ export function PerMessageProfileEditor({
   /**
    * persisting the data :3
    */
-  const handleSave = useCallback(() => {
-    addOrUpdatePerMessageProfile(mx, {
-      id: profileId,
-      name: newDisplayName,
-      avatarUrl: avatarMxc,
-      pronouns: newPronouns,
-    }).then(() => {
+  const [saveState, handleSave] = useAsyncCallback(
+    useCallback(async () => {
+      await addOrUpdatePerMessageProfile(mx, {
+        id: profileId,
+        name: newDisplayName,
+        avatarUrl: avatarMxc,
+        pronouns: newPronouns,
+      });
+
       setCurrentDisplayName(newDisplayName);
       setCurrentPronouns(newPronouns);
       setImageHasChanges(false);
@@ -152,16 +445,17 @@ export function PerMessageProfileEditor({
           setCurrentId(newId);
         });
       }
-    });
-  }, [mx, profileId, newDisplayName, avatarMxc, newPronouns, hasIdChange, newId]);
+    }, [mx, profileId, newDisplayName, avatarMxc, newPronouns, hasIdChange, newId])
+  );
 
-  const handleDelete = useCallback(() => {
-    deletePerMessageProfile(mx, profileId).then(() => {
+  const [deleteState, handleDelete] = useAsyncCallback(
+    useCallback(async () => {
+      await deletePerMessageProfile(mx, profileId);
       setCurrentDisplayName('');
       setCurrentPronouns([]);
       if (onDelete) onDelete(profileId);
-    });
-  }, [mx, profileId, onDelete]);
+    }, [mx, profileId, onDelete])
+  );
 
   const handleIdChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setNewId(e.target.value);
@@ -367,11 +661,16 @@ export function PerMessageProfileEditor({
           size="400"
           radii="300"
           variant="Critical"
+          disabled={deleteState.status === AsyncStatus.Loading}
           fill="None"
           aria-label={`Delete profile ${profileId}`}
           title={`Delete profile ${profileId}`}
         >
-          <Text size="B300">Delete</Text>
+          {deleteState.status === AsyncStatus.Loading ? (
+            <Spinner size="100" variant="Critical" fill="Solid" />
+          ) : (
+            <Text size="B300">Delete persona</Text>
+          )}
         </Button>
 
         <Button
@@ -379,13 +678,20 @@ export function PerMessageProfileEditor({
           size="400"
           radii="300"
           variant="Primary"
-          disabled={!hasChanges}
+          disabled={!hasChanges || saveState.status === AsyncStatus.Loading}
           aria-label={`Save profile changes for ${profileId}`}
           title={`Save profile changes for ${profileId}`}
         >
-          <Text size="B300">Save</Text>
+          {saveState.status === AsyncStatus.Loading ? (
+            <Spinner size="100" variant="Primary" fill="Solid" />
+          ) : (
+            <Text size="B300">Save</Text>
+          )}
         </Button>
       </Box>
+
+      <Text size="L400">Shorthands</Text>
+      <ShorthandEditor mx={mx} profileId={profileId} />
     </Box>
   );
 }

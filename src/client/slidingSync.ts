@@ -43,7 +43,7 @@ const SIDEBAR_ROOM_SUBSCRIPTION_KEY = 'sidebar_room';
 const SPACE_SUBSCRIPTION_KEY = 'space';
 const IMAGE_PACK_SUBSCRIPTION_KEY = 'image_packs';
 const SPACE_IMAGE_PACK_SUBSCRIPTION_KEY = 'space_image_packs';
-const ACTIVE_ROOM_TIMELINE_LIMIT = 30;
+const ACTIVE_ROOM_TIMELINE_LIMIT = 50;
 
 export type PartialSlidingSyncRequest = {
   filters?: MSC3575List['filters'];

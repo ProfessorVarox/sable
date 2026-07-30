@@ -45,7 +45,18 @@ const openMediaInNewTab = async (url: string | undefined) => {
   }
   const blob = await downloadMedia(url);
   const blobUrl = URL.createObjectURL(blob);
-  window.open(blobUrl, '_blank');
+  const child = window.open(blobUrl, '_blank');
+  if (!child) {
+    URL.revokeObjectURL(blobUrl);
+    return;
+  }
+  // Retain the URL until the tab closes since video playback can re-fetch it.
+  const timer = window.setInterval(() => {
+    if (child.closed) {
+      window.clearInterval(timer);
+      URL.revokeObjectURL(blobUrl);
+    }
+  }, 1000);
 };
 
 function ogPositiveDimension(value: unknown): number | undefined {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const platform = vi.hoisted(() => ({
-  hasControllingServiceWorker: vi.fn<() => boolean>(),
+const swMediaAuth = vi.hoisted(() => ({
+  getCachedSWMediaAuthSupport: vi.fn<() => boolean | undefined>(),
 }));
 
 const mediaCache = vi.hoisted(() => {
@@ -25,7 +25,7 @@ const appFetch = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock('$utils/platform', () => platform);
+vi.mock('./swMediaAuth', () => swMediaAuth);
 vi.mock('$utils/fetch', () => appFetch);
 vi.mock('./mediaCache', () => mediaCache);
 
@@ -34,8 +34,8 @@ describe('fetchMediaBlob', () => {
 
   beforeEach(() => {
     vi.resetModules();
-    platform.hasControllingServiceWorker.mockReset();
-    platform.hasControllingServiceWorker.mockReturnValue(false);
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReset();
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(false);
     appFetch.fetch.mockClear();
     mediaCache.cache.clear();
     mediaCache.getFromMediaCache.mockClear();
@@ -357,7 +357,7 @@ describe('fetchMediaBlob', () => {
   });
 
   it('fetches once on the service worker path when it returns an auth error', async () => {
-    platform.hasControllingServiceWorker.mockReturnValue(true);
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(true);
     const { fetchMediaBlob } = await import('./mediaTransport');
     const url = 'https://example.org/auth-media.png';
 
@@ -375,7 +375,7 @@ describe('fetchMediaBlob', () => {
   });
 
   it('bypasses the service worker path when explicit auth overrides are provided', async () => {
-    platform.hasControllingServiceWorker.mockReturnValue(true);
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(true);
     const { fetchMediaBlob } = await import('./mediaTransport');
     const url = 'https://example.org/auth-media.png';
     const getAccessToken = vi.fn<() => string>(() => 'widget-token');
@@ -398,7 +398,7 @@ describe('fetchMediaBlob', () => {
   });
 
   it('uses direct auth fetches when service workers are supported but not controlling', async () => {
-    platform.hasControllingServiceWorker.mockReturnValue(false);
+    swMediaAuth.getCachedSWMediaAuthSupport.mockReturnValue(false);
     const { fetchMediaBlob } = await import('./mediaTransport');
     const url = 'https://matrix.example.org/_matrix/client/v1/media/download/example.org/media-id';
     const headersSeen: Array<string | null> = [];

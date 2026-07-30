@@ -20,7 +20,14 @@ import { bootstrapSettingsStore } from '$state/settings';
 import { AppShell } from '$components/app-shell';
 import { normalizeOAuthCallbackUrl } from '$utils/oauthCallback';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    // Webviews can fire `offline` without a matching `online`, which otherwise
+    // pauses every query forever. `always` defaults refetchOnReconnect to false.
+    queries: { networkMode: 'always', refetchOnReconnect: true },
+    mutations: { networkMode: 'always' },
+  },
+});
 const ReactQueryDevtools = lazy(async () => {
   const { ReactQueryDevtools: Devtools } = await import('@tanstack/react-query-devtools');
 

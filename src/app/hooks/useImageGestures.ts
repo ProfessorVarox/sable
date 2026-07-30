@@ -119,7 +119,6 @@ export const useImageGestures = (active: boolean, step = 0.2, min = 0.1, max = 5
       prepareForTransform();
       e.stopPropagation();
       const target = e.target as HTMLElement;
-      target.setPointerCapture(e.pointerId);
 
       // Double click zoom
       const now = Date.now();

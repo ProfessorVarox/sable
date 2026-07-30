@@ -32,10 +32,10 @@ fn main() {
     ) {
         format!("{} Nightly", base)
     } else {
-        base
+        base.clone()
     };
 
-    println!("cargo:rustc-env=SABLE_PRODUCT_NAME={}", full_name);
+    println!("cargo:rustc-env=SABLE_PRODUCT_NAME={}", base);
     println!(
         "cargo:rustc-env=TAURI_CONFIG={{\"productName\":\"{}\"}}",
         full_name

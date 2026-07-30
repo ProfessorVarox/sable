@@ -99,7 +99,7 @@ export async function sendText(
   roomId: string,
   text: string,
   txnId: number
-): Promise<void> {
+): Promise<string> {
   const url = `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`;
   const res = await fetch(url, {
     method: 'PUT',
@@ -109,4 +109,76 @@ export async function sendText(
   if (!res.ok) {
     throw new Error(`sendText failed: ${res.status} ${await res.text()}`);
   }
+  return ((await res.json()) as { event_id: string }).event_id;
+}
+
+export async function inviteUser(
+  baseUrl: string,
+  token: string,
+  roomId: string,
+  userId: string
+): Promise<void> {
+  const url = `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) {
+    throw new Error(`inviteUser failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+export async function joinRoom(baseUrl: string, token: string, roomId: string): Promise<void> {
+  const url = `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/join`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: '{}',
+  });
+  if (!res.ok) {
+    throw new Error(`joinRoom failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+export type RoomMessage = {
+  eventId: string;
+  body: string;
+};
+
+export async function getRoomMessages(
+  baseUrl: string,
+  token: string,
+  roomId: string
+): Promise<RoomMessage[]> {
+  const messages: RoomMessage[] = [];
+  let from: string | undefined;
+  do {
+    const params = new URLSearchParams({ dir: 'b', limit: '100' });
+    if (from) params.set('from', from);
+    const url = `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages?${params}`;
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      throw new Error(`getRoomMessages failed: ${res.status} ${await res.text()}`);
+    }
+    const data = (await res.json()) as {
+      chunk?: {
+        type?: string;
+        event_id?: string;
+        content?: { msgtype?: string; body?: string };
+      }[];
+      end?: string;
+    };
+    (data.chunk ?? []).forEach((event) => {
+      if (event.type === 'm.room.message' && typeof event.event_id === 'string') {
+        const body = event.content?.body;
+        if (typeof body === 'string') messages.push({ eventId: event.event_id, body });
+      }
+    });
+    from = data.end;
+  } while (from);
+  messages.reverse();
+  return messages;
 }

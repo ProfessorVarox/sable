@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MsgType } from '$types/matrix-sdk';
+import { M_POLL_START } from 'matrix-js-sdk';
 import { ClientConfigProvider } from '$hooks/useClientConfig';
 import { MatrixClientProvider } from '$hooks/useMatrixClient';
 import { RenderMessageContent } from './RenderMessageContent';
@@ -22,6 +23,10 @@ vi.mock('./url-preview', () => ({
   UrlPreviewCard: ({ url }: { url: string }) => <div data-testid="url-preview-card">{url}</div>,
   ClientPreview: ({ url }: { url: string }) => <div data-testid="client-preview">{url}</div>,
   youtubeUrl: () => false,
+}));
+
+vi.mock('./message/PollEvent', () => ({
+  PollEvent: () => <div data-testid="poll-event" />,
 }));
 
 function renderMessage(body: string) {
@@ -131,5 +136,25 @@ describe('RenderMessageContent', () => {
     });
 
     expect(screen.getByTestId('uploaded-sable-css')).toHaveTextContent('amethyst.sable.css');
+  });
+
+  it('renders current poll events', () => {
+    render(
+      <ClientConfigProvider value={{}}>
+        <RenderMessageContent
+          displayName="Alice"
+          msgType=""
+          ts={0}
+          getContent={() => ({ [M_POLL_START.name]: {} })}
+          htmlReactParserOptions={{}}
+          linkifyOpts={{}}
+          mEvent={{} as never}
+          mx={{} as never}
+          room={{} as never}
+        />
+      </ClientConfigProvider>
+    );
+
+    expect(screen.getByTestId('poll-event')).toBeInTheDocument();
   });
 });

@@ -14,6 +14,8 @@ import {
   settingTileSettingLinkActionMobileVisible,
   settingTileSettingLinkActionTransparentBackground,
   settingTileRoot,
+  settingTileMain,
+  settingTileTrailing,
   settingTileTitleRow,
 } from './SettingTile.css';
 
@@ -88,7 +90,7 @@ export function SettingTile({
 
   const trailing =
     after || trailingCopyAction ? (
-      <Box shrink="No" alignItems="Center" gap="200">
+      <Box className={settingTileTrailing} shrink="No" alignItems="Center" gap="200">
         {after}
         {trailingCopyAction}
       </Box>
@@ -103,7 +105,7 @@ export function SettingTile({
       gap="300"
     >
       {before && <Box shrink="No">{before}</Box>}
-      <Box grow="Yes" direction="Column" gap="100">
+      <Box className={settingTileMain} grow="Yes" direction="Column" gap="100">
         {title && (
           <Box
             data-setting-tile-title-row="true"

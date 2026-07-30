@@ -1,4 +1,4 @@
-import { hasControllingServiceWorker } from '$utils/platform';
+import { getCachedSWMediaAuthSupport } from './swMediaAuth';
 import { fetch } from '$utils/fetch';
 import { getFromMediaCache, putInMediaCache } from './mediaCache';
 
@@ -287,7 +287,10 @@ async function fetchMediaBlobInternal(url: string, options?: MediaTransportOptio
     if (cachedBlob) return cachedBlob;
   }
 
-  const useServiceWorker = hasControllingServiceWorker() && !hasExplicitMediaAuthOverride(options);
+  // Only let the service worker attach the token once it has proven media-auth
+  // support; a stale SW build would forward the request bare and get a 4xx.
+  const useServiceWorker =
+    getCachedSWMediaAuthSupport() === true && !hasExplicitMediaAuthOverride(options);
   const fetchAndCache = async (response: Response): Promise<Blob> => {
     if (!response.ok) {
       throw new Error(`Failed to fetch media: ${response.status} ${response.statusText}`);

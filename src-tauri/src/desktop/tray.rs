@@ -196,18 +196,11 @@ fn apply_main_window_title_bar_settings(
     window.set_decorations(!settings.use_custom_title_bar)?;
 
     #[cfg(target_os = "macos")]
-    {
-        window.set_title_bar_style(if settings.use_custom_title_bar {
-            tauri::TitleBarStyle::Transparent
-        } else {
-            tauri::TitleBarStyle::Visible
-        })?;
-        window.set_title(if settings.use_custom_title_bar {
-            ""
-        } else {
-            crate::main_window_title(app)
-        })?;
-    }
+    window.set_title_bar_style(if settings.use_custom_title_bar {
+        tauri::TitleBarStyle::Overlay
+    } else {
+        tauri::TitleBarStyle::Visible
+    })?;
 
     Ok(())
 }

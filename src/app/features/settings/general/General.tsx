@@ -5,8 +5,9 @@ import type {
   MouseEventHandler,
 } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isTauri, invoke } from '@tauri-apps/api/core';
 import dayjs from 'dayjs';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import type { RectCords } from 'folds';
 import {
   Box,
@@ -54,13 +55,18 @@ import { useSetting } from '$state/hooks/settings';
 import type { EditorButtonId } from '$state/settings';
 import { MessageLayout, RightSwipeAction, settingsAtom } from '$state/settings';
 import { SettingTile, SettingToggle } from '$components/setting-tile';
+import { downloadJsonFile } from '$utils/common';
+import { getDebugLogger } from '$utils/debugLogger';
 import { KeySymbol } from '$utils/key-symbol';
-import { isMacOS, isMobileOrTablet } from '$utils/platform';
+import { isDesktopTauri, isMacOS, isMobileOrTablet, isMobileTauri } from '$utils/platform';
 import { stopPropagation } from '$utils/keyboard';
 import { sessionsAtom, activeSessionIdAtom } from '$state/sessions';
 import { isKeyHotkey } from 'is-hotkey';
 import { settingsSyncLastSyncedAtom, settingsSyncStatusAtom } from '$hooks/useSettingsSync';
+import { sanitizeDiagnosticsLogs } from '$utils/sentryScrubbers';
+import { diagnosticCaptureActiveAtom } from '$state/debugLogger';
 import { exportSettingsAsJson, importSettingsFromJson } from '$utils/settingsSync';
+import { saveFileToDevice } from '$utils/download';
 import { CallSoundSettings } from './CallSoundSettings';
 
 type DateHintProps = {
@@ -1265,6 +1271,13 @@ function DiagnosticsAndPrivacy() {
     localStorage.getItem('sable_sentry_replay_enabled') === 'true'
   );
   const [needsRefresh, setNeedsRefresh] = useState(false);
+  const [diagnosticsState, setDiagnosticsState] = useState<
+    'idle' | 'exporting' | 'success' | 'error'
+  >('idle');
+  const [captureActive, setCaptureActive] = useAtom(diagnosticCaptureActiveAtom);
+  const [captureSince, setCaptureSince] = useState<number>();
+  const [captureCompleted, setCaptureCompleted] = useState(false);
+  const [exportDestination, setExportDestination] = useState<string>();
 
   const isSentryConfigured = Boolean(import.meta.env.VITE_SENTRY_DSN);
 
@@ -1286,6 +1299,85 @@ function DiagnosticsAndPrivacy() {
       localStorage.removeItem('sable_sentry_replay_enabled');
     }
     setNeedsRefresh(true);
+  };
+
+  const handleDiagnosticsCapture = async () => {
+    if (!captureActive && !captureCompleted) {
+      const since = getDebugLogger().startCapture();
+      setCaptureSince(since);
+      setCaptureActive(true);
+      setDiagnosticsState('idle');
+      setExportDestination(undefined);
+      return;
+    }
+
+    setDiagnosticsState('exporting');
+    try {
+      const since = captureSince ?? getDebugLogger().getCaptureSince();
+      if (captureActive) {
+        getDebugLogger().stopCapture();
+        setCaptureActive(false);
+        setCaptureCompleted(true);
+      }
+      const frontendLogs = getDebugLogger().exportLogs({ since });
+      if (isDesktopTauri()) {
+        const outputPath = await invoke<string | null | undefined>('export_diagnostics', {
+          frontendLogs,
+        });
+        if (outputPath == null) {
+          setDiagnosticsState('idle');
+          return;
+        }
+        setExportDestination(outputPath);
+      } else if (isMobileTauri()) {
+        const zipBytes = await invoke<number[] | Uint8Array>('export_diagnostics', {
+          frontendLogs,
+        });
+        const filename = `sable-diagnostics-${dayjs().format('YYYY-MM-DD-HHmmss')}.zip`;
+        const saveResult = await saveFileToDevice(
+          new Blob([new Uint8Array(zipBytes)], { type: 'application/zip' }),
+          filename,
+          'application/zip'
+        );
+        if (saveResult === 'cancelled') {
+          setDiagnosticsState('idle');
+          return;
+        }
+        if (saveResult === 'failed') {
+          setDiagnosticsState('error');
+          return;
+        }
+      } else {
+        const sanitizedLogs = sanitizeDiagnosticsLogs(frontendLogs);
+        if (sanitizedLogs === null) {
+          setDiagnosticsState('error');
+          return;
+        }
+        downloadJsonFile(sanitizedLogs, 'sable-web-diagnostics');
+      }
+      setDiagnosticsState('success');
+      setCaptureCompleted(false);
+      setCaptureSince(undefined);
+    } catch {
+      setDiagnosticsState('error');
+    }
+  };
+
+  const handleDiscardCapture = () => {
+    getDebugLogger().clear();
+    setCaptureCompleted(false);
+    setCaptureSince(undefined);
+    setExportDestination(undefined);
+    setDiagnosticsState('idle');
+  };
+
+  const handleStartNewCapture = () => {
+    const since = getDebugLogger().startCapture();
+    setCaptureSince(since);
+    setCaptureActive(true);
+    setCaptureCompleted(false);
+    setDiagnosticsState('idle');
+    setExportDestination(undefined);
   };
 
   return (
@@ -1342,6 +1434,83 @@ function DiagnosticsAndPrivacy() {
           />
         )}
       </SequenceCard>
+      {(!isTauri() || isDesktopTauri() || isMobileTauri()) && (
+        <SequenceCard
+          className={SequenceCardStyle}
+          variant="SurfaceVariant"
+          direction="Column"
+          gap="300"
+        >
+          <SettingTile
+            title="Capture Diagnostics"
+            focusId="capture-diagnostics"
+            description={
+              captureActive
+                ? 'Capture is active. Reproduce the problem, then stop and export the report.'
+                : captureCompleted
+                  ? 'Your completed capture is ready to export. You can retry the export or discard it.'
+                  : 'Start a short, privacy-reviewed capture of errors and useful app activity. Nothing is uploaded automatically.'
+            }
+            after={
+              <Button
+                variant={captureActive ? 'Critical' : 'Secondary'}
+                fill="Soft"
+                size="300"
+                radii="300"
+                before={captureActive ? undefined : menuIcon(Download)}
+                onClick={handleDiagnosticsCapture}
+                disabled={diagnosticsState === 'exporting'}
+              >
+                <Text size="B300">
+                  {diagnosticsState === 'exporting'
+                    ? 'Exporting…'
+                    : captureActive
+                      ? 'Stop & Export'
+                      : captureCompleted
+                        ? 'Export Capture'
+                        : 'Start Capture'}
+                </Text>
+              </Button>
+            }
+          />
+          {diagnosticsState === 'success' && (
+            <Text size="T200" style={{ color: 'var(--mx-color-positive-container-on)' }}>
+              {isDesktopTauri()
+                ? `Diagnostics ZIP saved to ${exportDestination ?? 'the selected destination'}. It includes frontend and native logs. Review it before sharing.`
+                : isMobileTauri()
+                  ? 'Diagnostics ZIP saved with content redacted where possible. Review it before sharing.'
+                  : 'Frontend diagnostics downloaded with content redacted where possible. Review it before sharing.'}
+            </Text>
+          )}
+          {diagnosticsState === 'error' && (
+            <Text size="T200" style={{ color: 'var(--mx-color-critical-container-on)' }}>
+              Could not export diagnostics. Please try again.
+            </Text>
+          )}
+          {captureCompleted && diagnosticsState !== 'exporting' && (
+            <Box gap="200" wrap="Wrap">
+              <Button
+                variant="Secondary"
+                fill="Soft"
+                size="300"
+                radii="300"
+                onClick={handleStartNewCapture}
+              >
+                <Text size="B300">Start New Capture</Text>
+              </Button>
+              <Button
+                variant="Secondary"
+                fill="Soft"
+                size="300"
+                radii="300"
+                onClick={handleDiscardCapture}
+              >
+                <Text size="B300">Discard Capture</Text>
+              </Button>
+            </Box>
+          )}
+        </SequenceCard>
+      )}
       <Box gap="200" wrap="Wrap" style={{ paddingTop: '4px' }}>
         <Button
           as="a"

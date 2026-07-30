@@ -49,6 +49,7 @@ export function CreatorChip({
       align="Start"
       offset={4}
       returnFocusOnDeactivate
+      surfaceColor={cardColor ? innerColor : undefined}
       menu={
         <Menu>
           <div style={{ padding: config.space.S100, backgroundColor: innerColor }}>

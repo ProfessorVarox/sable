@@ -8,8 +8,8 @@ import type { RectCords } from 'folds';
 // ── Mocks ───────────────────────────────────────────────────────────────────
 
 vi.mock('folds', () => ({
-  Box: ({ children, direction }: any) => (
-    <div data-testid="box" data-direction={direction}>
+  Box: ({ children, direction, className, style }: any) => (
+    <div data-testid="box" data-direction={direction} className={className} style={style}>
       {children}
     </div>
   ),
@@ -19,6 +19,13 @@ vi.mock('folds', () => ({
       <div data-testid="popout-trigger">{children}</div>
     </div>
   ),
+  Overlay: ({ children, open }: any) => (open ? <div data-testid="overlay">{children}</div> : null),
+  OverlayBackdrop: () => <div data-testid="overlay-backdrop" />,
+  OverlayCenter: ({ children }: any) => <div data-testid="overlay-center">{children}</div>,
+}));
+
+vi.mock('$utils/androidBack', () => ({
+  useDismissOnBack: vi.fn<() => void>(),
 }));
 
 vi.mock('focus-trap-react', () => ({
@@ -38,11 +45,8 @@ vi.mock('focus-trap-react', () => ({
 vi.mock('./MobileSwipeDownModal', () => ({
   MobileSwipeDownModal: ({ children, requestClose }: any) => (
     <div data-testid="mobile-swipe-down" data-request-close={String(!!requestClose)}>
-      {children(<div data-testid="drag-handle">drag-handle</div>, {
-        onTouchStart: vi.fn<() => void>(),
-        onTouchMove: vi.fn<() => void>(),
-        onTouchEnd: vi.fn<() => void>(),
-      })}
+      <div data-testid="drag-handle">drag-handle</div>
+      {children()}
     </div>
   ),
 }));
@@ -78,6 +82,7 @@ function renderMenuMobile(props: {
   anchor: RectCords;
   menu: React.ReactNode;
   children?: React.ReactNode;
+  mobile?: 'sheet' | 'dialog';
 }) {
   return render(
     <ScreenSizeProvider value={ScreenSize.Mobile}>
@@ -197,6 +202,72 @@ describe('ResponsiveMenu', () => {
       expect(screen.getByTestId('mobile-swipe-down')).toBeInTheDocument();
       expect(screen.getByTestId('drag-handle')).toBeInTheDocument();
       expect(screen.getByTestId('focus-trap')).toBeInTheDocument();
+    });
+
+    it('applies --sheet-surface-color CSS custom property when surfaceColor is set', () => {
+      render(
+        <ScreenSizeProvider value={ScreenSize.Mobile}>
+          <ResponsiveMenu
+            requestClose={vi.fn<() => void>()}
+            anchor={anchorRect}
+            menu={<SampleMenu />}
+            surfaceColor="#663399"
+          />
+        </ScreenSizeProvider>
+      );
+
+      const box = screen.getByTestId('box');
+      expect(box.style.getPropertyValue('--sheet-surface-color')).toBe('#663399');
+      expect(box.className).toContain('SheetContentThemed');
+    });
+
+    it('does not set surface-color properties when surfaceColor is absent', () => {
+      render(
+        <ScreenSizeProvider value={ScreenSize.Mobile}>
+          <ResponsiveMenu
+            requestClose={vi.fn<() => void>()}
+            anchor={anchorRect}
+            menu={<SampleMenu />}
+          />
+        </ScreenSizeProvider>
+      );
+
+      const box = screen.getByTestId('box');
+      expect(box.style.getPropertyValue('--sheet-surface-color')).toBe('');
+      expect(box.className).not.toContain('SheetContentThemed');
+    });
+  });
+
+  describe('mobile branch (dialog)', () => {
+    it('renders a centred dialog instead of a sheet', () => {
+      renderMenuMobile({ anchor: anchorRect, menu: <SampleMenu />, mobile: 'dialog' });
+
+      expect(screen.getByTestId('overlay-center')).toBeTruthy();
+      expect(screen.getByTestId('sample-menu')).toBeTruthy();
+      expect(screen.queryByTestId('mobile-swipe-down')).toBeNull();
+      expect(screen.queryByTestId('drag-handle')).toBeNull();
+    });
+
+    it('does not render the dialog when anchor is undefined', () => {
+      render(
+        <ScreenSizeProvider value={ScreenSize.Mobile}>
+          <ResponsiveMenu
+            requestClose={vi.fn<() => void>()}
+            anchor={undefined}
+            mobile="dialog"
+            menu={<SampleMenu />}
+          />
+        </ScreenSizeProvider>
+      );
+
+      expect(screen.queryByTestId('overlay')).toBeNull();
+      expect(screen.queryByTestId('sample-menu')).toBeNull();
+    });
+
+    it('wraps the dialog in a FocusTrap', () => {
+      renderMenuMobile({ anchor: anchorRect, menu: <SampleMenu />, mobile: 'dialog' });
+
+      expect(screen.getByTestId('focus-trap')).toBeTruthy();
     });
   });
 

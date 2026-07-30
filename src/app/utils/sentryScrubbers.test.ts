@@ -6,6 +6,7 @@ import {
   sanitizeSentryPayload,
   scrubMatrixUrl,
   scrubExternalHosts,
+  sanitizeDiagnosticsLogs,
 } from './sentryScrubbers';
 
 // ─── scrubExternalHosts ───────────────────────────────────────────────────────
@@ -342,5 +343,40 @@ describe('sanitizeSentryPayload', () => {
     ).toEqual({
       message: 'from @[USER_ID]',
     });
+  });
+});
+
+describe('sanitizeDiagnosticsLogs', () => {
+  it('keeps safe metadata and removes sensitive or arbitrary values', () => {
+    const sanitized = sanitizeDiagnosticsLogs(
+      JSON.stringify({
+        build: '1.2.3',
+        logs: [
+          {
+            timestamp: '2026-01-01T00:00:00.000Z',
+            level: 'error',
+            category: 'network',
+            namespace: 'sync',
+            message:
+              'GET https://matrix.example/_matrix?access_token=secret @alice:example.org /home/alice/app.log',
+            data: { password: 'secret', private: 'remove me' },
+            headers: { authorization: 'Bearer secret', cookie: 'session' },
+          },
+        ],
+      })
+    );
+
+    expect(sanitized).not.toBeNull();
+    const parsed = JSON.parse(sanitized as string) as Record<string, unknown>;
+    expect(parsed.build).toBe('1.2.3');
+    expect(JSON.stringify(parsed)).not.toContain('secret');
+    expect(JSON.stringify(parsed)).not.toContain('alice');
+    expect(JSON.stringify(parsed)).not.toContain('matrix.example');
+    expect(JSON.stringify(parsed)).not.toContain('private');
+  });
+
+  it('rejects malformed or unsafe top-level content', () => {
+    expect(sanitizeDiagnosticsLogs('{invalid')).toBeNull();
+    expect(sanitizeDiagnosticsLogs(JSON.stringify(['unsafe']))).toBeNull();
   });
 });

@@ -266,7 +266,6 @@ type WrappedMessageProps = {
   handleSwipeReply?: () => void;
   handleSwipeEdit?: () => void;
   handleSwipeActionChange?: (mode: SwipeActionMode) => void;
-  handleContextMenu: MouseEventHandler<HTMLDivElement>;
   align?: 'left' | 'right';
 };
 function WrappedMessage({
@@ -277,7 +276,6 @@ function WrappedMessage({
   handleSwipeReply,
   handleSwipeEdit,
   handleSwipeActionChange,
-  handleContextMenu,
   align,
 }: WrappedMessageProps) {
   if (messageLayout === undefined) return <>{msgContentJSX}</>;
@@ -289,9 +287,7 @@ function WrappedMessage({
         onEdit={handleSwipeEdit}
         onActionModeChange={handleSwipeActionChange}
       >
-        <CompactLayout before={headerJSX} onContextMenu={handleContextMenu}>
-          {msgContentJSX}
-        </CompactLayout>
+        <CompactLayout before={headerJSX}>{msgContentJSX}</CompactLayout>
       </SwipeableMessageWrapper>
     );
   if (messageLayout === MessageLayout.Bubble)
@@ -301,12 +297,7 @@ function WrappedMessage({
         onEdit={handleSwipeEdit}
         onActionModeChange={handleSwipeActionChange}
       >
-        <BubbleLayout
-          before={avatarJSX}
-          header={headerJSX}
-          onContextMenu={handleContextMenu}
-          align={align}
-        >
+        <BubbleLayout before={avatarJSX} header={headerJSX} align={align}>
           {msgContentJSX}
         </BubbleLayout>
       </SwipeableMessageWrapper>
@@ -317,7 +308,7 @@ function WrappedMessage({
       onEdit={handleSwipeEdit}
       onActionModeChange={handleSwipeActionChange}
     >
-      <ModernLayout before={avatarJSX} onContextMenu={handleContextMenu}>
+      <ModernLayout before={avatarJSX}>
         {headerJSX}
         {msgContentJSX}
       </ModernLayout>
@@ -880,7 +871,6 @@ function MessageInternal(
               avatarJSX={avatarJSX()}
               msgContentJSX={msgContentJSX}
               messageLayout={messageLayout}
-              handleContextMenu={() => {}}
               align={useRightBubbles && senderId === mx.getUserId() ? 'right' : 'left'}
             />
           </div>
@@ -996,7 +986,14 @@ function MessageInternal(
           WebkitTapHighlightColor: 'transparent',
         }}
         onContextMenu={contextMenuHandler}
-        onTouchStart={menu.triggerProps.onTouchStart}
+        onTouchStart={(evt) => {
+          const target = evt.target instanceof Element ? evt.target : undefined;
+          if (target?.closest('[data-gestures="ignore"]')) {
+            menu.triggerProps.onTouchCancel();
+            return;
+          }
+          menu.triggerProps.onTouchStart(evt);
+        }}
         onTouchEnd={menu.triggerProps.onTouchEnd}
         onTouchMove={menu.triggerProps.onTouchMove}
         onTouchCancel={menu.triggerProps.onTouchCancel}
@@ -1009,7 +1006,6 @@ function MessageInternal(
           handleSwipeReply={handleSwipeReply}
           handleSwipeEdit={handleSwipeEdit}
           handleSwipeActionChange={setSwipeActionMode}
-          handleContextMenu={contextMenuHandler}
           align={useRightBubbles && senderId === mx.getUserId() ? 'right' : 'left'}
         />
       </div>

@@ -234,7 +234,12 @@ vi.mock('$features/room/message', async (importActual) => {
         {children}
       </div>
     ),
-    EncryptedContent: () => <div data-testid="encrypted-content" />,
+    EncryptedContent: ({ mEvent, children }: any) =>
+      mEvent.getType() === M_POLL_START.name ? (
+        <>{children()}</>
+      ) : (
+        <div data-testid="encrypted-content" />
+      ),
     Reactions: ({ mEventId: targetId, canSendReaction: canReact }: any) => (
       <div data-testid="reactions" data-target-id={targetId} data-can-react={String(!!canReact)} />
     ),
@@ -723,6 +728,28 @@ describe('useTimelineEventRenderer', () => {
       expect(container).not.toBeNull();
       expect(container.innerHTML).toMatchSnapshot();
     });
+  });
+
+  it('renders a decrypted poll through RenderMessageContent', () => {
+    const evt = createEvent({
+      id: '$encrypted-poll:example.com',
+      type: EventType.RoomMessageEncrypted,
+      content: {
+        'm.poll.start': {
+          question: { 'm.text': [{ body: 'Yes or No?' }] },
+        },
+        msgtype: 'm.text',
+      },
+    });
+    evt.getType = vi
+      .fn<() => string>()
+      .mockReturnValueOnce(EventType.RoomMessageEncrypted)
+      .mockReturnValue(M_POLL_START.name);
+
+    const { container } = renderEvent(evt, false);
+
+    expect(container.querySelector('[data-testid="render-message-content"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="message-not-decrypted"]')).toBeNull();
   });
 
   // ── Additional coverage ───────────────────────────────────────────────────

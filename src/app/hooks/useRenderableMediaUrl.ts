@@ -7,7 +7,11 @@ import {
   getCurrentMediaSessionScope,
   getStableMediaCacheKeyFragment,
 } from '$utils/mediaTransport';
-import { hasControllingServiceWorker, hasServiceWorker } from '$utils/platform';
+import {
+  getCachedSWMediaAuthSupport,
+  probeSWMediaAuthSupport,
+  subscribeSWMediaAuthSupport,
+} from '$utils/swMediaAuth';
 import { rewriteAuthenticatedMediaUrl } from '$utils/matrix';
 
 type ObjectUrlEntry = {
@@ -138,10 +142,13 @@ export function useRenderableMediaUrl(url: string | undefined): string | undefin
     renderableUrl && !renderableUrl.startsWith('blob:')
       ? getObjectUrlCacheKey(sessionScope, renderableUrl)
       : undefined;
-  const [usesControlledServiceWorker, setUsesControlledServiceWorker] = useState(() =>
-    hasControllingServiceWorker()
+  // Media elements and bare URLs are only safe once the (current) service
+  // worker has proven it intercepts authenticated media; until then media goes
+  // through the blob path, which attaches the access token in JavaScript.
+  const [swMediaAuthSupported, setSwMediaAuthSupported] = useState(
+    () => getCachedSWMediaAuthSupport() ?? false
   );
-  const needsBlob = !usesControlledServiceWorker;
+  const needsBlob = !swMediaAuthSupported;
   const usesExistingObjectUrl = renderableUrl?.startsWith('blob:') ?? false;
   const [resolvedState, setResolvedState] = useState<ResolvedMediaUrlState>(() => {
     const cachedEntry = objectUrlCacheKey ? objectUrlCache.get(objectUrlCacheKey) : undefined;
@@ -153,28 +160,11 @@ export function useRenderableMediaUrl(url: string | undefined): string | undefin
 
   useEffect(() => {
     if (tauri) return undefined;
-    if (!hasServiceWorker()) {
-      setUsesControlledServiceWorker(false);
-      return undefined;
+
+    if (getCachedSWMediaAuthSupport() === undefined) {
+      void probeSWMediaAuthSupport();
     }
-
-    const { serviceWorker } = navigator;
-    if (!serviceWorker) {
-      setUsesControlledServiceWorker(false);
-      return undefined;
-    }
-
-    const updateControlState = () => {
-      setUsesControlledServiceWorker(hasControllingServiceWorker());
-    };
-
-    updateControlState();
-    serviceWorker.addEventListener('controllerchange', updateControlState);
-    serviceWorker.ready.then(updateControlState).catch(() => undefined);
-
-    return () => {
-      serviceWorker.removeEventListener('controllerchange', updateControlState);
-    };
+    return subscribeSWMediaAuthSupport(setSwMediaAuthSupported);
   }, [tauri]);
 
   useEffect(() => {

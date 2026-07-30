@@ -13,6 +13,17 @@ export class AppShell {
     this.createRoomButton = page.getByRole('button', { name: 'Create Room' }).first();
   }
 
+  messageByEventId(eventId: string): Locator {
+    const escaped = eventId.replace(/(["\\])/g, '\\$1');
+    return this.page.locator(`[data-message-id="${escaped}"]`);
+  }
+
+  async sendTextMessage(text: string): Promise<void> {
+    await this.page.locator('div[data-slate-editor="true"]').last().click();
+    await this.page.keyboard.type(text);
+    await this.page.keyboard.press('Enter');
+  }
+
   async open(): Promise<void> {
     await this.page.addInitScript(() => localStorage.setItem('dismissNotice', 'true'));
     await this.page.goto('/');
@@ -21,6 +32,11 @@ export class AppShell {
 
   room(name: string): Locator {
     return this.page.getByText(name).first();
+  }
+
+  async openRoom(name: string): Promise<void> {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await this.page.getByRole('button', { name: new RegExp(`^${escaped}`) }).click();
   }
 
   async openRoomOptions(name: string): Promise<RoomOptionsMenu> {

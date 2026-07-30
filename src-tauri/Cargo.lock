@@ -168,7 +168,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -179,7 +179,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -785,9 +785,9 @@ dependencies = [
 
 [[package]]
 name = "cef"
-version = "148.0.0+147.0.10"
+version = "150.2.1+150.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2445d2f1e820efc064c511faa3a07c3ee79e565fdae026ca62ed3c80d0459223"
+checksum = "b912d9d13dd63b4bffa750f1f3c49271dc96d6c91ca2d1c1f68a0172832170c8"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
@@ -805,9 +805,9 @@ dependencies = [
 
 [[package]]
 name = "cef-dll-sys"
-version = "148.0.0+147.0.10"
+version = "150.2.1+150.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d32a7c89af6c77688ad58dc75555c9398c5ded2c328a3ff83554fccc840af57"
+checksum = "31b1059b49a0d5aa3872035f076210a31df6d70e039e12427b41ceba7c650b49"
 dependencies = [
  "anyhow",
  "cmake",
@@ -1011,7 +1011,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1553,7 +1553,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1855,7 +1855,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1967,6 +1967,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -3652,7 +3653,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.19",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3776,7 +3777,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3878,6 +3879,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69282c2b5bc58fba07cb9de2113619532eb551e98efe3d8d695509ef45fbd53b"
 dependencies = [
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-avf-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -4022,6 +4034,19 @@ dependencies = [
  "bitflags 2.13.1",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-photos"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6ea9a706f18e32cf8a0723e99855af4f135282891e07259301bae9135ae3872"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2",
+ "dispatch2",
+ "objc2",
  "objc2-foundation",
 ]
 
@@ -4180,7 +4205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4838,7 +4863,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5257,7 +5282,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5315,7 +5340,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5354,6 +5379,7 @@ dependencies = [
  "aes",
  "async-stream",
  "base64 0.22.1",
+ "block2",
  "cef",
  "ctr",
  "enigo",
@@ -5364,8 +5390,11 @@ dependencies = [
  "libloading 0.8.9",
  "log",
  "objc2",
+ "objc2-avf-audio",
  "objc2-foundation",
+ "objc2-photos",
  "percent-encoding",
+ "regex",
  "reqwest 0.12.28",
  "sentry",
  "serde",
@@ -5379,6 +5408,7 @@ dependencies = [
  "tauri-plugin-devtools",
  "tauri-plugin-dialog",
  "tauri-plugin-edge-to-edge",
+ "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-http",
  "tauri-plugin-log",
@@ -5398,6 +5428,7 @@ dependencies = [
  "ts-rs",
  "webkit2gtk",
  "windows",
+ "zip",
 ]
 
 [[package]]
@@ -6007,7 +6038,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6710,7 +6741,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-notifications"
 version = "0.5.0-rc.11"
-source = "git+https://github.com/SableClient/tauri-plugin-notifications.git?rev=87e452fab17711a82422a97ab9541ebf647fa28a#87e452fab17711a82422a97ab9541ebf647fa28a"
+source = "git+https://github.com/SableClient/tauri-plugin-notifications.git?rev=0175b5ec58a31ab15397e981a67f47fa32254620#0175b5ec58a31ab15397e981a67f47fa32254620"
 dependencies = [
  "log",
  "notify-rust",
@@ -6913,7 +6944,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-cef"
 version = "0.1.0"
-source = "git+https://github.com/byeongsu-hong/tauri-runtime-cef?rev=c215d6e52dd507956d9b8cc868906d690dc477c2#c215d6e52dd507956d9b8cc868906d690dc477c2"
+source = "git+https://github.com/SableClient/tauri-runtime-cef?branch=main#23464067ddcfe61239e41faeb26e1ce200ff3242"
 dependencies = [
  "base64 0.22.1",
  "cef",
@@ -6926,6 +6957,7 @@ dependencies = [
  "html5ever 0.29.1",
  "http 1.4.2",
  "kuchikiki",
+ "libc",
  "log",
  "objc2",
  "objc2-app-kit",
@@ -7064,7 +7096,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7689,7 +7721,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.19",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7763,7 +7795,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8393,7 +8425,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9478,9 +9510,16 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
 
 [[package]]
 name = "zmij"

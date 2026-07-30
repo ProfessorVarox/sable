@@ -44,12 +44,18 @@ export const MessageOptionsWrappedMessage = style({
   overflow: 'auto',
 });
 
-export const MessageOptionsMenu = style({
+const messageOptionsMenuLayout = {
   width: '100%',
   maxHeight: '100%',
   position: 'relative',
   display: 'flex',
   flexDirection: 'column',
+} as const;
+
+// Portaled out of the sheet by PopOut, so it still draws its own sheet-like surface
+// and pads for the safe area itself.
+export const MessageOptionsMenu = style({
+  ...messageOptionsMenuLayout,
   borderBottomLeftRadius: '0 !important',
   borderBottomRightRadius: '0 !important',
   borderBottom: 'none !important',
@@ -68,6 +74,17 @@ export const MessageOptionsMenu = style({
       border: 'none',
     },
   },
+});
+
+// Inside the sheet panel, which owns the background, radius, shadow and safe area.
+export const MessageOptionsSheetMenu = style({
+  ...messageOptionsMenuLayout,
+  border: 'none !important',
+  borderRadius: '0 !important',
+  background: 'transparent !important',
+  boxShadow: 'none !important',
+  paddingTop: '0 !important',
+  paddingBottom: `${config.space.S400} !important`,
 });
 
 export const PreventSelect = style({
@@ -91,6 +108,11 @@ export const MessageMobileOptionsWrapped = style({
   backgroundColor: color.Other.Overlay,
 });
 
+export const MessageMobileOptionsWrappedContained = style({
+  position: 'absolute',
+  width: '100%',
+});
+
 export const MessageMobileOptionsContainer = style({
   position: 'fixed',
   bottom: 0,
@@ -103,20 +125,50 @@ export const MessageMobileOptionsContainer = style({
   flexDirection: 'column',
   justifyContent: 'flex-end',
   overflow: 'visible',
+  backgroundColor: color.Surface.Container,
+  borderTopLeftRadius: toRem(20),
+  borderTopRightRadius: toRem(20),
+  boxShadow: '0 -4px 24px rgba(0, 0, 0, 0.15)',
+  paddingBottom: 'var(--mobile-sheet-safe-bottom, env(safe-area-inset-bottom, 0px))',
+});
+
+export const MessageMobileOptionsContainerContained = style({
+  position: 'absolute',
+});
+
+export const MessageMobileSheetFill = style({
+  display: 'flex',
+  flexDirection: 'column',
+  flex: 1,
+  minHeight: 0,
+});
+
+// Ratio is against the keyboard-free height so the picker keeps one size while
+// typing. The ceiling only binds where a keyboard would otherwise cover the sheet.
+const pickerHeight = `min(max(calc(var(--mobile-sheet-viewport, 100vh) * 0.5), ${toRem(
+  280
+)}), var(--mobile-sheet-visible, 100vh))`;
+
+export const MessageMobileOptionsContainerPicker = style({
+  height: pickerHeight,
+  maxHeight: pickerHeight,
+  boxSizing: 'border-box',
+  // `clip` creates no scrollport, so focusing the search input cannot scroll the
+  // sheet on top of its own transform. `hidden` is the pre-Chrome-90 fallback.
+  overflow: ['hidden', 'clip'],
 });
 
 export const MessageMobileDragHandle = style({
-  position: 'absolute',
-  top: '0',
-  left: '0',
-  right: '0',
+  flex: '0 0 32px',
   height: '32px',
   display: 'flex',
   alignItems: 'flex-start',
-  paddingTop: '6px',
   justifyContent: 'center',
+  boxSizing: 'border-box',
+  paddingTop: toRem(8),
   zIndex: 10,
-  pointerEvents: 'none',
+  touchAction: 'none',
+  cursor: 'grab',
 });
 
 export const MessageMobileDragIndicator = style({
@@ -125,7 +177,6 @@ export const MessageMobileDragIndicator = style({
   borderRadius: '2px',
   backgroundColor: color.SurfaceVariant.OnContainer,
   opacity: 0.5,
-  pointerEvents: 'auto',
 });
 
 export const BubbleAvatarBase = style({

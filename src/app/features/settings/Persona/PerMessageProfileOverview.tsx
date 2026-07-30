@@ -5,12 +5,13 @@ import {
   getAllPerMessageProfiles,
   getPerMessageProfileById,
 } from '$hooks/usePerMessageProfile';
-import { useEffect, useState } from 'react';
-import { Box, Button, Text } from 'folds';
+import { useCallback, useEffect, useState } from 'react';
+import { Box, Button, Spinner, Text } from 'folds';
 import { generateShortId } from '$utils/shortIdGen';
 import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { PerMessageProfileListItem } from './PerMessageProfileListItem';
 import { SettingTile } from '$components/setting-tile';
+import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 
 type PerMessageProfileOverviewProps = {
   onCreateProfile: (profile: PerMessageProfile) => void;
@@ -40,6 +41,17 @@ export function PerMessageProfileOverview({
     if (profile) onEditProfile(profile);
   };
 
+  const [addState, handleAdd] = useAsyncCallback(
+    useCallback(async () => {
+      const newProfile: PerMessageProfile = {
+        id: generateShortId(5),
+        name: 'New Profile',
+      };
+      await addOrUpdatePerMessageProfile(mx, newProfile);
+      onCreateProfile(newProfile);
+    }, [mx, onCreateProfile])
+  );
+
   return (
     <Box gap="100" direction="Column">
       <Text size="L400">Personas</Text>
@@ -58,17 +70,14 @@ export function PerMessageProfileOverview({
             <Button
               size="300"
               radii="300"
-              onClick={() => {
-                const newProfile: PerMessageProfile = {
-                  id: generateShortId(5),
-                  name: 'New Profile',
-                };
-                addOrUpdatePerMessageProfile(mx, newProfile).then(() => {
-                  onCreateProfile(newProfile);
-                });
-              }}
+              onClick={handleAdd}
+              disabled={addState.status === AsyncStatus.Loading}
             >
-              <Text size="B300">Add</Text>
+              {addState.status === AsyncStatus.Loading ? (
+                <Spinner size="100" variant="Primary" fill="Solid" />
+              ) : (
+                <Text size="B300">Add</Text>
+              )}
             </Button>
           }
         />

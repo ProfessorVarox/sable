@@ -21,6 +21,15 @@ const createTgsItem = (): TUploadItem => {
   };
 };
 
+describe('object URL cleanup', () => {
+  it('revokes the object URL after loading the image fails', async () => {
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL');
+    await getImageMsgContent({} as MatrixClient, createTgsItem(), 'mxc://revoke');
+    expect(revokeSpy).toHaveBeenCalledWith('blob:test');
+    revokeSpy.mockRestore();
+  });
+});
+
 describe('TGS message content', () => {
   it('sends TGS uploads as images with their MIME metadata', async () => {
     const content = await getImageMsgContent({} as MatrixClient, createTgsItem(), 'mxc://sticker');

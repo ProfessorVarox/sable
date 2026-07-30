@@ -19,5 +19,5 @@ export function MobileMenuItem({ isMobile, onClick, ...props }: MobileMenuItemPr
   const activation = useMobileTapActivation<HTMLButtonElement>(isMobile, (evt) => {
     onClick?.(evt);
   });
-  return <MenuItem {...activation} {...props} />;
+  return <MenuItem {...activation} {...props} data-mobile-sheet-no-drag="" />;
 }

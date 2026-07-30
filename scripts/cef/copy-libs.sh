@@ -21,6 +21,40 @@ if [ -z "$CEF_DIR" ]; then
   exit 1
 fi
 
+CEF_VERSION="$(awk '
+  /^\[\[package\]\]$/ { in_cef=0 }
+  /^name = "cef"$/ { in_cef=1 }
+  in_cef && /^version = / {
+    gsub(/"/, "", $3)
+    print $3
+    exit
+  }
+' "$ROOT/src-tauri/Cargo.lock")"
+if [ -z "$CEF_VERSION" ]; then
+  echo "❌ Resolved cef version not found in src-tauri/Cargo.lock." >&2
+  exit 1
+fi
+CEF_MAJOR="${CEF_VERSION%%.*}"
+
+CEF_LIB="$CEF_DIR/libcef.so"
+if [ ! -f "$CEF_LIB" ]; then
+  echo "❌ libcef.so not found in $CEF_DIR." >&2
+  exit 1
+fi
+RUNTIME_MAJOR="$(
+  strings -a "$CEF_LIB" |
+    grep -Eio '[0-9]{3}\.[0-9]+\.[0-9]+\+g[^[:space:]]+\+chromium-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |
+    awk -F. 'NR == 1 { print $1; exit }'
+)" || true
+if [ -z "$RUNTIME_MAJOR" ]; then
+  echo "❌ CEF runtime version not found in $CEF_LIB." >&2
+  exit 1
+fi
+if [ "$RUNTIME_MAJOR" != "$CEF_MAJOR" ]; then
+  echo "❌ CEF runtime major $RUNTIME_MAJOR does not match resolved cef major $CEF_MAJOR." >&2
+  exit 1
+fi
+
 mkdir -p "$DEST"
 echo "→ copying CEF runtime from $CEF_DIR to $DEST"
 # Libraries (libcef.so + ANGLE/SwiftShader), crashpad handler, then resources.

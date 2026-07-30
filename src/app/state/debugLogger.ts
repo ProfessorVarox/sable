@@ -24,6 +24,16 @@ export const debugLoggerEnabledAtom = atom(
   }
 );
 
+export const diagnosticCaptureActiveAtom = atom(
+  debugLogger.isCaptureActive(),
+  (_, set, active: boolean) => {
+    if (active && !debugLogger.isCaptureActive()) debugLogger.startCapture();
+    if (!active && debugLogger.isCaptureActive()) debugLogger.stopCapture();
+    set(diagnosticCaptureActiveAtom, active);
+    set(debugLogsAtom);
+  }
+);
+
 /**
  * Action to clear all debug logs
  */

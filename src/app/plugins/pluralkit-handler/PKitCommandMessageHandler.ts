@@ -1,8 +1,12 @@
-import type { PerMessageProfile } from '$hooks/usePerMessageProfile';
+import type {
+  PerMessageProfile,
+  PerMessageProfileProxyAssociationV2,
+} from '$hooks/usePerMessageProfile';
 import {
   addOrUpdatePerMessageProfile,
   associateProxyWithProfile,
   dropProxyAssociationForPMP,
+  extractCircumfixProxyTagsFromKey,
   getAllPerMessageProfiles,
   getPerMessageProfileById,
 } from '$hooks/usePerMessageProfile';
@@ -27,20 +31,40 @@ function regexEscapeFallBackFunc(template: string): string {
 }
 
 /**
+ * @deprecated
  * build a regex to recognize proxies
  * a template can be for example `[text]` or `f:text`
  *
  * @param {string} template
  * @return {*}  {RegExp}
  */
-function buildRegex(template: string): RegExp {
-  const [before = '', after = ''] = template.split('text');
+export function buildProxyRegex({ prefix, suffix }: PerMessageProfileProxyAssociationV2): RegExp {
   const escape = (s: string) =>
     // @ts-ignore TS2339 - RegExp.escape is a new/proposed method
     typeof RegExp.escape === 'function' ? RegExp.escape(s) : regexEscapeFallBackFunc(s);
 
-  const pattern = `${escape(before)}(.+)${escape(after)}`;
+  const pattern = `${escape(prefix ?? '')}(.+)${escape(suffix ?? '')}`;
   return new RegExp(`^${pattern}$`);
+}
+
+export function testProxy(
+  { prefix, suffix }: PerMessageProfileProxyAssociationV2,
+  input: string
+): boolean {
+  const matchesPrefix = prefix ? input.startsWith(prefix) : true;
+  const matchesSuffix = suffix ? input.endsWith(suffix) : true;
+
+  return matchesPrefix && matchesSuffix;
+}
+export function stripProxy(
+  { prefix, suffix }: PerMessageProfileProxyAssociationV2,
+  input: string
+): string {
+  let message = input;
+  if (prefix) message = message.slice(prefix.length);
+  if (suffix) message = message.slice(0, message.length - suffix.length);
+
+  return message;
 }
 
 /**
@@ -229,8 +253,17 @@ export class PKitCommandMessageHandler {
         );
         return;
       }
-      const matchAgainstRegExp = buildRegex(matchAgainst);
-      await associateProxyWithProfile(this.mx, pmpId, matchAgainst, matchAgainstRegExp, false);
+      const proxyTags = extractCircumfixProxyTagsFromKey(matchAgainst);
+
+      if (!proxyTags) {
+        sendFeedback(
+          `malformed input: could not find a prefix and/or suffix, ${helpTextPkMemberNewProxy}`,
+          this.room,
+          this.mx.getSafeUserId()
+        );
+        return;
+      }
+      await associateProxyWithProfile(this.mx, pmpId, proxyTags.prefix, proxyTags.suffix, false);
       sendFeedback(
         `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" (${pmpId}) is now associated with ${matchAgainst}`,
         this.room,

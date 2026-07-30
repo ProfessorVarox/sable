@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Box,
@@ -36,7 +36,7 @@ import { useCreateObjectURL } from '$hooks/useObjectURL';
 import { validBlurHash } from '$utils/blurHash';
 import * as css from './style.css';
 import { MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME } from '../../../../unstable/prefixes';
-import { hasControllingServiceWorker } from '$utils/platform';
+import { probeSWMediaAuthSupport } from '$utils/swMediaAuth';
 
 type RenderVideoProps = {
   title: string;
@@ -87,6 +87,13 @@ export const VideoContent = as<'div', VideoContentProps>(
     const [isHovered, setIsHovered] = useState(false);
 
     const createObjectURL = useCreateObjectURL();
+    // Set when the streaming URL already failed once for this attachment; any
+    // further load uses the token-attached blob path instead of the SW.
+    const preferBlobRef = useRef(false);
+
+    useEffect(() => {
+      preferBlobRef.current = false;
+    }, [url]);
 
     const [srcState, loadSrc] = useAsyncCallback(
       useCallback(async () => {
@@ -94,18 +101,21 @@ export const VideoContent = as<'div', VideoContentProps>(
 
         const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
         if (!mediaUrl) throw new Error('Invalid media URL');
-        // Native media and service-worker-authenticated browser media can stream with Range requests.
-        if (!encInfo && (isTauri() || hasControllingServiceWorker())) return mediaUrl;
-        if (encInfo) {
-          if (isTauri()) {
-            await setMediaEncryption(mediaUrl, encInfo, mimeType);
-            return rewriteAuthenticatedMediaUrl(mediaUrl)!;
-          }
-          return createObjectURL(
-            downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
-          );
+        if (!encInfo) {
+          if (isTauri()) return mediaUrl;
+          // Stream through the service worker only after it proved media-auth
+          // support; a stale SW build would otherwise serve the bare URL to
+          // the homeserver and the element would fail with a 4xx.
+          if (!preferBlobRef.current && (await probeSWMediaAuthSupport())) return mediaUrl;
+          return createObjectURL(downloadMedia(mediaUrl));
         }
-        return createObjectURL(downloadMedia(mediaUrl));
+        if (isTauri()) {
+          await setMediaEncryption(mediaUrl, encInfo, mimeType);
+          return rewriteAuthenticatedMediaUrl(mediaUrl)!;
+        }
+        return createObjectURL(
+          downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
+        );
       }, [mx, url, useAuthentication, mimeType, encInfo, createObjectURL])
     );
 
@@ -131,6 +141,19 @@ export const VideoContent = as<'div', VideoContentProps>(
       // it's still loading the video element may fire a transient error
       // before the blob URL is ready.
       if (srcState.status === AsyncStatus.Success) {
+        // The streaming URL failed (e.g. a stale service worker acknowledged
+        // the probe but still cannot serve the media): retry once through the
+        // blob path, which attaches the access token in JavaScript.
+        if (
+          !preferBlobRef.current &&
+          !isTauri() &&
+          !url.startsWith('http') &&
+          !srcState.data.startsWith('blob:')
+        ) {
+          preferBlobRef.current = true;
+          loadSrc().catch(() => undefined);
+          return;
+        }
         setLoad(false);
         setError(true);
       }

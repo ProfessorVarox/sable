@@ -45,7 +45,6 @@ import {
 } from 'folds';
 
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import { useDismissOnBack } from '$utils/androidBack';
 import type { AutocompleteQuery } from '$components/editor';
 import {
   AutocompletePrefix,
@@ -190,7 +189,9 @@ import { ImageUsage } from '$plugins/custom-emoji';
 import { getPackImageInfo } from '$plugins/custom-emoji/utils';
 import { SerializableMap } from '$types/wrapper/SerializableMap';
 import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
-import { AttachmentSheet } from '$components/attachment-sheet/AttachmentSheet';
+import * as messageCss from '$features/room/message/styles.css';
+import { AttachmentContent } from '$components/attachment-sheet/AttachmentContent';
+import { MobileSwipeDownModal } from '$components/MobileSwipeDownModal';
 import { SchedulePickerDialog } from './schedule-send';
 import * as css from './schedule-send/SchedulePickerDialog.css';
 import {
@@ -504,6 +505,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     );
     const [AddMenuAnchor, setAddMenuAnchor] = useState<RectCords>();
     const [showAttachmentSheet, setShowAttachmentSheet] = useState(false);
+    const attachmentSkipReturnFocusRef = useRef(false);
     const [showPollPicker, setShowPollPicker] = useState(false);
     const [showLocationPicker, setShowLocationPicker] = useState(false);
     const [scheduleMenuAnchor, setScheduleMenuAnchor] = useState<RectCords>();
@@ -514,11 +516,22 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [sendError, setSendError] = useState<string | undefined>();
     const isEncrypted = room.hasEncryptionStateEvent();
     const [emojiBoardTab, setEmojiBoardTab] = useState<EmojiBoardTab | undefined>(undefined);
-    // Android back closes the mobile emoji board instead of navigating away.
-    useDismissOnBack(() => setEmojiBoardTab(undefined), emojiBoardTab !== undefined);
-
+    const closeEmojiBoard = useCallback(() => {
+      if (isMobileOrTablet()) {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement) activeElement.blur();
+      }
+      setEmojiBoardTab(undefined);
+    }, []);
     const toggleEmojiBoardTab = useCallback((tab: EmojiBoardTab) => {
-      setEmojiBoardTab((prev) => (prev === tab ? undefined : tab));
+      setEmojiBoardTab((prev) => {
+        if (prev !== tab) return tab;
+        if (isMobileOrTablet()) {
+          const activeElement = document.activeElement;
+          if (activeElement instanceof HTMLElement) activeElement.blur();
+        }
+        return undefined;
+      });
     }, []);
 
     const [personaPickerTab, setPersonaPickerTab] = useState<PersonaPickerTab | undefined>(
@@ -2037,7 +2050,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
               {isMobileOrTablet() ? (
                 <>
                   <IconButton
-                    onClick={() => setShowAttachmentSheet(true)}
+                    onClick={() => {
+                      attachmentSkipReturnFocusRef.current = false;
+                      setShowAttachmentSheet(true);
+                    }}
                     onPointerDown={suppressEditorRefocus}
                     variant="SurfaceVariant"
                     size="300"
@@ -2048,27 +2064,37 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   >
                     {composerIcon(PlusCircle)}
                   </IconButton>
-                  <AttachmentSheet
-                    open={showAttachmentSheet}
-                    onClose={() => setShowAttachmentSheet(false)}
-                    onPickPhotos={() => {
-                      pickFile('image/*,.tgs');
-                      setShowAttachmentSheet(false);
-                    }}
-                    onPickFile={() => {
-                      pickFile('*');
-                      setShowAttachmentSheet(false);
-                    }}
-                    onPickPoll={() => {
-                      setShowAttachmentSheet(false);
-                      setShowPollPicker(true);
-                    }}
-                    onPickLocation={() => {
-                      setShowAttachmentSheet(false);
-                      setShowLocationPicker(true);
-                    }}
-                    containerRef={fileDropContainerRef}
-                  />
+                  {showAttachmentSheet && (
+                    <MobileSwipeDownModal
+                      requestClose={() => setShowAttachmentSheet(false)}
+                      containerRef={fileDropContainerRef}
+                      focusTrap
+                      dialogLabel="Share"
+                      skipReturnFocusRef={attachmentSkipReturnFocusRef}
+                    >
+                      {() => (
+                        <AttachmentContent
+                          onPickPhotos={() => {
+                            pickFile('image/*,.tgs');
+                            setShowAttachmentSheet(false);
+                          }}
+                          onPickFile={() => {
+                            pickFile('*');
+                            setShowAttachmentSheet(false);
+                          }}
+                          onPickPoll={() => {
+                            setShowAttachmentSheet(false);
+                            setShowPollPicker(true);
+                          }}
+                          onPickLocation={() => {
+                            setShowAttachmentSheet(false);
+                            setShowLocationPicker(true);
+                          }}
+                          skipReturnFocusRef={attachmentSkipReturnFocusRef}
+                        />
+                      )}
+                    </MobileSwipeDownModal>
+                  )}
                 </>
               ) : (
                 <>
@@ -2177,11 +2203,12 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       imagePackRooms={imagePackRooms}
                       returnFocusOnDeactivate={false}
                       isFullWidth={isMobileOrTablet()}
+                      sheet={isMobileOrTablet()}
                       onEmojiSelect={handleEmoticonSelect}
                       onCustomEmojiSelect={handleEmoticonSelect}
                       onStickerSelect={handleStickerSelect}
                       onGifSelect={handleGifSelect}
-                      requestClose={() => setEmojiBoardTab(undefined)}
+                      requestClose={closeEmojiBoard}
                     />
                   );
                   const triggers = (
@@ -2255,20 +2282,17 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     return (
                       <>
                         {triggers}
-                        <Overlay open={emojiBoardTab !== undefined} backdrop={<OverlayBackdrop />}>
-                          <div
-                            style={{
-                              position: 'fixed',
-                              left: 0,
-                              right: 0,
-                              bottom: 0,
-                              display: 'flex',
-                              justifyContent: 'center',
-                            }}
+                        {emojiBoardTab !== undefined && (
+                          <MobileSwipeDownModal
+                            requestClose={closeEmojiBoard}
+                            focusTrap
+                            dialogLabel="Emoji picker"
+                            sheetClassName={messageCss.MessageMobileOptionsContainerPicker}
+                            keyboardAware
                           >
-                            {emojiBoard}
-                          </div>
-                        </Overlay>
+                            {() => emojiBoard}
+                          </MobileSwipeDownModal>
+                        )}
                       </>
                     );
                   }

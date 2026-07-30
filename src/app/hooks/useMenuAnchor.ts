@@ -18,8 +18,10 @@ export type MenuAnchor<T extends HTMLElement> = {
   /** Drives the press-feedback highlight while a long press is in progress. */
   isPressing: boolean;
   close: () => void;
-  /** Anchors the menu to an element's box. */
+  /** Toggles the menu on an element's box. Click semantics: press again to close. */
   openAt: (element: HTMLElement) => void;
+  /** Anchors the menu to an element's box without ever closing it. */
+  open: (element: HTMLElement) => void;
   /** Click, right-click and long-press wiring for the trigger element. */
   triggerProps: TriggerProps<T>;
   /** True once if a long press just fired, for callers that own their contextmenu handler. */
@@ -49,15 +51,23 @@ export function useMenuAnchor<T extends HTMLElement = HTMLElement>(
     setAnchor((current) => (current ? undefined : cords));
   }, []);
 
+  const open = useCallback((element: HTMLElement) => {
+    setAnchor(element.getBoundingClientRect());
+  }, []);
+
   const longPress = useMobileLongPress(() => {
     if (onLongPress) {
       onLongPress();
       return;
     }
-    if (triggerRef.current) openAt(triggerRef.current);
+    // The platform fires its own contextmenu at roughly this delay, and whichever
+    // lands first opens the menu. Opening, not toggling: a toggle would shut the
+    // menu that contextmenu just opened.
+    if (triggerRef.current) open(triggerRef.current);
   });
 
   const consumeLongPressFired = useCallback(() => {
+    longPress.onTouchCancel();
     if (!longPress.firedRef.current) return false;
     longPress.firedRef.current = false;
     return true;
@@ -79,6 +89,7 @@ export function useMenuAnchor<T extends HTMLElement = HTMLElement>(
   const onContextMenu: MouseEventHandler<T> = useCallback(
     (evt) => {
       evt.preventDefault();
+      longPress.onTouchCancel();
       // The long-press timer already opened it; a synthetic contextmenu would toggle it shut.
       if (longPress.firedRef.current) {
         longPress.firedRef.current = false;
@@ -105,6 +116,7 @@ export function useMenuAnchor<T extends HTMLElement = HTMLElement>(
     consumeLongPressFired,
     close,
     openAt,
+    open,
     triggerProps: {
       onClick,
       onContextMenu,

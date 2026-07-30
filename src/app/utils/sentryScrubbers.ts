@@ -171,3 +171,91 @@ export function scrubMatrixUrl(url: string): string {
       .replace(/([?&#](?:code|state|loginToken)=)[^&#\s]+/gi, '$1[REDACTED]')
   );
 }
+
+type DiagnosticsJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | DiagnosticsJsonObject
+  | DiagnosticsJsonValue[];
+type DiagnosticsJsonObject = { [key: string]: DiagnosticsJsonValue };
+
+const DIAGNOSTICS_REDACTED = '[REDACTED]';
+const DIAGNOSTICS_REDACTED_CREDENTIAL = '[REDACTED_CREDENTIAL]';
+const DIAGNOSTICS_REDACTED_MATRIX_ID = '[REDACTED_MATRIX_ID]';
+const DIAGNOSTICS_REDACTED_PATH = '[REDACTED_PATH]';
+const DIAGNOSTICS_REDACTED_URL = '[REDACTED_URL]';
+
+const DIAGNOSTICS_SENSITIVE_KEY_PATTERN =
+  /(?:authorization|cookie|token|secret|password|passwd|credential|api[-_]?key)/i;
+const DIAGNOSTICS_URL_PATTERN = /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s<>"']+/gi;
+const DIAGNOSTICS_AUTH_PATTERN = /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
+const DIAGNOSTICS_SENSITIVE_VALUE_PATTERN =
+  /(["']?(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|access[-_]?token|refresh[-_]?token|id[-_]?token|x[-_]?auth[-_]?token|x[-_]?access[-_]?token|api[-_]?key|client[-_]?secret|password|passwd|secret|credential|token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi;
+const DIAGNOSTICS_MATRIX_ID_PATTERN = /(?:[@!#$]\S+?:\S+|\$\S+?:\S+)/g;
+const DIAGNOSTICS_ABSOLUTE_PATH_PATTERN =
+  /(?:\/(?:home|Users|tmp|var\/tmp|private\/tmp|var\/folders)\/[^\s<>"']+|[A-Za-z]:[\\/](?:Users|Temp|Windows[\\/]Temp)[^\s<>"']*)/g;
+
+const redactDiagnosticsText = (text: string): string =>
+  text
+    .replace(DIAGNOSTICS_URL_PATTERN, DIAGNOSTICS_REDACTED_URL)
+    .replace(DIAGNOSTICS_AUTH_PATTERN, DIAGNOSTICS_REDACTED_CREDENTIAL)
+    .replace(DIAGNOSTICS_SENSITIVE_VALUE_PATTERN, `$1${DIAGNOSTICS_REDACTED}`)
+    .replace(DIAGNOSTICS_MATRIX_ID_PATTERN, DIAGNOSTICS_REDACTED_MATRIX_ID)
+    .replace(DIAGNOSTICS_ABSOLUTE_PATH_PATTERN, DIAGNOSTICS_REDACTED_PATH);
+
+const sanitizeDiagnosticsHeaders = (value: DiagnosticsJsonValue): DiagnosticsJsonValue => {
+  if (Array.isArray(value)) {
+    return value.map((header) => {
+      if (Array.isArray(header) && header.length >= 2) {
+        return [
+          typeof header[0] === 'string' ? redactDiagnosticsText(header[0]) : 'header',
+          DIAGNOSTICS_REDACTED,
+        ];
+      }
+      return sanitizeDiagnosticsJsonValue(header) ?? null;
+    });
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).map((key) => [key, DIAGNOSTICS_REDACTED]));
+  }
+  return sanitizeDiagnosticsJsonValue(value) ?? null;
+};
+
+const sanitizeDiagnosticsJsonValue = (
+  value: DiagnosticsJsonValue
+): DiagnosticsJsonValue | undefined => {
+  if (typeof value === 'string') return redactDiagnosticsText(value);
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (Array.isArray(value))
+    return value.map(sanitizeDiagnosticsJsonValue).filter((item) => item !== undefined);
+
+  const sanitized: DiagnosticsJsonObject = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key.toLowerCase() === 'data') continue;
+    if (key.toLowerCase() === 'headers') {
+      sanitized[key] = sanitizeDiagnosticsHeaders(child);
+      continue;
+    }
+    if (DIAGNOSTICS_SENSITIVE_KEY_PATTERN.test(key)) {
+      sanitized[key] = DIAGNOSTICS_REDACTED;
+      continue;
+    }
+    const safeChild = sanitizeDiagnosticsJsonValue(child);
+    if (safeChild !== undefined) sanitized[key] = safeChild;
+  }
+  return sanitized;
+};
+
+/** Strict sanitizer for frontend diagnostics exports sent from the web client. */
+export const sanitizeDiagnosticsLogs = (rawLogs: string): string | null => {
+  try {
+    const parsed: unknown = JSON.parse(rawLogs);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const sanitized = sanitizeDiagnosticsJsonValue(parsed as DiagnosticsJsonObject);
+    return sanitized === undefined ? null : JSON.stringify(sanitized, null, 2);
+  } catch {
+    return null;
+  }
+};

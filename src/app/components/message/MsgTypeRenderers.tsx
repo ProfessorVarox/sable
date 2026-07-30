@@ -451,6 +451,8 @@ export function MImage({ content, renderImageContent, outlined, fitParent }: MIm
 
   // lazy approach to make sure that both horizontal and vertical images fit
   // checks whether the image has width and height and if it does it sets a width that matches the aspect ratio
+  const hasIntrinsicSize =
+    isNumber(imgInfo?.w) && imgInfo.w > 0 && isNumber(imgInfo?.h) && imgInfo.h > 0;
   const portraitWidth =
     !imgInfo || !imgInfo.w || !imgInfo.h || imgInfo.w > imgInfo.h
       ? undefined
@@ -462,10 +464,13 @@ export function MImage({ content, renderImageContent, outlined, fitParent }: MIm
         flexShrink: 0,
         width: fitParent ? '100%' : portraitWidth,
         height: fitParent ? '100%' : undefined,
-        maxWidth: fitParent ? undefined : toRem(MAX_SIZE),
+        // A bare MAX_SIZE cap would drop the container's own `max-width: 100%`.
+        maxWidth: fitParent ? undefined : `min(100%, ${toRem(MAX_SIZE)})`,
         maxHeight: fitParent ? undefined : toRem(MAX_SIZE),
-        minWidth: fitParent ? undefined : MIN_SIZE,
-        minHeight: fitParent ? undefined : MIN_SIZE,
+        // ImageContent's aspect-ratio box already reserves the space when the
+        // dimensions are known; a square floor on top of it letterboxes wide images.
+        minWidth: fitParent || hasIntrinsicSize ? undefined : MIN_SIZE,
+        minHeight: fitParent || hasIntrinsicSize ? undefined : MIN_SIZE,
       }}
       outlined={outlined}
     >

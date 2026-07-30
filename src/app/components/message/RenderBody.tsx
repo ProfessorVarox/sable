@@ -10,6 +10,7 @@ import { PopOut, Text, Tooltip, TooltipProvider, toRem } from 'folds';
 import { sanitizeCustomHtml } from '$utils/sanitize';
 import { highlightText, scaleSystemEmoji } from '$plugins/react-custom-html-parser';
 import { useRoomAbbreviationsContext } from '$hooks/useRoomAbbreviations';
+import { isMobileOrTablet } from '$utils/platform';
 import type { TextSegment } from '$utils/abbreviations';
 import { splitByAbbreviations } from '$utils/abbreviations';
 import { MessageEmptyContent } from './content';
@@ -91,6 +92,7 @@ function AbbreviationTerm({ text, definition }: AbbreviationTermProps) {
   };
 
   const handleClick: MouseEventHandler<HTMLElement> = (e) => {
+    if (!window.getSelection()?.isCollapsed) return;
     e.stopPropagation();
     toggleAnchor(e.currentTarget);
   };
@@ -140,6 +142,7 @@ function AbbreviationTerm({ text, definition }: AbbreviationTermProps) {
               padding: 0,
               font: 'inherit',
               color: 'inherit',
+              userSelect: isMobileOrTablet() ? 'none' : 'text',
             }}
           >
             {text}

@@ -681,7 +681,7 @@ export function NativeNotificationClickRouting() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!isNativeNotificationTauri()) return undefined;
+    if (!isAndroidTauri() && !isIosTauri() && !isDesktopTauri()) return undefined;
 
     let unregister: (() => Promise<void> | void) | undefined;
     let disposed = false;

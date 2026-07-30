@@ -65,6 +65,10 @@ describe('createSessionTokenRefresher', () => {
     mocks.pushSessionToSW.mockReset().mockResolvedValue(undefined);
     getAuthMetadata.mockReset().mockResolvedValue(metadata);
     localStorage.setItem(MATRIX_SESSIONS_KEY, JSON.stringify([session]));
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: undefined,
+    });
   });
 
   it('serializes concurrent same-user refreshers and reuses rotated tokens', async () => {
@@ -96,5 +100,32 @@ describe('createSessionTokenRefresher', () => {
       accessToken: 'new-access',
       refreshToken: 'new-refresh',
     });
+  });
+
+  it('uses the current stored token after waiting for the cross-tab refresh lock', async () => {
+    const request = vi.fn<(name: string, callback: () => Promise<unknown>) => Promise<unknown>>(
+      async (_name, callback) => {
+        localStorage.setItem(
+          MATRIX_SESSIONS_KEY,
+          JSON.stringify([
+            { ...session, accessToken: 'other-access', refreshToken: 'other-refresh' },
+          ])
+        );
+        return callback();
+      }
+    );
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: { request },
+    });
+
+    const refresher = createSessionTokenRefresher(session, mx)!;
+
+    await expect(refresher.tokenRefreshFunction('old-refresh')).resolves.toEqual({
+      accessToken: 'other-access',
+      refreshToken: 'other-refresh',
+    });
+    expect(request).toHaveBeenCalledWith('sable-oidc-refresh', expect.any(Function));
+    expect(mocks.refresh).not.toHaveBeenCalled();
   });
 });

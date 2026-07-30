@@ -7,6 +7,8 @@ const {
   mockAddEventListener,
   mockReady,
   mockPushSessionToSW,
+  mockWaitForSessionTokenRefresh,
+  mockGetLocalStorageItem,
   mockWarn,
 } = vi.hoisted(() => ({
   mockHasServiceWorker: vi.fn<() => boolean>(),
@@ -32,6 +34,8 @@ const {
     >(),
   mockReady: Promise.resolve(undefined),
   mockPushSessionToSW: vi.fn<(baseUrl?: string, accessToken?: string, userId?: string) => void>(),
+  mockWaitForSessionTokenRefresh: vi.fn<(userId: string) => Promise<void>>(),
+  mockGetLocalStorageItem: vi.fn<(key: string, fallback: unknown) => unknown>(),
   mockWarn: vi.fn<(...args: unknown[]) => void>(),
 }));
 
@@ -44,6 +48,10 @@ vi.mock('./sw-session', () => ({
   pushSessionToSW: mockPushSessionToSW,
 }));
 
+vi.mock('./client/oidcTokenRefresher', () => ({
+  waitForSessionTokenRefresh: mockWaitForSessionTokenRefresh,
+}));
+
 vi.mock('./app/state/sessions', () => ({
   getFallbackSession: vi.fn<() => undefined>(() => undefined),
   MATRIX_SESSIONS_KEY: 'matrix-sessions',
@@ -51,9 +59,7 @@ vi.mock('./app/state/sessions', () => ({
 }));
 
 vi.mock('./app/state/utils/atomWithLocalStorage', () => ({
-  getLocalStorageItem: vi.fn<(key: string, fallback: unknown) => unknown>(
-    (_: string, fallback: unknown) => fallback
-  ),
+  getLocalStorageItem: mockGetLocalStorageItem,
 }));
 
 vi.mock('./app/utils/debug', () => ({
@@ -66,6 +72,8 @@ describe('registerAppServiceWorker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHasServiceWorker.mockReturnValue(false);
+    mockWaitForSessionTokenRefresh.mockReset().mockResolvedValue(undefined);
+    mockGetLocalStorageItem.mockImplementation((_key, fallback) => fallback);
     Object.defineProperty(window, 'confirm', {
       configurable: true,
       value: vi.fn<(message?: string) => boolean>(() => false),
@@ -127,5 +135,46 @@ describe('registerAppServiceWorker', () => {
     registerAppServiceWorker();
 
     expect(mockPushSessionToSW).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for the active session refresh before replying to a session request', async () => {
+    let activeSession: { baseUrl: string; userId: string; accessToken: string } | undefined;
+    mockGetLocalStorageItem.mockImplementation((key, fallback) => {
+      if (key === 'matrix-sessions') return activeSession ? [activeSession] : [];
+      if (key === 'active-session') return activeSession?.userId;
+      return fallback;
+    });
+    mockHasServiceWorker.mockReturnValue(true);
+    registerAppServiceWorker();
+    await Promise.resolve();
+    await Promise.resolve();
+    mockPushSessionToSW.mockReset();
+
+    activeSession = {
+      baseUrl: 'https://hs.example',
+      userId: '@alice:hs.example',
+      accessToken: 'new-access',
+    };
+    let resolveRefresh!: () => void;
+    mockWaitForSessionTokenRefresh.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveRefresh = resolve;
+      })
+    );
+    const listener = mockAddEventListener.mock.calls.find(([type]) => type === 'message')?.[1] as
+      | ((event: MessageEvent) => void)
+      | undefined;
+    listener?.({ data: { type: 'requestSession' } } as MessageEvent);
+
+    expect(mockWaitForSessionTokenRefresh).toHaveBeenCalledWith('@alice:hs.example');
+    expect(mockPushSessionToSW).not.toHaveBeenCalled();
+    resolveRefresh();
+    await vi.waitFor(() =>
+      expect(mockPushSessionToSW).toHaveBeenCalledWith(
+        'https://hs.example',
+        'new-access',
+        '@alice:hs.example'
+      )
+    );
   });
 });

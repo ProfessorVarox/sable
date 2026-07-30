@@ -9,6 +9,9 @@ use std::sync::OnceLock;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
 use objc2::{msg_send, sel};
+use objc2_avf_audio::{
+    AVAudioSession, AVAudioSessionCategoryOptions, AVAudioSessionCategoryPlayAndRecord,
+};
 use tauri::webview::WebviewWindow;
 
 extern "C-unwind" fn input_accessory_view_nil(_this: &AnyObject, _cmd: Sel) -> *mut AnyObject {
@@ -54,6 +57,26 @@ pub fn haptic_feedback(style: String) {
             let _: () = msg_send![&*generator, impactOccurred];
         }
     }
+}
+
+#[tauri::command]
+pub fn activate_call_audio_session() -> Result<(), String> {
+    let session = unsafe { AVAudioSession::sharedInstance() };
+    unsafe {
+        session.setCategory_withOptions_error(
+            AVAudioSessionCategoryPlayAndRecord.expect("PlayAndRecord category is unavailable"),
+            AVAudioSessionCategoryOptions::DefaultToSpeaker
+                | AVAudioSessionCategoryOptions::AllowBluetoothHFP,
+        )
+    }
+    .map_err(|error| error.to_string())?;
+    unsafe { session.setActive_error(true) }.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn deactivate_call_audio_session() -> Result<(), String> {
+    let session = unsafe { AVAudioSession::sharedInstance() };
+    unsafe { session.setActive_error(false) }.map_err(|error| error.to_string())
 }
 
 pub fn hide_form_accessory_bar(window: &WebviewWindow<crate::BrowserEngine>) {
@@ -158,4 +181,140 @@ pub(crate) fn play_notification_sound(kind: String) -> Result<(), String> {
     };
     unsafe { AudioServicesPlaySystemSound(sound_id) };
     Ok(())
+}
+
+// PhotoKit lane for saving images to the camera roll with add-only access;
+// the prompt text is NSPhotoLibraryAddUsageDescription in ios-project.yml.
+
+// Empty block only to emit the linker directive, same role as AudioToolbox above.
+#[link(name = "Photos", kind = "framework")]
+extern "C" {}
+
+use std::ffi::OsStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+use block2::RcBlock;
+use objc2_photos::{
+    PHAccessLevel, PHAssetCreationRequest, PHAssetResourceType, PHAuthorizationStatus,
+    PHPhotoLibrary,
+};
+use tokio::sync::oneshot;
+
+fn photo_access_allowed(status: PHAuthorizationStatus) -> bool {
+    // Add-only access: .limited still permits adds (it only restricts reads).
+    status == PHAuthorizationStatus::Authorized || status == PHAuthorizationStatus::Limited
+}
+
+fn photo_authorization_error(status: PHAuthorizationStatus) -> String {
+    if status == PHAuthorizationStatus::Denied {
+        "permission denied: allow photo access in Settings > Apps > Sable > Photos".to_string()
+    } else if status == PHAuthorizationStatus::Restricted {
+        "saving to Photos is blocked by device management or parental controls".to_string()
+    } else {
+        format!("unexpected photo authorization status: {status:?}")
+    }
+}
+
+async fn request_photo_add_authorization() -> Result<(), String> {
+    let status =
+        unsafe { PHPhotoLibrary::authorizationStatusForAccessLevel(PHAccessLevel::AddOnly) };
+    if photo_access_allowed(status) {
+        return Ok(());
+    }
+    if status != PHAuthorizationStatus::NotDetermined {
+        return Err(photo_authorization_error(status));
+    }
+
+    let (tx, rx) = oneshot::channel::<PHAuthorizationStatus>();
+    {
+        let tx = Mutex::new(Some(tx));
+        let handler: RcBlock<dyn Fn(PHAuthorizationStatus)> = RcBlock::new(move |status| {
+            if let Ok(mut guard) = tx.lock() {
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(status);
+                }
+            }
+        });
+        unsafe {
+            PHPhotoLibrary::requestAuthorizationForAccessLevel_handler(
+                PHAccessLevel::AddOnly,
+                &handler,
+            );
+        }
+        // PhotoKit copies the handler; keep the !Send RcBlock out of the await below.
+    }
+
+    let granted = rx
+        .await
+        .map_err(|_| "photo authorization request was cancelled".to_string())?;
+    if photo_access_allowed(granted) {
+        Ok(())
+    } else {
+        Err(photo_authorization_error(granted))
+    }
+}
+
+fn write_media_to_photo_library(bytes: &[u8], filename: &str) -> Result<(), String> {
+    // PhotoKit infers the content type from the file URL, so the temp file
+    // keeps the extension; `file_name` strips any directory components.
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let leaf = std::path::Path::new(filename)
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("download"));
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "sable-photos-{}-{}-{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+        leaf.to_string_lossy()
+    ));
+
+    if let Err(error) = std::fs::write(&path, bytes) {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("failed to write {}: {error}", path.display()));
+    }
+
+    let result = unsafe {
+        let path_str = NSString::from_str(&path.to_string_lossy());
+        let url = NSURL::fileURLWithPath(&path_str);
+        let library = PHPhotoLibrary::sharedPhotoLibrary();
+        // PhotoKit rejects creation requests instantiated outside the change block.
+        let change: RcBlock<dyn Fn()> = RcBlock::new(move || {
+            let request = PHAssetCreationRequest::creationRequestForAsset();
+            request.addResourceWithType_fileURL_options(PHAssetResourceType::Photo, &url, None);
+        });
+        library
+            .performChangesAndWait_error(RcBlock::as_ptr(&change))
+            .map_err(|error| {
+                format!(
+                    "failed to save '{filename}' to Photos ({} error {}): {}",
+                    error.domain(),
+                    error.code(),
+                    error.localizedDescription()
+                )
+            })
+    };
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+#[tauri::command]
+pub async fn save_media_to_photos(
+    bytes: Vec<u8>,
+    filename: String,
+    mime_type: String,
+) -> Result<(), String> {
+    if !mime_type.starts_with("image/") {
+        return Err(format!(
+            "unsupported media type '{mime_type}': only images can be saved to Photos"
+        ));
+    }
+
+    request_photo_add_authorization().await?;
+
+    // performChangesAndWait blocks until commit; it must not run on the main thread.
+    tauri::async_runtime::spawn_blocking(move || write_media_to_photo_library(&bytes, &filename))
+        .await
+        .map_err(|error| format!("failed to run photo save: {error}"))?
 }

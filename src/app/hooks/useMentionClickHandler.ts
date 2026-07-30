@@ -21,6 +21,7 @@ export const useMentionClickHandler = (roomId: string): ReactEventHandler<HTMLEl
 
   const handleClick: ReactEventHandler<HTMLElement> = useCallback(
     (evt) => {
+      if (!window.getSelection()?.isCollapsed) return;
       evt.stopPropagation();
       evt.preventDefault();
       const target = evt.currentTarget;

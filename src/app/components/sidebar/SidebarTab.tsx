@@ -31,7 +31,14 @@ export function SidebarTab({
   unreadCount = 0,
   dm = false,
 }: SidebarTabProps) {
-  const { anchor, close, triggerProps } = menuAnchor;
+  const { anchor, close, triggerProps, consumeLongPressFired } = menuAnchor;
+
+  // Platforms that do not fire `contextmenu` on a long press (WKWebView) still send a
+  // synthetic click on release, which would navigate away from the menu just opened.
+  const handleClick = () => {
+    if (consumeLongPressFired()) return;
+    onClick();
+  };
 
   return (
     <SidebarItemLeft active={selected}>
@@ -48,7 +55,7 @@ export function SidebarTab({
               as="button"
               ref={triggerRef}
               outlined
-              onClick={onClick}
+              onClick={handleClick}
               onContextMenu={triggerProps.onContextMenu}
               onTouchStart={triggerProps.onTouchStart}
               onTouchEnd={triggerProps.onTouchEnd}

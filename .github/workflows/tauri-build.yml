@@ -239,6 +239,15 @@ jobs:
           done
 
       # --- Linux: CEF runtime, packaged as deb / rpm / AppImage ---
+      - name: Remove cached CEF build outputs
+        if: matrix.cef
+        shell: bash
+        run: |
+          build_dir="src-tauri/target/release/build"
+          if [ -d "$build_dir" ]; then
+            find "$build_dir" -mindepth 1 -maxdepth 1 -type d -name 'cef-*' -print -exec rm -rf {} +
+          fi
+
       - name: Build CEF binary
         if: matrix.cef
         shell: bash

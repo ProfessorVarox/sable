@@ -2,12 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_UNIFIED_PUSH_APP_ID,
   disableUnifiedPush,
+  listenForUnifiedPushMessages,
+  clearRoomNotification,
+  resetUnifiedPushNotificationStateForTests,
   tryEnableUnifiedPush,
 } from './UnifiedPushNotifications';
 
+type PluginListenerHandler = (data: unknown) => void;
+
 const notificationsApi = vi.hoisted(() => ({
-  sendNotification: vi.fn<() => void>(),
-  removeActive: vi.fn<() => void>(),
+  sendNotification: vi.fn<(notification: Record<string, unknown>) => Promise<void>>(),
+  removeActive: vi.fn<(notifications: Array<{ id: number }>) => Promise<void>>(),
   createChannel: vi.fn<() => void>(),
   Importance: {
     Default: 3,
@@ -36,20 +41,65 @@ const matrixClient = vi.hoisted(() => ({
     .fn<() => Promise<{ pushers: Array<unknown> }>>()
     .mockResolvedValue({ pushers: [] }),
   getSafeUserId: vi.fn<() => string>(() => '@user:example.com'),
+  getUserId: vi.fn<() => string>(() => '@user:example.com'),
+  getCrypto: vi.fn<() => unknown>(() => undefined),
+  getRoom: vi.fn<() => unknown>(() => undefined),
+  fetchRoomEvent: vi.fn<() => Promise<unknown>>(),
 }));
+
+const invoke = vi.hoisted(() =>
+  vi.fn<(cmd: string, args?: Record<string, unknown>) => Promise<unknown>>()
+);
+
+const addPluginListener = vi.hoisted(() =>
+  vi.fn<
+    (
+      plugin: string,
+      event: string,
+      handler: PluginListenerHandler
+    ) => Promise<{ unregister: () => Promise<void> }>
+  >()
+);
 
 vi.mock('./UnifiedPushTransport', () => unifiedPushTransport);
 
 vi.mock('./TauriNotificationsApiClient', () => ({
   getTauriNotificationsApi,
+  isMobileTauri: () => false,
+}));
+
+vi.mock('@tauri-apps/api/core', () => ({
+  addPluginListener,
+  invoke,
 }));
 
 vi.mock('$utils/fetch', () => ({
   fetch: (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args),
 }));
 
+function makeRoom() {
+  return {
+    name: 'Room',
+    getJoinedMemberCount: () => 2,
+    getLiveTimeline: () => ({ getEvents: () => [], getState: () => undefined }),
+    getMember: () => undefined,
+  };
+}
+
+const encryptedPush = (eventId: string) => ({
+  type: 'm.room.encrypted',
+  room_id: '!room:example.com',
+  room_name: 'Room',
+  event_id: eventId,
+  content: { algorithm: 'm.megolm.v1.aes-sha2', ciphertext: 'ciphertext' },
+});
+
 describe('UnifiedPushNotifications', () => {
+  let pushHandler: (data: unknown) => void;
+
   beforeEach(() => {
+    notificationsApi.sendNotification.mockResolvedValue(undefined);
+    notificationsApi.removeActive.mockResolvedValue(undefined);
     notificationsApi.createChannel.mockResolvedValue(undefined);
     getTauriNotificationsApi.mockResolvedValue(notificationsApi);
     unifiedPushTransport.registerUnifiedPushTransport.mockResolvedValue({
@@ -61,6 +111,15 @@ describe('UnifiedPushNotifications', () => {
     unifiedPushTransport.unregisterUnifiedPushTransport.mockResolvedValue(undefined);
     matrixClient.setPusher.mockClear();
     matrixClient.getPushers.mockResolvedValue({ pushers: [] });
+    matrixClient.getCrypto.mockReturnValue(undefined);
+    matrixClient.getRoom.mockReturnValue(undefined);
+    invoke.mockResolvedValue(undefined);
+    addPluginListener.mockImplementation(
+      async (_plugin: string, _event: string, handler: (data: unknown) => void) => {
+        pushHandler = handler;
+        return { unregister: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) };
+      }
+    );
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>().mockRejectedValue(new Error('gateway probe failed'))
@@ -68,8 +127,456 @@ describe('UnifiedPushNotifications', () => {
   });
 
   afterEach(() => {
+    resetUnifiedPushNotificationStateForTests();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  function makeSettings(overrides: Record<string, unknown> = {}) {
+    return {
+      mx: matrixClient,
+      showMessageContent: true,
+      showEncryptedMessageContent: true,
+      notificationSoundEnabled: true,
+      useInAppNotifications: false,
+      ...overrides,
+    };
+  }
+
+  async function listenAndPush(payload: Record<string, unknown>, settings = makeSettings()) {
+    await listenForUnifiedPushMessages(() => settings as never);
+    pushHandler({ message: JSON.stringify(payload) });
+  }
+
+  it('posts an encrypted baseline before a hanging local decryption completes', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let resolveDecryption!: (content: Record<string, unknown>) => void;
+    const decryption = new Promise<Record<string, unknown>>((resolve) => {
+      resolveDecryption = resolve;
+    });
+    const crypto = {
+      decryptEvent: vi.fn<() => Promise<Record<string, unknown>>>(() => decryption),
+    };
+    matrixClient.getCrypto.mockReturnValue(crypto);
+    const order: string[] = [];
+    notificationsApi.sendNotification.mockImplementation(async (notification) => {
+      order.push(`post:${String(notification.body)}`);
+    });
+    crypto.decryptEvent.mockImplementation(() => {
+      order.push('decrypt');
+      return decryption;
+    });
+
+    await listenAndPush(encryptedPush('$baseline:example.com'));
+
+    await vi.waitFor(() => expect(order).toEqual(['post:You: Encrypted message', 'decrypt']));
+
+    resolveDecryption({
+      clearEvent: {
+        type: 'm.room.message',
+        content: { body: 'decrypted message' },
+      },
+    });
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledTimes(2));
+  });
+
+  it('silently updates the same notification after encrypted decryption succeeds', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    matrixClient.getCrypto.mockReturnValue({
+      decryptEvent: vi.fn<() => Promise<Record<string, unknown>>>().mockResolvedValue({
+        clearEvent: {
+          type: 'm.room.message',
+          content: { body: 'decrypted message' },
+        },
+      }),
+    });
+
+    await listenAndPush(encryptedPush('$success:example.com'));
+
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledTimes(2));
+    const baseline = notificationsApi.sendNotification.mock.calls[0]?.[0];
+    const enrichment = notificationsApi.sendNotification.mock.calls[1]?.[0];
+    expect(baseline).toMatchObject({
+      body: 'You: Encrypted message',
+      silent: false,
+    });
+    expect(enrichment).toMatchObject({
+      body: 'You: decrypted message',
+      silent: true,
+      id: (baseline as Record<string, unknown>).id,
+    });
+  });
+
+  it('deduplicates rich encrypted pushes before decryption', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    const payload = encryptedPush('$duplicate:example.com');
+    pushHandler({ message: JSON.stringify(payload) });
+    pushHandler({ message: JSON.stringify(payload) });
+
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+  });
+
+  it('does not decrypt when encrypted previews are disabled', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    const decryptEvent = vi.fn<() => void>();
+    matrixClient.getCrypto.mockReturnValue({ decryptEvent });
+
+    await listenAndPush(
+      encryptedPush('$policy:example.com'),
+      makeSettings({ showEncryptedMessageContent: false })
+    );
+
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+    expect(decryptEvent).not.toHaveBeenCalled();
+  });
+
+  it('discards encrypted enrichment that resolves after the observation deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      matrixClient.getRoom.mockReturnValue(makeRoom());
+      let resolveDecryption!: (content: Record<string, unknown>) => void;
+      const decryption = new Promise<Record<string, unknown>>((resolve) => {
+        resolveDecryption = resolve;
+      });
+      matrixClient.getCrypto.mockReturnValue({
+        decryptEvent: vi.fn<() => Promise<Record<string, unknown>>>().mockReturnValue(decryption),
+      });
+
+      await listenAndPush(encryptedPush('$deadline:example.com'));
+      await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+
+      vi.advanceTimersByTime(2_500);
+      resolveDecryption({
+        clearEvent: {
+          type: 'm.room.message',
+          content: { body: 'late plaintext' },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(notificationsApi.sendNotification).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries a duplicate rich event after its initial native post fails', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let attempts = 0;
+    const posted: Record<string, unknown>[] = [];
+    notificationsApi.sendNotification.mockImplementation(async (notification) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('native post failed');
+      posted.push(notification);
+    });
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    const payload = encryptedPush('$retry:example.com');
+    pushHandler({ message: JSON.stringify(payload) });
+    pushHandler({ message: JSON.stringify(payload) });
+
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ body: 'You: Encrypted message' });
+  });
+
+  it('does not recreate a cleared notification when enrichment resolves', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let resolveDecryption!: (content: Record<string, unknown>) => void;
+    const decryption = new Promise<Record<string, unknown>>((resolve) => {
+      resolveDecryption = resolve;
+    });
+    matrixClient.getCrypto.mockReturnValue({
+      decryptEvent: vi.fn<() => Promise<Record<string, unknown>>>().mockReturnValue(decryption),
+    });
+
+    const settings = makeSettings();
+    await listenAndPush(encryptedPush('$clear:example.com'), settings);
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+
+    await clearRoomNotification('@user:example.com', '!room:example.com');
+    resolveDecryption({
+      clearEvent: {
+        type: 'm.room.message',
+        content: { body: 'must not return' },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(notificationsApi.sendNotification).toHaveBeenCalledOnce();
+  });
+
+  it('does not leave rolled-back content after concurrent room posts', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let attempts = 0;
+    const posted: Record<string, unknown>[] = [];
+    notificationsApi.sendNotification.mockImplementation(async (notification) => {
+      attempts += 1;
+      if (attempts === 2) throw new Error('second native post failed');
+      posted.push(notification);
+    });
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    pushHandler({
+      message: JSON.stringify({
+        ...encryptedPush('$first:example.com'),
+        sender_display_name: 'First',
+      }),
+    });
+    pushHandler({
+      message: JSON.stringify({
+        ...encryptedPush('$second:example.com'),
+        sender_display_name: 'Second',
+      }),
+    });
+    await vi.waitFor(() => expect(attempts).toBe(2));
+
+    pushHandler({
+      message: JSON.stringify({
+        ...encryptedPush('$third:example.com'),
+        sender_display_name: 'Third',
+      }),
+    });
+    await vi.waitFor(() => expect(attempts).toBe(3));
+
+    expect(posted).toHaveLength(2);
+    expect(posted[1]).toMatchObject({ body: 'Third: Encrypted message' });
+    expect(posted[1]?.inboxLines).not.toEqual(
+      expect.arrayContaining(['Second: Encrypted message'])
+    );
+  });
+
+  it('restores the complete rich cache after an evicting baseline post fails', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let attempts = 0;
+    const successfulPosts: Record<string, unknown>[] = [];
+    notificationsApi.sendNotification.mockImplementation(async (notification) => {
+      attempts += 1;
+      if (attempts === 11) throw new Error('evicting native post failed');
+      successfulPosts.push(notification);
+    });
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    for (let index = 1; index <= 10; index += 1) {
+      pushHandler({
+        message: JSON.stringify({
+          ...encryptedPush(`$eviction-${index}:example.com`),
+          sender_display_name: `Sender ${index}`,
+        }),
+      });
+    }
+    await vi.waitFor(() => expect(attempts).toBe(10));
+
+    const retryPayload = {
+      ...encryptedPush('$eviction-11:example.com'),
+      sender_display_name: 'Sender 11',
+    };
+    pushHandler({ message: JSON.stringify(retryPayload) });
+    await vi.waitFor(() => expect(attempts).toBe(11));
+    pushHandler({ message: JSON.stringify(retryPayload) });
+    await vi.waitFor(() => expect(attempts).toBe(12));
+
+    expect(successfulPosts.at(-1)).toMatchObject({ body: 'Sender 11: Encrypted message' });
+    expect(successfulPosts.at(-1)?.inboxLines).toEqual(
+      expect.arrayContaining(['Sender 7: Encrypted message'])
+    );
+  });
+
+  it('serializes cross-room summary writes and refreshes from current caches', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    const summaryPosts: Record<string, unknown>[] = [];
+    let releaseFirstSummary!: () => void;
+    const firstSummary = new Promise<void>((resolve) => {
+      releaseFirstSummary = resolve;
+    });
+    notificationsApi.sendNotification.mockImplementation(async (notification) => {
+      if (notification.groupSummary) {
+        summaryPosts.push(notification);
+        if (summaryPosts.length === 1) await firstSummary;
+      }
+    });
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    const roomPayload = (roomId: string, eventId: string, roomName: string) => ({
+      ...encryptedPush(eventId),
+      room_id: roomId,
+      room_name: roomName,
+    });
+    pushHandler({ message: JSON.stringify(roomPayload('!room-a:example.com', '$a', 'Room A')) });
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+    pushHandler({ message: JSON.stringify(roomPayload('!room-b:example.com', '$b', 'Room B')) });
+    await vi.waitFor(() => expect(summaryPosts).toHaveLength(1));
+
+    pushHandler({ message: JSON.stringify(roomPayload('!room-c:example.com', '$c', 'Room C')) });
+    releaseFirstSummary();
+    await vi.waitFor(() => expect(summaryPosts).toHaveLength(2));
+
+    expect(summaryPosts[0]).toMatchObject({ title: '2 messages in 2 chats' });
+    expect(summaryPosts[1]).toMatchObject({ title: '3 messages in 3 chats' });
+  });
+
+  it('compensates a summary that observed a baseline pending for another room', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let rejectFailedPost!: (error: Error) => void;
+    let failedPostStarted!: () => void;
+    const failedPost = new Promise<never>((_, reject) => {
+      rejectFailedPost = reject;
+    });
+    const failedPostStartedPromise = new Promise<void>((resolve) => {
+      failedPostStarted = resolve;
+    });
+    const summaryPosts: Record<string, unknown>[] = [];
+    notificationsApi.sendNotification.mockImplementation(async (notification) => {
+      const eventId = (notification.extra as Record<string, unknown> | undefined)?.event_id;
+      if (eventId === '$a-failed') {
+        failedPostStarted();
+        await failedPost;
+        return;
+      }
+      if (notification.groupSummary) summaryPosts.push(notification);
+    });
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    const roomPayload = (
+      roomId: string,
+      eventId: string,
+      roomName: string,
+      sender_display_name: string
+    ) => ({
+      ...encryptedPush(eventId),
+      room_id: roomId,
+      room_name: roomName,
+      sender_display_name,
+    });
+    pushHandler({
+      message: JSON.stringify(
+        roomPayload('!room-a:example.com', '$a-old', 'Room A', 'Old message')
+      ),
+    });
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+
+    pushHandler({
+      message: JSON.stringify(
+        roomPayload('!room-a:example.com', '$a-failed', 'Room A', 'Failed message')
+      ),
+    });
+    await failedPostStartedPromise;
+    pushHandler({
+      message: JSON.stringify(roomPayload('!room-b:example.com', '$b', 'Room B', 'B message')),
+    });
+    await vi.waitFor(() => expect(summaryPosts).toHaveLength(1));
+
+    rejectFailedPost(new Error('pending baseline failed'));
+    await vi.waitFor(() => expect(summaryPosts).toHaveLength(2));
+
+    expect(summaryPosts[0]?.inboxLines).toEqual(
+      expect.arrayContaining(['Room A: Failed message: Encrypted message'])
+    );
+    expect(summaryPosts[1]?.inboxLines).toEqual(
+      expect.arrayContaining(['Room A: Old message: Encrypted message'])
+    );
+    expect(summaryPosts[1]?.inboxLines).not.toEqual(
+      expect.arrayContaining(['Room A: Failed message: Encrypted message'])
+    );
+  });
+
+  it('still cleans up the account summary when child removal fails', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    const roomPayload = (roomId: string, eventId: string) => ({
+      ...encryptedPush(eventId),
+      room_id: roomId,
+    });
+    pushHandler({ message: JSON.stringify(roomPayload('!room-a:example.com', '$a')) });
+    pushHandler({ message: JSON.stringify(roomPayload('!room-b:example.com', '$b')) });
+    await vi.waitFor(() =>
+      expect(
+        notificationsApi.sendNotification.mock.calls.some(
+          ([notification]) => notification.groupSummary
+        )
+      ).toBe(true)
+    );
+
+    let removeAttempts = 0;
+    notificationsApi.removeActive.mockImplementation(async () => {
+      removeAttempts += 1;
+      if (removeAttempts === 1) throw new Error('child removal failed');
+    });
+    await clearRoomNotification('@user:example.com', '!room-a:example.com');
+
+    expect(removeAttempts).toBe(2);
+  });
+
+  it('checks preview policy again after a minimal event resolves', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    let resolveEvent!: (event: unknown) => void;
+    const fetched = new Promise<unknown>((resolve) => {
+      resolveEvent = resolve;
+    });
+    matrixClient.fetchRoomEvent.mockReturnValue(fetched);
+    const settings = makeSettings();
+
+    await listenAndPush(
+      {
+        room_id: '!room:example.com',
+        event_id: '$minimal-policy:example.com',
+        counts: { unread: 1 },
+      },
+      settings
+    );
+    await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+    settings.showMessageContent = false;
+    resolveEvent({
+      type: 'm.room.message',
+      room_id: '!room:example.com',
+      event_id: '$minimal-policy:example.com',
+      sender: '@alice:example.com',
+      content: { body: 'late plaintext' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(notificationsApi.sendNotification).toHaveBeenCalledOnce();
+  });
+
+  it('activates the native listener only after registration resolves', async () => {
+    const order: string[] = [];
+    addPluginListener.mockImplementation(async () => {
+      order.push('register');
+      return { unregister: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) };
+    });
+    invoke.mockImplementation(async () => {
+      order.push('activate');
+    });
+
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+
+    expect(order).toEqual(['register', 'activate']);
+    expect(invoke).toHaveBeenCalledWith('plugin:notifications|set_push_message_listener_active', {
+      active: true,
+    });
+  });
+
+  it('deactivates before unregistering even when deactivation fails', async () => {
+    const order: string[] = [];
+    const unregister = vi.fn<() => Promise<void>>(async () => {
+      order.push('unregister');
+    });
+    addPluginListener.mockImplementation(async () => ({ unregister }));
+
+    const handle = await listenForUnifiedPushMessages(() => makeSettings() as never);
+    invoke.mockImplementation(async () => {
+      order.push('deactivate');
+      throw new Error('deactivation failed');
+    });
+
+    await expect(handle.unregister()).rejects.toThrow('deactivation failed');
+
+    expect(order).toEqual(['deactivate', 'unregister']);
   });
 
   it('registers the Matrix pusher with the resolved UnifiedPush overrides', async () => {

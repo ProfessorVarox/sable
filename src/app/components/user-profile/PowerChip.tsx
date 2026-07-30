@@ -210,6 +210,7 @@ export function PowerChip({
         align="Start"
         offset={4}
         returnFocusOnDeactivate
+        surfaceColor={cardColor ? innerColor : undefined}
         menu={
           <Menu>
             <Box

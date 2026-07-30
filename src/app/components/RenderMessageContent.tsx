@@ -51,7 +51,7 @@ import { TextViewer } from './text-viewer';
 import { ClientSideHoverFreeze } from './ClientSideHoverFreeze';
 import { CuteEventType, MCuteEvent } from './message/MCuteEvent';
 import { PollEvent } from './message/PollEvent';
-import { M_TEXT } from 'matrix-js-sdk';
+import { M_POLL_START, M_TEXT } from 'matrix-js-sdk';
 import type { IImageInfo, IGalleryContent } from '$types/matrix/common';
 import { GALLERY_MSGTYPE } from '$types/matrix/common';
 
@@ -511,7 +511,7 @@ function RenderMessageContentInternal({
         }
       />
     );
-  if (content['org.matrix.msc3381.poll.start']) {
+  if (content[M_POLL_START.name]) {
     if (mEvent && mx && room)
       return <PollEvent content={content} mEvent={mEvent} mx={mx} room={room} />;
     else return <UnsupportedContent />;

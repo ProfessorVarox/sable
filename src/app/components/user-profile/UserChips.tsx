@@ -92,6 +92,7 @@ export function ServerChip({
       align="Start"
       offset={4}
       returnFocusOnDeactivate
+      surfaceColor={cardColor ? innerColor : undefined}
       menu={
         <Menu>
           <div
@@ -235,6 +236,7 @@ export function ShareChip({
       align="Start"
       offset={4}
       returnFocusOnDeactivate
+      surfaceColor={cardColor ? innerColor : undefined}
       menu={
         <Menu>
           <div style={{ padding: config.space.S200, backgroundColor: innerColor }}>
@@ -468,6 +470,7 @@ export function MutualRoomsChip({
       align="Start"
       offset={4}
       returnFocusOnDeactivate
+      surfaceColor={cardColor ? innerColor : undefined}
       menu={
         mutualRoomsState.status === AsyncStatus.Success ? (
           <Menu
@@ -626,6 +629,7 @@ export function OptionsChip({
       align="Start"
       offset={4}
       returnFocusOnDeactivate
+      surfaceColor={cardColor ? innerColor : undefined}
       menu={
         <Menu>
           <div style={{ padding: config.space.S200, backgroundColor: innerColor }}>

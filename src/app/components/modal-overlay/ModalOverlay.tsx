@@ -1,6 +1,7 @@
+import { useRef } from 'react';
 import type { ComponentProps, MutableRefObject, ReactNode } from 'react';
 import FocusTrap from 'focus-trap-react';
-import { Box, Overlay, OverlayBackdrop, OverlayCenter } from 'folds';
+import { Box, Modal, Overlay, OverlayBackdrop, OverlayCenter } from 'folds';
 import { ScreenSize, useScreenSizeOptionally } from '$hooks/useScreenSize';
 import { stopPropagation } from '$utils/keyboard';
 import { useDismissOnBack } from '$utils/androidBack';
@@ -8,6 +9,7 @@ import { MobileSwipeDownModal } from '$components/MobileSwipeDownModal';
 import * as messageCss from '$features/room/message/styles.css';
 
 type FocusTrapOptions = ComponentProps<typeof FocusTrap>['focusTrapOptions'];
+type ModalSize = '300' | '400' | '500';
 
 type ModalOverlayProps = {
   open?: boolean;
@@ -18,6 +20,9 @@ type ModalOverlayProps = {
    *  `fullscreen` drops the centred modal and fills the viewport.
    *  `sheet` rises as a bottom sheet with a swipe-down-to-dismiss handle. */
   mobile?: 'centred' | 'fullscreen' | 'sheet';
+  /** When set, ModalOverlay owns the `<Modal>` chrome. Callers passing `size`
+   *  must not wrap children in `<Modal>` themselves. */
+  size?: ModalSize;
   /** The modal element, used as the focus fallback and as the fullscreen wrapper. */
   contentRef?: MutableRefObject<HTMLDivElement | null>;
   /** Set false for flows that Escape must not abort, such as device verification. */
@@ -30,15 +35,21 @@ export function ModalOverlay({
   requestClose,
   dismissOnClickOutside = true,
   mobile = 'centred',
+  size,
   contentRef,
   escapeDeactivates = stopPropagation,
   children,
 }: ModalOverlayProps) {
   // Null outside a provider, where desktop is the safe assumption.
   const isMobile = useScreenSizeOptionally() === ScreenSize.Mobile;
+  const ownedModalRef = useRef<HTMLDivElement | null>(null);
 
-  // Android back closes the overlay instead of navigating away.
-  useDismissOnBack(requestClose, open);
+  const sheet = isMobile && mobile === 'sheet';
+
+  // Android back closes the overlay instead of navigating away. The sheet registers
+  // its own handler, and a child's runs first, so registering here too would skip
+  // the sheet's exit animation.
+  useDismissOnBack(requestClose, open && !sheet);
 
   if (open && isMobile && mobile === 'fullscreen') {
     return (
@@ -62,7 +73,7 @@ export function ModalOverlay({
     );
   }
 
-  if (open && isMobile && mobile === 'sheet') {
+  if (open && sheet) {
     const focusTrapOptions = {
       initialFocus: false,
       fallbackFocus: () => document.body,
@@ -72,13 +83,10 @@ export function ModalOverlay({
     };
     return (
       <MobileSwipeDownModal requestClose={requestClose}>
-        {(dragHandle) => (
+        {() => (
           <FocusTrap focusTrapOptions={focusTrapOptions}>
-            <div role="dialog" aria-modal="true" className={messageCss.MessageOptionsMenu}>
-              <Box direction="Column">
-                {dragHandle}
-                {children}
-              </Box>
+            <div role="dialog" aria-modal="true" className={messageCss.MessageOptionsSheetMenu}>
+              <Box direction="Column">{children}</Box>
             </div>
           </FocusTrap>
         )}
@@ -92,13 +100,20 @@ export function ModalOverlay({
         <FocusTrap
           focusTrapOptions={{
             initialFocus: false,
-            fallbackFocus: () => contentRef?.current ?? document.body,
+            fallbackFocus: () =>
+              (size ? ownedModalRef.current : contentRef?.current) ?? document.body,
             clickOutsideDeactivates: dismissOnClickOutside,
             onDeactivate: requestClose,
             escapeDeactivates,
           }}
         >
-          {children}
+          {size ? (
+            <Modal ref={ownedModalRef} tabIndex={-1} size={size} variant="Background">
+              {children}
+            </Modal>
+          ) : (
+            children
+          )}
         </FocusTrap>
       </OverlayCenter>
     </Overlay>

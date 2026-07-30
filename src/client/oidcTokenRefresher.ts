@@ -26,6 +26,18 @@ export const assertAuthMetadataIssuer = (
 export type SessionTokenRefresher = Pick<TokenRefresher, 'tokenRefreshFunction'>;
 
 const refreshQueues = new Map<string, Promise<unknown>>();
+const inFlightRefreshes = new Map<string, Promise<unknown>>();
+const OIDC_REFRESH_LOCK_NAME = 'sable-oidc-refresh';
+
+type WebLocks = {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+};
+
+const getWebLocks = (): WebLocks | undefined => {
+  if (typeof navigator === 'undefined') return undefined;
+  const locks = (navigator as Navigator & { locks?: WebLocks }).locks;
+  return locks && typeof locks.request === 'function' ? locks : undefined;
+};
 
 const getStoredSession = (userId: string): Session | undefined =>
   getLocalStorageItem<Session[]>(MATRIX_SESSIONS_KEY, []).find(
@@ -41,6 +53,10 @@ const withRefreshQueue = async <T>(userId: string, operation: () => Promise<T>):
   );
   refreshQueues.set(userId, settled);
   return run;
+};
+
+export const waitForSessionTokenRefresh = async (userId: string): Promise<void> => {
+  await inFlightRefreshes.get(userId)?.catch(() => undefined);
 };
 
 export const createSessionTokenRefresher = (
@@ -87,27 +103,42 @@ export const createSessionTokenRefresher = (
 
   return {
     tokenRefreshFunction: async (refreshToken) => {
-      return withRefreshQueue(session.userId, async () => {
+      const refresh = withRefreshQueue(session.userId, async () => {
         const tokenRefresher = await getTokenRefresher();
-        // Another tab may have rotated the token; reusing a consumed one revokes the session.
-        const storedSession = getStoredSession(session.userId);
-        const latestRefreshToken =
-          storedSession?.refreshToken ??
-          getStoredSessionRefreshToken(session.userId) ??
-          refreshToken;
-        if (storedSession && latestRefreshToken !== refreshToken) {
+        const refreshWithCurrentState = async () => {
+          // Another tab may have rotated the token; reusing a consumed one revokes the session.
+          const storedSession = getStoredSession(session.userId);
+          const latestRefreshToken =
+            storedSession?.refreshToken ??
+            getStoredSessionRefreshToken(session.userId) ??
+            refreshToken;
+          if (storedSession && latestRefreshToken !== refreshToken) {
+            return {
+              accessToken: storedSession.accessToken,
+              refreshToken: latestRefreshToken,
+            };
+          }
+          const tokens = await tokenRefresher.tokenRefreshFunction(latestRefreshToken);
           return {
-            accessToken: storedSession.accessToken,
-            refreshToken: latestRefreshToken,
+            ...tokens,
+            // OAuth servers may omit a replacement refresh token, in which case the old one remains valid.
+            refreshToken: tokens.refreshToken ?? latestRefreshToken,
           };
-        }
-        const tokens = await tokenRefresher.tokenRefreshFunction(latestRefreshToken);
-        return {
-          ...tokens,
-          // OAuth servers may omit a replacement refresh token, in which case the old one remains valid.
-          refreshToken: tokens.refreshToken ?? latestRefreshToken,
         };
+
+        const locks = getWebLocks();
+        return locks
+          ? locks.request(OIDC_REFRESH_LOCK_NAME, refreshWithCurrentState)
+          : refreshWithCurrentState();
       });
+      inFlightRefreshes.set(session.userId, refresh);
+      try {
+        return await refresh;
+      } finally {
+        if (inFlightRefreshes.get(session.userId) === refresh) {
+          inFlightRefreshes.delete(session.userId);
+        }
+      }
     },
   };
 };

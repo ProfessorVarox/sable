@@ -138,7 +138,6 @@ function serverMatrixSdkCryptoWasm() {
 
 export default defineConfig(({ command }) => {
   const buildFlavor = process.env.SABLE_BUILD_FLAVOR || (command === 'serve' ? 'dev' : 'stable');
-  const productName = buildFlavor !== 'stable' ? `${baseProductName} Nightly` : baseProductName;
 
   return {
     clearScreen: false,
@@ -150,7 +149,7 @@ export default defineConfig(({ command }) => {
       APP_VERSION: JSON.stringify(appVersion),
       BUILD_HASH: JSON.stringify(buildHash ?? ''),
       IS_RELEASE_TAG: JSON.stringify(isReleaseTag),
-      SABLE_PRODUCT_NAME: JSON.stringify(productName),
+      SABLE_PRODUCT_NAME: JSON.stringify(baseProductName),
       SABLE_BUILD_FLAVOR: JSON.stringify(buildFlavor),
     },
     resolve: {

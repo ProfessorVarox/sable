@@ -32,14 +32,7 @@ import { getReactionKey, getReactionShortcode, getRedactionTargetId } from '$uti
 import { getMxIdLocalPart } from '$utils/matrix';
 import { randomNumberBetween } from '$utils/common';
 import { sanitizeCustomHtml } from '$utils/sanitize';
-import {
-  getReactCustomHtmlParser,
-  scaleSystemEmoji,
-  LINKIFY_OPTS,
-  makeMentionCustomProps,
-  factoryRenderLinkifyWithMention,
-  renderMatrixMention,
-} from '$plugins/react-custom-html-parser';
+import { getReactCustomHtmlParser, scaleSystemEmoji } from '$plugins/react-custom-html-parser';
 import { useRoomEvent } from '$hooks/useRoomEvent';
 import { useSableCosmetics } from '$hooks/useSableCosmetics';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
@@ -69,6 +62,8 @@ import * as css from './Reply.css';
 import { LinePlaceholder } from './placeholder';
 import { ReactionKeyInline } from './ReactionKeyInline';
 import { M_POLL_START, M_TEXT } from 'matrix-js-sdk';
+import type { PerMessageProfileBeeperFormat } from '$hooks/usePerMessageProfile';
+import { convertBeeperFormatToOurPerMessageProfile } from '$hooks/usePerMessageProfile';
 
 const ROOM_REPLY_TIMELINE_EVENT_TYPES = new Set<string>([
   EventType.RoomMessage as string,
@@ -266,6 +261,20 @@ export const Reply = as<'div', ReplyProps>(
         : rawContent;
 
     const { body, formatted_body: formattedBody, format } = contentForPreview;
+
+    // get pmp from message
+    const beeperProfile = rawContent['com.beeper.per_message_profile'] as
+      | PerMessageProfileBeeperFormat
+      | undefined;
+    const pmp = beeperProfile
+      ? convertBeeperFormatToOurPerMessageProfile(beeperProfile)
+      : undefined;
+
+    // strip the PMP fallback if it's there, to avoid displaying the PMP name twice
+    const formattedBodyStripped: string = pmp
+      ? formattedBody?.replace(/^<strong\s+data-mx-profile-fallback[^>]*>.*?<\/strong>/, '')
+      : formattedBody;
+
     const extensibleContent = contentForPreview[M_TEXT.name] as
       | string
       | { body: string }
@@ -314,7 +323,7 @@ export const Reply = as<'div', ReplyProps>(
     const badEncryption = replyEvent?.getContent().msgtype === 'm.bad.encrypted';
     const mentionClickHandler = useMentionClickHandler(room.roomId);
     const isFormattedReply =
-      format === 'org.matrix.custom.html' && typeof formattedBody === 'string';
+      format === 'org.matrix.custom.html' && typeof formattedBodyStripped === 'string';
     const hasPlainTextReply = typeof body === 'string' && body !== '';
     const hasExtensibleBody = typeof extensibleBody === 'string' && extensibleBody !== '';
     // An encrypted event that hasn't been decrypted yet (keys pending) has an
@@ -332,24 +341,6 @@ export const Reply = as<'div', ReplyProps>(
     let image: ReactNode | undefined;
     let mentioned = sender != null && (mentions?.user_ids?.includes(sender) ?? false);
 
-    const replyLinkifyOpts = useMemo(
-      () => ({
-        ...LINKIFY_OPTS,
-        render: factoryRenderLinkifyWithMention(
-          settingsLinkBaseUrl,
-          (href) =>
-            renderMatrixMention(
-              mx,
-              room.roomId,
-              href,
-              makeMentionCustomProps(mentionClickHandler),
-              nicknames
-            ),
-          mentionClickHandler
-        ),
-      }),
-      [mx, room.roomId, mentionClickHandler, nicknames, settingsLinkBaseUrl]
-    );
     if (eventType === M_POLL_START.name) {
       const question = (
         replyEvent?.getContent()[M_POLL_START.name] as {
@@ -359,12 +350,12 @@ export const Reply = as<'div', ReplyProps>(
       image = timelineIcon(ListBullets);
       if (question)
         bodyJSX = `'s poll asking ${(question[M_TEXT.name] as string) ?? question?.body ?? ''}`;
-    } else if (isFormattedReply && formattedBody !== '') {
-      const sanitizedHtml = sanitizeReplyFormattedPreview(formattedBody);
+    } else if (isFormattedReply && formattedBodyStripped !== '') {
+      const sanitizedHtml = sanitizeReplyFormattedPreview(formattedBodyStripped);
       if (shouldParseReplyFormattedPreview(sanitizedHtml)) {
         const parserOpts = getReactCustomHtmlParser(mx, room.roomId, {
           settingsLinkBaseUrl,
-          linkifyOpts: replyLinkifyOpts,
+          linkifyOpts: undefined,
           useAuthentication,
           nicknames,
           handleMentionClick: mentionClickHandler,
@@ -521,7 +512,8 @@ export const Reply = as<'div', ReplyProps>(
             eventType !== EventType.RoomMember && (
               <Text size="T300" truncate style={{ fontFamily: usernameFont }}>
                 <b>
-                  {getMemberDisplayName(room, sender, nicknames) ??
+                  {pmp?.name ??
+                    getMemberDisplayName(room, sender, nicknames) ??
                     cachedProfiles[sender]?.displayName ??
                     getMxIdLocalPart(sender)}
                 </b>

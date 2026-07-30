@@ -1,6 +1,38 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(feature = "cef", target_os = "linux"))]
+fn prompt_cef_permission(message: String, tx: std::sync::mpsc::Sender<bool>) {
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::{ButtonsType, DialogFlags, MessageDialog, MessageType, ResponseType};
+
+    // Non-blocking: show() + response signal instead of run().
+    // dialog.run() blocks the GLib main loop, which CEF's message pump
+    // also uses on Linux, freezing the app.
+    glib::idle_add_once(move || {
+        let dialog = MessageDialog::new(
+            None::<&gtk::Window>,
+            DialogFlags::MODAL,
+            MessageType::Question,
+            ButtonsType::YesNo,
+            &message,
+        );
+        dialog.set_title("Permission request");
+
+        let tx = std::cell::RefCell::new(Some(tx));
+        let dialog_ptr = dialog.clone();
+        dialog.connect_response(move |dlg, response| {
+            if let Some(tx) = tx.take() {
+                let _ = tx.send(matches!(response, ResponseType::Yes));
+            }
+            dlg.close();
+        });
+
+        dialog.show();
+    });
+}
+
 fn main() {
     // CEF (Chromium) runtime, Linux only. Must run before anything else — CEF
     // re-execs this binary for its subprocesses.
@@ -42,6 +74,13 @@ fn main() {
                 if let Ok(port) = std::env::var("SABLE_DEVTOOLS") {
                     args.push(("--remote-debugging-port".into(), Some(port)));
                 }
+
+                // Diagnostic escape hatch for GPU/display-resume crashes. Keep
+                // acceleration enabled by default; this is for affected users to
+                // A/B test without rebuilding the application.
+                if std::env::var_os("SABLE_DISABLE_GPU").is_some() {
+                    args.push(("--disable-gpu".into(), None));
+                }
                 args
             },
             ..Default::default()
@@ -62,24 +101,94 @@ fn main() {
         }
 
         // Allow call media capture (mic, camera, screen-share) for our webview.
-        tauri_runtime_cef::set_permission_policy(|request, responder| {
-            use tauri_runtime_cef::{DenyReason, PermissionKind, Verdict};
-            if request.webview_label == "main" {
-                let verdicts = request
-                    .kinds
-                    .iter()
-                    .map(|kind| match kind {
-                        PermissionKind::Microphone
-                        | PermissionKind::Camera
-                        | PermissionKind::CameraPanTiltZoom
-                        | PermissionKind::ScreenCapture
-                        | PermissionKind::CapturedSurfaceControl => Verdict::Allow,
-                        _ => Verdict::Deny,
-                    })
-                    .collect();
-                return responder.decide(verdicts);
+        // Cache granted permissions so we only prompt once per kind.
+        use std::collections::HashSet;
+        use std::sync::{Mutex, OnceLock};
+        static GRANTED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+        let granted = GRANTED.get_or_init(|| Mutex::new(HashSet::new()));
+
+        tauri_runtime_cef::set_permission_policy(move |request, responder| {
+            use tauri_runtime_cef::{DenyReason, PermissionKind};
+
+            if request.webview_label != "main" {
+                return responder.deny(DenyReason::NoPolicy);
             }
-            responder.deny(DenyReason::NoPolicy)
+
+            let media_kinds: Vec<PermissionKind> = request
+                .kinds
+                .iter()
+                .filter(|kind| {
+                    matches!(
+                        kind,
+                        PermissionKind::Microphone
+                            | PermissionKind::Camera
+                            | PermissionKind::CameraPanTiltZoom
+                            | PermissionKind::ScreenCapture
+                            | PermissionKind::CapturedSurfaceControl
+                    )
+                })
+                .cloned()
+                .collect();
+
+            if media_kinds.is_empty() {
+                return responder.deny(DenyReason::NoPolicy);
+            }
+
+            // Check cache: if all requested kinds were already granted, allow immediately.
+            let kind_names: Vec<&'static str> = media_kinds
+                .iter()
+                .map(|k| match k {
+                    PermissionKind::Microphone => "mic",
+                    PermissionKind::Camera | PermissionKind::CameraPanTiltZoom => "cam",
+                    PermissionKind::ScreenCapture | PermissionKind::CapturedSurfaceControl => {
+                        "screen"
+                    }
+                    _ => "other",
+                })
+                .collect();
+
+            {
+                let cache = granted.lock().unwrap();
+                if kind_names.iter().all(|k| cache.contains(k)) {
+                    return responder.allow();
+                }
+            }
+
+            let msg = match media_kinds.as_slice() {
+                [PermissionKind::Microphone] => "Sable wants to access your microphone.",
+                [PermissionKind::Camera] => "Sable wants to access your camera.",
+                [PermissionKind::ScreenCapture] | [PermissionKind::CapturedSurfaceControl] => {
+                    "Sable wants to share your screen."
+                }
+                _ if media_kinds.contains(&PermissionKind::Microphone)
+                    && media_kinds.contains(&PermissionKind::Camera) =>
+                {
+                    "Sable wants to access your microphone and camera."
+                }
+                _ => "Sable wants to access media devices.",
+            };
+
+            // Defer the CEF callback and ask the user via a native GTK dialog.
+            // The policy runs on a CEF thread and must not block; defer() hands
+            // the answer to a worker thread that waits on the dialog result.
+            let deferred = responder.defer(tauri_runtime_cef::DEFAULT_PROMPT_TIMEOUT);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let kinds_to_cache = kind_names.clone();
+            prompt_cef_permission(msg.to_string(), tx);
+            std::thread::spawn(move || {
+                let allowed = rx
+                    .recv_timeout(tauri_runtime_cef::DEFAULT_PROMPT_TIMEOUT)
+                    .unwrap_or(false);
+                if allowed {
+                    let mut cache = granted.lock().unwrap();
+                    for k in &kinds_to_cache {
+                        cache.insert(k);
+                    }
+                    deferred.allow();
+                } else {
+                    deferred.deny(DenyReason::PolicyDenied);
+                }
+            });
         });
     }
 

@@ -1,4 +1,13 @@
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures/test';
+
+async function longPress(page: Page, x: number, y: number): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  const touchPoints = [{ x: Math.round(x), y: Math.round(y) }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints });
+  await page.waitForTimeout(600);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
 
 test.describe('touch interactions', () => {
   test('long-press opens a bottom-sheet context menu', async ({ app, page }) => {
@@ -59,6 +68,29 @@ test.describe('touch interactions', () => {
     // rendered inside the MessageMobileOptionsContainer (z-index 1005, fixed at bottom)
     const sheet = page.locator('[data-gestures="ignore"]').first();
     await expect(sheet).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('long-press on a room opens its menu instead of navigating', async ({ app, page }) => {
+    const roomItem = app.room('General');
+    const box = await roomItem.boundingBox();
+    if (!box) throw new Error('Room item not visible');
+
+    await longPress(page, box.x + box.width / 2, box.y + box.height / 2);
+
+    await expect(page.getByText('Leave Room')).toBeVisible({ timeout: 5_000 });
+
+    // Tapping the backdrop still dismisses it.
+    await page.touchscreen.tap(box.x + box.width / 2, 8);
+    await expect(page.getByText('Leave Room')).toBeHidden({ timeout: 5_000 });
+  });
+
+  test('a single tap opens a room', async ({ app, page }) => {
+    const box = await app.room('General').boundingBox();
+    if (!box) throw new Error('Room item not visible');
+
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+
+    await expect(page.getByText('Welcome to the test room.')).toBeVisible({ timeout: 10_000 });
   });
 
   // Never passed. The sheet does not dismiss from a downward swipe under real

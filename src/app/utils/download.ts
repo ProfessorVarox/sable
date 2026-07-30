@@ -54,37 +54,134 @@ export const getDownloadFilename = (
 async function resolveBlob(input: Blob | string): Promise<Blob> {
   if (typeof input !== 'string') return input;
   const response = await fetch(input);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch media: ${response.status} ${response.statusText}`);
+  }
   return response.blob();
+}
+
+export async function saveMediaToGallery(
+  input: Blob | string,
+  filename: string,
+  mimeType: string
+): Promise<void> {
+  const mediaMimeType = mimeType.trim().toLowerCase();
+  if (!mediaMimeType.startsWith('image/')) {
+    throw new Error(`Only image media can be saved to the gallery (received "${mimeType}")`);
+  }
+  if (!isTauri()) {
+    throw new Error('Saving to the gallery is only available in the Android and iOS apps');
+  }
+
+  const platform = osType();
+  if (platform !== 'android' && platform !== 'ios') {
+    throw new Error(`Saving to the gallery is not supported on ${platform}`);
+  }
+
+  if (platform === 'android') {
+    const { AndroidFs, AndroidPublicImageDir } = await import('tauri-plugin-android-fs-api');
+    let uri: Awaited<ReturnType<typeof AndroidFs.createNewPublicImageFile>> | undefined;
+    try {
+      const blob = await resolveBlob(input);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+
+      if (!(await AndroidFs.checkPublicFilesPermission())) {
+        const granted = await AndroidFs.requestPublicFilesPermission();
+        if (!granted) throw new Error('Storage permission was denied');
+      }
+
+      uri = await AndroidFs.createNewPublicImageFile(
+        AndroidPublicImageDir.Pictures,
+        filename,
+        mediaMimeType,
+        { isPending: true, requestPermission: true }
+      );
+      await AndroidFs.writeFile(uri, bytes);
+      await AndroidFs.setPublicFilePending(uri, false);
+      await AndroidFs.scanPublicFile(uri);
+      showToast('Saved to Gallery');
+    } catch (error) {
+      if (uri) await AndroidFs.removeFile(uri).catch(() => undefined);
+      const message = error instanceof Error ? error.message : 'unknown error';
+      showToast(`Failed to save to gallery: ${message}`);
+    }
+    return;
+  }
+
+  try {
+    const blob = await resolveBlob(input);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+    await invoke('save_media_to_photos', {
+      filename,
+      mimeType: mediaMimeType,
+      bytes: Array.from(bytes),
+    });
+    showToast('Saved to Photos');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    showToast(`Failed to save to photos: ${message}`);
+  }
 }
 
 export async function saveFileToDevice(
   input: Blob | string,
   filename: string,
   mimeType?: string
-): Promise<void> {
+): Promise<'saved' | 'cancelled' | 'failed'> {
   if (isTauri()) {
-    const blob = await resolveBlob(input);
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    try {
+      const blob = await resolveBlob(input);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
 
-    if (osType() === 'android') {
-      const { AndroidFs, AndroidPublicGeneralPurposeDir } =
-        await import('tauri-plugin-android-fs-api');
-      const uri = await AndroidFs.createNewPublicFile(
-        AndroidPublicGeneralPurposeDir.Download,
-        filename,
-        mimeType || blob.type || null,
-        { isPending: true }
-      );
-      await AndroidFs.writeFile(uri, bytes);
-      await AndroidFs.setPublicFilePending(uri, false);
-      showToast('Saved to Downloads');
-      return;
+      if (osType() === 'android') {
+        const { AndroidFs, AndroidPublicGeneralPurposeDir } =
+          await import('tauri-plugin-android-fs-api');
+        let uri: Awaited<ReturnType<typeof AndroidFs.createNewPublicFile>> | undefined;
+        try {
+          if (!(await AndroidFs.checkPublicFilesPermission())) {
+            const granted = await AndroidFs.requestPublicFilesPermission();
+            if (!granted) throw new Error('Storage permission was denied');
+          }
+
+          uri = await AndroidFs.createNewPublicFile(
+            AndroidPublicGeneralPurposeDir.Download,
+            filename,
+            mimeType || blob.type || null,
+            { isPending: true, requestPermission: true }
+          );
+          await AndroidFs.writeFile(uri, bytes);
+          await AndroidFs.setPublicFilePending(uri, false);
+          await AndroidFs.scanPublicFile(uri);
+          showToast('Saved to Downloads');
+          return 'saved';
+        } catch (error) {
+          if (uri) await AndroidFs.removeFile(uri).catch(() => undefined);
+          throw error;
+        }
+      }
+
+      if (osType() === 'ios') {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const path = await save({ defaultPath: filename });
+        if (!path) return 'cancelled';
+
+        const { writeFile } = await import('@tauri-apps/plugin-fs');
+        await writeFile(path, bytes);
+        showToast('File saved');
+        return 'saved';
+      }
+
+      const saved = await invoke<boolean>('save_download', { filename, bytes: Array.from(bytes) });
+      if (saved) showToast('File saved');
+      return saved ? 'saved' : 'cancelled';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      showToast(`Failed to save file: ${message}`);
+      return 'failed';
     }
-
-    const saved = await invoke<boolean>('save_download', { filename, bytes: Array.from(bytes) });
-    if (saved) showToast('File saved');
-    return;
   }
 
   FileSaver.saveAs(input, filename);
+  return 'saved';
 }

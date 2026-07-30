@@ -494,6 +494,7 @@ export const CustomEditor = forwardRef<HTMLDivElement, CustomEditorProps>(
                   if (!isMobileOrTablet()) return;
                   if (suppressBlurRefocusRef?.current) return;
                   const next = evt.relatedTarget as HTMLElement | null;
+                  if (!next) return;
                   if (next && next !== editableRef.current && next.isContentEditable) return;
                   ReactEditor.focus(editor);
                 }}

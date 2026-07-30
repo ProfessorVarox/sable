@@ -13,6 +13,11 @@ import { useAlive } from '$hooks/useAlive';
 import { PasswordInput } from './password-input';
 import { Button } from '$components/button';
 
+export enum SecretStorageKeyMethod {
+  RecoveryPassphrase = 'passphrase',
+  RecoveryKey = 'key',
+}
+
 type SecretStorageRecoveryPassphraseProps = {
   processing?: boolean;
   keyContent: SecretStorageKeyContent;
@@ -69,7 +74,7 @@ export function SecretStorageRecoveryPassphrase({
 
     const { salt, iterations, bits } = passphraseContent;
     submitPassphrase(recoveryPassphrase, salt, iterations, bits).then((decodedRecoveryKey) => {
-      if (alive()) {
+      if (alive() && decodedRecoveryKey instanceof Uint8Array) {
         recoveryPassphraseInput.value = '';
         onDecodedRecoveryKey(decodedRecoveryKey);
       }
@@ -110,6 +115,38 @@ export function SecretStorageRecoveryPassphrase({
       </Box>
       <AsyncError state={driveKeyState} bold />
     </Box>
+  );
+}
+
+type SecretStorageKeyPromptProps = {
+  method: SecretStorageKeyMethod;
+  processing?: boolean;
+  keyContent: SecretStorageKeyContent;
+  onDecodedRecoveryKey: (recoveryKey: Uint8Array) => void;
+};
+export function SecretStorageKeyPrompt({
+  method,
+  processing,
+  keyContent,
+  onDecodedRecoveryKey,
+}: SecretStorageKeyPromptProps) {
+  if (method === SecretStorageKeyMethod.RecoveryPassphrase && keyContent.passphrase) {
+    return (
+      <SecretStorageRecoveryPassphrase
+        processing={processing}
+        keyContent={keyContent}
+        passphraseContent={keyContent.passphrase}
+        onDecodedRecoveryKey={onDecodedRecoveryKey}
+      />
+    );
+  }
+
+  return (
+    <SecretStorageRecoveryKey
+      processing={processing}
+      keyContent={keyContent}
+      onDecodedRecoveryKey={onDecodedRecoveryKey}
+    />
   );
 }
 
@@ -156,7 +193,7 @@ export function SecretStorageRecoveryKey({
     if (!recoveryKey) return;
 
     submitRecoveryKey(recoveryKey).then((decodedRecoveryKey) => {
-      if (alive()) {
+      if (alive() && decodedRecoveryKey instanceof Uint8Array) {
         recoveryKeyInput.value = '';
         onDecodedRecoveryKey(decodedRecoveryKey);
       }

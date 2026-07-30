@@ -1,5 +1,5 @@
 import type { MouseEventHandler } from 'react';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import type { RectCords } from 'folds';
 import { Box, Text, Button, color, config, Badge, Menu, MenuItem, PopOut } from 'folds';
@@ -138,11 +138,12 @@ export function DebugLogViewer() {
   const logs = useAtomValue(debugLogsAtom);
   const clearLogs = useSetAtom(clearDebugLogsAtom);
   const [autoScroll, setAutoScroll] = useState(true);
-  const scrollRef = useState<HTMLDivElement | null>(null)[0];
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const [filterLevel, setFilterLevel] = useState<LogLevel | 'all'>('all');
   const [filterCategory, setFilterCategory] = useState<LogCategory | 'all'>('all');
   const [categoryAnchor, setCategoryAnchor] = useState<RectCords | undefined>();
   const [levelAnchor, setLevelAnchor] = useState<RectCords | undefined>();
+  const refreshLogs = useSetAtom(debugLogsAtom);
 
   const handleOpenCategoryMenu: MouseEventHandler<HTMLButtonElement> = (evt) => {
     evt.stopPropagation();
@@ -173,19 +174,18 @@ export function DebugLogViewer() {
 
     const debugLogger = getDebugLogger();
     const unsubscribe = debugLogger.addListener(() => {
-      // Trigger re-render by refreshing the atom
-      // This will be handled by the debugLogsAtom's refresh mechanism
+      refreshLogs();
     });
 
     return unsubscribe;
-  }, [enabled]);
+  }, [enabled, refreshLogs]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
-    if (autoScroll && scrollRef) {
-      scrollRef.scrollTop = scrollRef.scrollHeight;
+    if (autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [filteredLogs, autoScroll, scrollRef]);
+  }, [filteredLogs, autoScroll]);
 
   const handleExportLogs = useCallback(
     (filtered: boolean) => {
@@ -597,6 +597,7 @@ export function DebugLogViewer() {
             </Box>
 
             <Box
+              ref={scrollRef}
               direction="Column"
               gap="200"
               style={{

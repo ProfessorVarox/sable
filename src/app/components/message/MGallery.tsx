@@ -25,7 +25,7 @@ type PartitionedMediaItem = {
 };
 
 export function MGallery({ content, renderItem }: MGalleryProps) {
-  const items = content.itemtypes;
+  const items = Array.isArray(content.itemtypes) ? content.itemtypes : [];
 
   let mediaItems = items.filter(
     (item) => item.itemtype == MsgType.Video || item.itemtype == MsgType.Image

@@ -44,6 +44,7 @@ export function RoomVersionSelector({
             offset={5}
             position="Bottom"
             align="End"
+            mobile="dialog"
             menu={
               <Menu>
                 <Box

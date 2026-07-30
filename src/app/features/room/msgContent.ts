@@ -64,31 +64,36 @@ export const getImageMsgContent = async (
   mxc: string
 ): Promise<IContent> => {
   const { file, originalFile, encInfo, metadata } = item;
-  const [imgError, imgEl] = await to(loadImageElement(getImageFileUrl(originalFile)));
-  if (imgError) log.warn('Failed to load image element:', imgError);
-
+  const imgUrl = getImageFileUrl(originalFile);
   const content: IContent = {
     msgtype: MsgType.Image,
     filename: file.name,
     body: file.name,
     [MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME]: metadata.markedAsSpoiler,
   };
-  if (imgEl) {
-    const blurHash = await encodeBlurHashAsync(
-      imgEl,
-      512,
-      scaleYDimension(imgEl.width, 512, imgEl.height)
-    );
+  try {
+    const [imgError, imgEl] = await to(loadImageElement(imgUrl));
+    if (imgError) log.warn('Failed to load image element:', imgError);
 
-    content.info = {
-      ...getImageInfo(imgEl, file),
-      [MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME]: blurHash,
-    };
-  } else {
-    content.info = {
-      mimetype: originalFile.type,
-      size: originalFile.size,
-    };
+    if (imgEl) {
+      const blurHash = await encodeBlurHashAsync(
+        imgEl,
+        512,
+        scaleYDimension(imgEl.width, 512, imgEl.height)
+      );
+
+      content.info = {
+        ...getImageInfo(imgEl, file),
+        [MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME]: blurHash,
+      };
+    } else {
+      content.info = {
+        mimetype: originalFile.type,
+        size: originalFile.size,
+      };
+    }
+  } finally {
+    URL.revokeObjectURL(imgUrl);
   }
   if (encInfo) {
     content.file = {
@@ -113,8 +118,7 @@ export const getVideoMsgContent = async (
 ): Promise<IContent> => {
   const { file, originalFile, encInfo, metadata } = item;
 
-  const [videoError, videoEl] = await to(loadVideoElement(getVideoFileUrl(originalFile)));
-  if (videoError) log.warn('Failed to load video element:', videoError);
+  const videoUrl = getVideoFileUrl(originalFile);
 
   const content: IContent = {
     msgtype: MsgType.Video,
@@ -122,28 +126,35 @@ export const getVideoMsgContent = async (
     body: file.name,
     [MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME]: metadata.markedAsSpoiler,
   };
-  if (videoEl) {
-    const [thumbError, thumbContent] = await to(
-      generateThumbnailContent(
-        mx,
-        videoEl,
-        getThumbnailDimensions(videoEl.videoWidth, videoEl.videoHeight),
-        !!encInfo
-      )
-    );
-    if (thumbContent && thumbContent.thumbnail_info) {
-      thumbContent.thumbnail_info[MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME] =
-        await encodeBlurHashAsync(
+  try {
+    const [videoError, videoEl] = await to(loadVideoElement(videoUrl));
+    if (videoError) log.warn('Failed to load video element:', videoError);
+
+    if (videoEl) {
+      const [thumbError, thumbContent] = await to(
+        generateThumbnailContent(
+          mx,
           videoEl,
-          512,
-          scaleYDimension(videoEl.videoWidth, 512, videoEl.videoHeight)
-        );
+          getThumbnailDimensions(videoEl.videoWidth, videoEl.videoHeight),
+          !!encInfo
+        )
+      );
+      if (thumbContent && thumbContent.thumbnail_info) {
+        thumbContent.thumbnail_info[MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME] =
+          await encodeBlurHashAsync(
+            videoEl,
+            512,
+            scaleYDimension(videoEl.videoWidth, 512, videoEl.videoHeight)
+          );
+      }
+      if (thumbError) log.warn('Failed to generate video thumbnail:', thumbError);
+      content.info = {
+        ...getVideoInfo(videoEl, file),
+        ...thumbContent,
+      };
     }
-    if (thumbError) log.warn('Failed to generate video thumbnail:', thumbError);
-    content.info = {
-      ...getVideoInfo(videoEl, file),
-      ...thumbContent,
-    };
+  } finally {
+    URL.revokeObjectURL(videoUrl);
   }
   if (encInfo) {
     content.file = {

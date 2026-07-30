@@ -338,7 +338,6 @@ type OptionEmojiMenuProps = {
   isQuickOptions?: boolean;
   isModal?: boolean;
   ActualMessage?: ReactNode;
-  dragOpts?: DragOptsProps;
 };
 function OptionsEmojiBoard({
   mEvent,
@@ -350,7 +349,6 @@ function OptionsEmojiBoard({
   isQuickOptions,
   isModal,
   ActualMessage,
-  dragOpts,
 }: OptionEmojiMenuProps) {
   const position =
     (!isQuickOptions && 'Left') ||
@@ -365,7 +363,6 @@ function OptionsEmojiBoard({
       style={isModal ? { width: '100%' } : {}}
       content={
         <Menu className={isModal ? css.MessageOptionsMenu : undefined}>
-          {dragOpts?.dragHandle}
           {ActualMessage}
           <EmojiBoard
             imagePackRooms={imagePackRooms ?? []}
@@ -537,13 +534,6 @@ export function OptionQuickMenu({
   );
 }
 
-export type DragOptsProps = {
-  dragHandle?: ReactNode;
-  onTouchStart?: (evt: React.TouchEvent) => void;
-  onTouchMove?: (evt: React.TouchEvent) => void;
-  onTouchEnd?: () => void;
-};
-
 export type OptionMenuProps = {
   mEvent: MatrixEvent;
   room: Room;
@@ -569,7 +559,6 @@ export type OptionMenuProps = {
   setIsEmoji?: Dispatch<SetStateAction<boolean>>;
   ActualMessage?: ReactNode;
   isModal?: boolean;
-  dragOpts?: DragOptsProps;
 };
 
 function OptionMenu({
@@ -589,7 +578,6 @@ function OptionMenu({
   setIsEmoji,
   ActualMessage,
   isModal,
-  dragOpts,
   isGif,
 }: OptionMenuProps) {
   const setModal = useSetAtom(modalAtom);
@@ -642,7 +630,6 @@ function OptionMenu({
           imagePackRooms={imagePackRooms}
           isModal={isModal}
           ActualMessage={<WrappedMessage isModal={isModal} ActualMessage={ActualMessage} />}
-          dragOpts={dragOpts}
         />
       )}
       <FocusTrap
@@ -660,8 +647,7 @@ function OptionMenu({
           escapeDeactivates: stopPropagation,
         }}
       >
-        <Menu className={isModal ? css.MessageOptionsMenu : ''}>
-          {dragOpts?.dragHandle}
+        <Menu className={isModal ? css.MessageOptionsSheetMenu : ''}>
           {ActualMessage && !emojiBoardAnchor && (
             <>
               <WrappedMessage isModal={isModal} ActualMessage={ActualMessage} />
@@ -674,9 +660,6 @@ function OptionMenu({
             grow="Yes"
             shrink="No"
             style={{ maxHeight: '75%' }}
-            onTouchStart={dragOpts?.onTouchStart}
-            onTouchMove={dragOpts?.onTouchMove}
-            onTouchEnd={dragOpts?.onTouchEnd}
             onContextMenu={(e) => e.preventDefault()}
           >
             {canSendReaction && onReactionToggle && setIsEmoji && (
@@ -853,7 +836,7 @@ export function MobileOptionsInternal({ options }: { options: OptionMenuProps })
   if (isActive)
     return (
       <MobileSwipeDownModal requestClose={requestClose}>
-        {(dragHandleJSX, dragHandlers) => (
+        {() => (
           <OptionMenu
             mEvent={options.mEvent}
             room={options.room}
@@ -870,10 +853,6 @@ export function MobileOptionsInternal({ options }: { options: OptionMenuProps })
             ActualMessage={options.ActualMessage}
             canSendReaction={options.canSendReaction}
             isModal
-            dragOpts={{
-              dragHandle: dragHandleJSX,
-              ...dragHandlers,
-            }}
             isGif={options.isGif}
           />
         )}

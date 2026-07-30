@@ -2,10 +2,13 @@
 pub mod deep_link_ipc;
 #[cfg(desktop)]
 mod desktop;
+mod diagnostics;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "android")]
 mod mobile;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile_diagnostics;
 mod network;
 mod sentry;
 mod share_inbox;
@@ -192,13 +195,14 @@ pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> taur
         .visible(false);
 
     #[cfg(target_os = "macos")]
-    let builder = if desktop_settings.use_custom_title_bar {
+    let builder =
         builder
-            .title("")
-            .title_bar_style(tauri::TitleBarStyle::Transparent)
-    } else {
-        builder.title_bar_style(tauri::TitleBarStyle::Visible)
-    };
+            .hidden_title(true)
+            .title_bar_style(if desktop_settings.use_custom_title_bar {
+                tauri::TitleBarStyle::Overlay
+            } else {
+                tauri::TitleBarStyle::Visible
+            });
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     let builder = builder.decorations(!desktop_settings.use_custom_title_bar);
@@ -343,6 +347,11 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init());
 
+    #[cfg(target_os = "ios")]
+    let builder = builder
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init());
+
     #[cfg(mobile)]
     let builder = builder
         .plugin(tauri_plugin_edge_to_edge::init())
@@ -412,25 +421,8 @@ pub fn run() {
             #[cfg(desktop)]
             desktop::menu::register_global_shortcuts(app.handle());
 
-            #[cfg(debug_assertions)]
-            {
-                #[cfg(feature = "devtools")]
-                {
-                    let (log_plugin, _level, logger) = tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .split(app.handle())?;
-                    let mut devtools = tauri_plugin_devtools::Builder::default();
-                    devtools.attach_logger(logger);
-                    app.handle().plugin(devtools.init())?;
-                    app.handle().plugin(log_plugin)?;
-                }
-                #[cfg(not(feature = "devtools"))]
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            #[cfg(desktop)]
+            desktop::logging::setup(app.handle())?;
 
             Ok(())
         })
@@ -451,12 +443,26 @@ pub fn run() {
             mobile::set_status_bar_color,
             #[cfg(target_os = "android")]
             mobile::set_navigation_bar_color,
+            #[cfg(target_os = "android")]
+            mobile::start_call_foreground_service,
+            #[cfg(target_os = "android")]
+            mobile::stop_call_foreground_service,
             #[cfg(target_os = "ios")]
             ios::haptic_feedback,
+            #[cfg(target_os = "ios")]
+            ios::save_media_to_photos,
             #[cfg(any(target_os = "android", target_os = "ios"))]
             play_notification_sound,
+            #[cfg(target_os = "ios")]
+            ios::activate_call_audio_session,
+            #[cfg(target_os = "ios")]
+            ios::deactivate_call_audio_session,
             #[cfg(desktop)]
             desktop::download::save_download,
+            #[cfg(desktop)]
+            desktop::diagnostics::export_diagnostics,
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            mobile_diagnostics::build_diagnostics_archive,
             #[cfg(desktop)]
             desktop::tray::get_desktop_runtime_state,
             #[cfg(desktop)]
@@ -488,7 +494,19 @@ pub fn run() {
         #[cfg(desktop)]
         desktop::tray::handle_run_event(app, event);
 
-        #[cfg(not(desktop))]
+        #[cfg(mobile)]
+        {
+            use tauri::Emitter;
+            if let tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::Resumed,
+                ..
+            } = event
+            {
+                let _ = app.emit("app-resumed", ());
+            }
+        }
+
+        #[cfg(not(any(desktop, mobile)))]
         let _ = (app, event);
     });
 }

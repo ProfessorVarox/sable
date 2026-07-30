@@ -585,7 +585,7 @@ export const getReactCustomHtmlParser = (
   roomId: string | undefined,
   params: {
     settingsLinkBaseUrl: string;
-    linkifyOpts: LinkifyOpts;
+    linkifyOpts?: LinkifyOpts;
     highlightRegex?: RegExp;
     handleSpoilerClick?: ReactEventHandler<HTMLElement>;
     handleMentionClick?: ReactEventHandler<HTMLElement>;
@@ -644,7 +644,7 @@ export const getReactCustomHtmlParser = (
     replace: (domNode) => {
       if (replaceTextNode && domNode instanceof DOMText) {
         const replacement = replaceTextNode(domNode.data, (text, key) =>
-          renderReplacementText(text, shouldLinkifyDomText(domNode), key)
+          renderReplacementText(text, !!params.linkifyOpts && shouldLinkifyDomText(domNode), key)
         );
 
         if (replacement !== undefined) {
@@ -828,6 +828,7 @@ export const getReactCustomHtmlParser = (
             }
           }
 
+          if (!params.linkifyOpts) return <span {...anchorProps}>{renderChildren()}</span>;
           return <a {...anchorProps}>{renderedChildren}</a>;
         }
 
@@ -1018,7 +1019,7 @@ export const getReactCustomHtmlParser = (
       }
 
       if (domNode instanceof DOMText) {
-        const linkify = shouldLinkifyDomText(domNode);
+        const linkify = !!params.linkifyOpts && shouldLinkifyDomText(domNode);
         const decoratedText = decorateText(domNode.data);
 
         if (linkify) {

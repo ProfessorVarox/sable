@@ -180,6 +180,7 @@ export function SettingMenuSelector<T extends string | number>({
         align={align}
         returnFocusOnDeactivate
         arrowNavigation="both"
+        mobile="dialog"
         menu={
           <Menu
             style={

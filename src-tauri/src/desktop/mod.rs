@@ -1,4 +1,6 @@
+pub mod diagnostics;
 pub mod download;
+pub mod logging;
 pub mod menu;
 pub mod runtime_state;
 pub mod settings;

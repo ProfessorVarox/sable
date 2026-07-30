@@ -119,6 +119,7 @@ export const Reactions = as<'div', ReactionsProps>(
                   count={events.size}
                   onClick={canToggle ? () => onReactionToggle(mEventId, key) : undefined}
                   onContextMenu={handleViewReaction}
+                  onTouchStart={(evt) => evt.stopPropagation()}
                   aria-disabled={!canToggle}
                   useAuthentication={useAuthentication}
                 />

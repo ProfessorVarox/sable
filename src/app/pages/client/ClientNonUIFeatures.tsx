@@ -4,7 +4,6 @@ import { ShareTargetFeature } from '$features/share-target/ShareTargetFeature';
 import { useIncomingCallSignaling } from '$features/call/useCallSignaling';
 import { MatrixRTCSessionProvider } from '$hooks/useMatrixRTCSession';
 import { BackgroundNotifications } from './BackgroundNotifications';
-import { DesktopUpdater } from './DesktopUpdater';
 import { WebUpdater } from './WebUpdater';
 import { NotificationTransportRuntimeFeature } from '$features/settings/notifications/NotificationTransportRuntimeFeature';
 import {
@@ -55,7 +54,6 @@ export function ClientNonUIFeatures({ children }: ClientNonUIFeaturesProps) {
       <NativeNotificationClickRouting />
       <NativeNotificationActionRouting />
       <BackgroundNotifications />
-      <DesktopUpdater />
       <WebUpdater />
       <NotificationTransportRuntimeFeature />
       <SyncNotificationSettingsWithServiceWorker />

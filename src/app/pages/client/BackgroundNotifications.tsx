@@ -212,14 +212,16 @@ export function BackgroundNotifications() {
     async function sendNotification(opts: NotifyOptions): Promise<void> {
       if (isDesktopTauri()) {
         try {
-          const { getTauriNotificationsApi } =
+          const { getTauriNotificationsApi, buildNotificationExtra } =
             await import('$features/settings/notifications/TauriNotificationsApiClient');
           const api = await getTauriNotificationsApi();
+          // Attach routing payload so the tap deep-links via NativeNotificationClickRouting.
           await api.sendNotification({
             id: nextDesktopNotificationId(),
             title: opts.title,
             body: opts.body,
             silent: opts.silent ?? false,
+            extra: buildNotificationExtra(opts.data),
           });
           return;
         } catch (err) {
