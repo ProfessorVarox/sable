@@ -197,10 +197,13 @@ export const updateSessionTokens = (
   notifySessionChanged();
 };
 
-export const getStoredSessionRefreshToken = (userId: string): string | undefined =>
+export const getStoredSession = (userId: string): Session | undefined =>
   getLocalStorageItem<Sessions>(MATRIX_SESSIONS_KEY, []).find(
     (session) => session.userId === userId
-  )?.refreshToken;
+  );
+
+export const getStoredSessionRefreshToken = (userId: string): string | undefined =>
+  getStoredSession(userId)?.refreshToken;
 
 export const ACTIVE_SESSION_KEY = 'matrixActiveSession';
 const baseActiveSessionAtom = atomWithLocalStorage<string | undefined>(

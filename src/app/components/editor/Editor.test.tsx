@@ -557,6 +557,104 @@ describe('CustomEditor', () => {
     });
   });
 
+  it('only reads clipboard formats advertised by the data transfer', () => {
+    render(<PasteFallbackHarness />);
+    const editor = pasteFallbackEditor;
+    if (!editor) throw new Error('paste fallback harness did not mount');
+
+    const getData = vi.fn<(type: string) => string>((type) =>
+      type === 'text/plain' ? 'pasted text' : ''
+    );
+    const data = {
+      files: [],
+      getData,
+      types: ['text/plain'],
+    } as unknown as DataTransfer;
+
+    act(() => {
+      Transforms.select(editor, { path: [0, 0], offset: 0 });
+      editor.insertData(data);
+    });
+
+    expect(getData).toHaveBeenCalledTimes(1);
+    expect(getData).toHaveBeenCalledWith('text/plain');
+    expect(pastedLines()).toEqual(['pasted text']);
+  });
+
+  it('keeps Slate fragment pastes intact without reading unrelated formats', () => {
+    render(<PasteFallbackHarness />);
+    const editor = pasteFallbackEditor;
+    if (!editor) throw new Error('paste fallback harness did not mount');
+
+    const fragment = btoa(encodeURIComponent(JSON.stringify([{ text: 'fragment text' }])));
+    const getData = vi.fn<(type: string) => string>((type) =>
+      type === 'application/x-slate-fragment' ? fragment : ''
+    );
+    const data = {
+      files: [],
+      getData,
+      types: ['application/x-slate-fragment', 'text/plain'],
+    } as unknown as DataTransfer;
+
+    act(() => {
+      Transforms.select(editor, { path: [0, 0], offset: 0 });
+      editor.insertData(data);
+    });
+
+    expect(getData).toHaveBeenCalledTimes(1);
+    expect(getData).toHaveBeenCalledWith('application/x-slate-fragment');
+    expect(pastedLines()).toEqual(['fragment text']);
+  });
+
+  it('keeps HTML-embedded Slate fragments intact without reading unrelated formats', () => {
+    render(<PasteFallbackHarness />);
+    const editor = pasteFallbackEditor;
+    if (!editor) throw new Error('paste fallback harness did not mount');
+
+    const fragment = btoa(encodeURIComponent(JSON.stringify([{ text: 'HTML fragment text' }])));
+    const getData = vi.fn<(type: string) => string>((type) =>
+      type === 'text/html' ? `<span data-slate-fragment="${fragment}">fragment</span>` : ''
+    );
+    const data = {
+      files: [],
+      getData,
+      types: ['text/html', 'text/plain'],
+    } as unknown as DataTransfer;
+
+    act(() => {
+      Transforms.select(editor, { path: [0, 0], offset: 0 });
+      editor.insertData(data);
+    });
+
+    expect(getData).toHaveBeenCalledTimes(1);
+    expect(getData).toHaveBeenCalledWith('text/html');
+    expect(pastedLines()).toEqual(['HTML fragment text']);
+  });
+
+  it('falls back to plain text when HTML does not contain a Slate fragment', () => {
+    render(<PasteFallbackHarness />);
+    const editor = pasteFallbackEditor;
+    if (!editor) throw new Error('paste fallback harness did not mount');
+
+    const getData = vi.fn<(type: string) => string>((type) =>
+      type === 'text/html' ? '<strong>pasted text</strong>' : 'pasted text'
+    );
+    const data = {
+      files: [],
+      getData,
+      types: ['text/html', 'text/plain'],
+    } as unknown as DataTransfer;
+
+    act(() => {
+      Transforms.select(editor, { path: [0, 0], offset: 0 });
+      editor.insertData(data);
+    });
+
+    expect(getData).toHaveBeenNthCalledWith(1, 'text/html');
+    expect(getData).toHaveBeenNthCalledWith(2, 'text/plain');
+    expect(pastedLines()).toEqual(['pasted text']);
+  });
+
   it('reuses the cached measurement when resize observer fires without changing the single-line width', async () => {
     const queuedFrames = new Map<number, FrameRequestCallback>();
     let nextFrameId = 1;

@@ -502,26 +502,89 @@ jobs:
           STEPS_IPA_OUTPUTS_PATH: ${{ steps.ipa.outputs.path }}
         run: gh release upload "$TAG" "${STEPS_IPA_OUTPUTS_PATH}" --clobber
 
+      - name: Generate bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Get GitHub App User ID
+        id: get-user-id
+        run: echo "user-id=$(gh api "/users/${STEPS_APP_TOKEN_OUTPUTS_APP_SLUG}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STEPS_APP_TOKEN_OUTPUTS_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+
+      - name: Configure bot git identity
+        run: |
+          git config --global user.name "${STEPS_APP_TOKEN_OUTPUTS_APP_SLUG}[bot]"
+          git config --global user.email "${STEPS_GET_USER_ID_OUTPUTS_USER_ID}+${STEPS_APP_TOKEN_OUTPUTS_APP_SLUG}[bot]@users.noreply.github.com"
+          gh auth setup-git
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STEPS_APP_TOKEN_OUTPUTS_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          STEPS_GET_USER_ID_OUTPUTS_USER_ID: ${{ steps.get-user-id.outputs.user-id }}
+
       - name: Update AltStore/SideStore source
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+          NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
           ALTSTORE_VERSION: ${{ steps.ipa.outputs.ipa_version }}
           ALTSTORE_VERSION_BUILD: ${{ steps.ipa.outputs.ipa_build }}
           STEPS_IPA_OUTPUTS_NAME: ${{ steps.ipa.outputs.name }}
           STEPS_IPA_OUTPUTS_SIZE: ${{ steps.ipa.outputs.size }}
         run: |
+          set -euo pipefail
+          if [ "$NIGHTLY" = "true" ]; then
+            SOURCE_FILE="altstore-source-nightly.json"
+          else
+            SOURCE_FILE="altstore-source.json"
+          fi
           DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/${STEPS_IPA_OUTPUTS_NAME}"
           DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          if gh release download "$TAG" --pattern 'altstore-source.json' --dir . --clobber 2>/dev/null; then
-            echo "Using existing altstore-source.json from release $TAG"
-          else
-            echo "Using repo altstore-source.json"
+          WT="$RUNNER_TEMP/altstore-source"
+
+          # Commit the updated manifest to the repo root on dev so version
+          # history persists; [skip ci] avoids retriggering builds.
+          UPDATED=0
+          for attempt in 1 2 3; do
+            git fetch origin dev
+            git worktree remove --force "$WT" 2>/dev/null || true
+            git worktree add --detach "$WT" origin/dev
+            node .github/scripts/update-altstore-source.mjs \
+              "$WT/$SOURCE_FILE" "${ALTSTORE_VERSION:-$VERSION}" "${ALTSTORE_VERSION_BUILD:-$VERSION}" "${STEPS_IPA_OUTPUTS_SIZE}" "$DOWNLOAD_URL" "$DATE" "Sable $VERSION"
+            pnpm oxfmt "$WT/$SOURCE_FILE"
+            git -C "$WT" add "$SOURCE_FILE"
+            if git -C "$WT" diff --cached --quiet; then
+              echo "$SOURCE_FILE already up to date on dev"
+              UPDATED=1
+              break
+            fi
+            git -C "$WT" commit -m "chore: update $SOURCE_FILE for $TAG [skip ci]"
+            if git -C "$WT" push origin HEAD:dev; then
+              UPDATED=1
+              break
+            fi
+            echo "Push to dev failed (attempt $attempt); retrying from latest dev tip"
+          done
+          if [ "$UPDATED" != "1" ]; then
+            git worktree remove --force "$WT" 2>/dev/null || true
+            echo "Failed to commit $SOURCE_FILE to dev" >&2
+            exit 1
           fi
-          node .github/scripts/update-altstore-source.mjs \
-            altstore-source.json "${ALTSTORE_VERSION:-$VERSION}" "${ALTSTORE_VERSION_BUILD:-$VERSION}" "${STEPS_IPA_OUTPUTS_SIZE}" "$DOWNLOAD_URL" "$DATE" "Sable $VERSION"
-          gh release upload "$TAG" altstore-source.json --clobber
+
+          # Keep the release asset in sync for users on the release-asset source URLs.
+          gh release upload "$TAG" "$WT/$SOURCE_FILE" --clobber
+          if [ "$NIGHTLY" = "true" ]; then
+            # Existing nightly sources point at releases/download/nightly/altstore-source.json.
+            cp "$WT/$SOURCE_FILE" "$RUNNER_TEMP/altstore-source.json"
+            gh release upload "$TAG" "$RUNNER_TEMP/altstore-source.json" --clobber
+          fi
+          git worktree remove --force "$WT" 2>/dev/null || true
 
   updater-manifest:
     name: Publish updater manifest

@@ -63,6 +63,7 @@ import { EmojiBoardTab, EmojiType } from './types';
 import { useGifSearch } from './useGifSearch';
 import { useFavoriteGifs } from '$hooks/useFavoriteGifs';
 import * as css from './components/styles.css';
+import { useMobileSheetClose } from '$components/MobileSwipeDownModal';
 
 const RECENT_GROUP_ID = 'recent_group';
 const SEARCH_GROUP_ID = 'search_group';
@@ -478,6 +479,8 @@ export function EmojiBoard({
   isFullWidth,
   sheet = false,
 }: Readonly<EmojiBoardProps>) {
+  const mobileSheetClose = useMobileSheetClose();
+  const close = mobileSheetClose ?? requestClose;
   const mx = useMatrixClient();
   const [saveStickerEmojiBandwidth] = useSetting(settingsAtom, 'saveStickerEmojiBandwidth');
   const [showGifPicker] = useSetting(settingsAtom, 'enableGifPicker');
@@ -627,12 +630,12 @@ export function EmojiBoard({
       const isSpoiler = targetEl.getAttribute('data-gif-spoiler') === 'true';
       onGifSelect?.(gifData, isSpoiler);
     }
-    if (!evt.altKey && !evt.shiftKey) requestClose();
+    if (!evt.altKey && !evt.shiftKey) close();
   };
 
   const handleTextCustomEmojiSelect = (textEmoji: string) => {
     onCustomEmojiSelect?.(textEmoji, textEmoji);
-    requestClose();
+    close();
   };
 
   const handleScrollToGroup = (groupId: string) => {
@@ -765,7 +768,7 @@ export function EmojiBoard({
       focusTrapOptions={{
         returnFocusOnDeactivate,
         initialFocus: false,
-        onDeactivate: requestClose,
+        onDeactivate: close,
         clickOutsideDeactivates: true,
         allowOutsideClick: () => true,
         isKeyForward: (evt: KeyboardEvent) =>

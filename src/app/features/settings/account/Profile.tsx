@@ -8,7 +8,7 @@ import type { SettingMenuOption } from '$components/setting-menu-selector';
 import { SettingMenuSelector } from '$components/setting-menu-selector';
 import { SettingTile } from '$components/setting-tile';
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import type { UserProfile, MSC4440Bio } from '$hooks/useUserProfile';
+import type { UserProfile, MSC4440Bio, ColorSet } from '$hooks/useUserProfile';
 import { useUserProfile } from '$hooks/useUserProfile';
 import { getMxIdLocalPart, mxcUrlToHttp } from '$utils/matrix';
 import { UserAvatar } from '$components/user-avatar';
@@ -393,6 +393,7 @@ function ProfileExtended({ profile, userId }: Readonly<ProfileProps>) {
   const EXCLUDED_KEYS = new Set([
     prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_IS_CAT_PROPERTY_NAME,
     prefix.MATRIX_SABLE_UNSTABLE_ANIMAL_IDENTITY_HAS_CAT_PROPERTY_NAME,
+    prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME,
   ]);
 
   // Unknown fields / unimplemented non-matrix-spec fields
@@ -425,6 +426,25 @@ function ProfileExtended({ profile, userId }: Readonly<ProfileProps>) {
     [mx, presence]
   );
 
+  const color_on_dark =
+    profile.nameColors?.on_dark ??
+    (profile.extended?.[prefix.MATRIX_UNSTABLE_COLORS] as ColorSet | undefined)?.on_dark;
+  const color_on_light =
+    profile.nameColors?.on_light ??
+    (profile.extended?.[prefix.MATRIX_UNSTABLE_COLORS] as ColorSet | undefined)?.on_light;
+
+  // Deletes the depricated key, the color specific ones should be depricated too at a later date
+  if (profile.nameColor || (profile.extended?.[prefix.MATRIX_UNSTABLE_COLORS] as string)) {
+    const fallback =
+      profile.nameColor ?? (profile.extended?.[prefix.MATRIX_UNSTABLE_COLORS] as string);
+    if (!color_on_light || !color_on_dark)
+      handleSaveField(prefix.MATRIX_UNSTABLE_COLORS, {
+        on_dark: color_on_dark ?? fallback,
+        on_light: color_on_light ?? fallback,
+      });
+    handleSaveField(prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME, null);
+  }
+
   return (
     <Box direction="Column" gap="100">
       <Text size="L400">Extended Profile</Text>
@@ -443,45 +463,27 @@ function ProfileExtended({ profile, userId }: Readonly<ProfileProps>) {
         gap="400"
       >
         <NameColorEditor
-          title="General Global Name Color"
-          description="Custom name color everywhere names have color!"
-          focusId="name-color"
-          current={
-            profile.nameColor ||
-            (profile.extended?.[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME] as
-              | string
-              | undefined)
-          }
-          onSave={(color) =>
-            handleSaveField(prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME, color)
-          }
-        />
-        <NameColorEditor
           title="Dark theme Global Name Color"
           description="Your name's color for a dark theme user."
           focusId="name-color-dark-theme"
-          current={
-            profile.nameColorDark ||
-            (profile.extended?.[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_DARK_PROPERTY_NAME] as
-              | string
-              | undefined)
-          }
+          current={color_on_dark}
           onSave={(color) =>
-            handleSaveField(prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_DARK_PROPERTY_NAME, color)
+            handleSaveField(prefix.MATRIX_UNSTABLE_COLORS, {
+              on_dark: color,
+              on_light: color_on_light,
+            })
           }
         />
         <NameColorEditor
           title="Light theme Global Name Color"
           description="Your name's color for a light theme user."
           focusId="name-color-light-theme"
-          current={
-            profile.nameColorLight ||
-            (profile.extended?.[prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_LIGHT_PROPERTY_NAME] as
-              | string
-              | undefined)
-          }
+          current={color_on_light}
           onSave={(color) =>
-            handleSaveField(prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_LIGHT_PROPERTY_NAME, color)
+            handleSaveField(prefix.MATRIX_UNSTABLE_COLORS, {
+              on_dark: color_on_dark,
+              on_light: color,
+            })
           }
         />
       </SequenceCard>

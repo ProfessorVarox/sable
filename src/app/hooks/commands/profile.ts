@@ -1,4 +1,3 @@
-import type { RoomMemberEventContent } from '$types/matrix-sdk';
 import { EventTimeline, EventType, MatrixError } from '$types/matrix-sdk';
 import { setOwnRoomMemberProfile } from '$utils/roomMemberProfile';
 import { parsePronounsInput } from '$utils/pronouns';
@@ -7,6 +6,9 @@ import { CustomStateEvent } from '$types/matrix/room';
 import { ErrorCode } from '../../cs-errorcode';
 import type { CommandContext, CommandRecord } from './types';
 import { Command } from './types';
+import { isValidHex } from '$hooks/useUserProfile';
+import * as prefix from '$unstable/prefixes';
+import type { CustomRoomMemberEventContent } from '$unstable/CustomRoomMemberEventContent';
 
 export const createProfileCommands = (ctx: CommandContext): Partial<CommandRecord> => {
   const { mx, room, profileDisplayName } = ctx;
@@ -21,10 +23,12 @@ export const createProfileCommands = (ctx: CommandContext): Partial<CommandRecor
           .getLiveTimeline()
           .getState(EventTimeline.FORWARDS)
           ?.getStateEvents(EventType.RoomMember, mx.getSafeUserId());
-        const content = mEvent?.getContent<RoomMemberEventContent>();
+        const content = mEvent?.getContent<CustomRoomMemberEventContent>();
         if (!content) return;
-        const updatedContent: RoomMemberEventContent = { ...content };
-        const withDisplay = updatedContent as RoomMemberEventContent & { displayname?: string };
+        const updatedContent: CustomRoomMemberEventContent = { ...content };
+        const withDisplay = updatedContent as CustomRoomMemberEventContent & {
+          displayname?: string;
+        };
         if (nick == null || nick === '') {
           delete withDisplay.displayname;
         } else {
@@ -43,65 +47,95 @@ export const createProfileCommands = (ctx: CommandContext): Partial<CommandRecor
           .getLiveTimeline()
           .getState(EventTimeline.FORWARDS)
           ?.getStateEvents(EventType.RoomMember, mx.getSafeUserId());
-        const content = mEvent?.getContent<RoomMemberEventContent>();
+        const content = mEvent?.getContent<CustomRoomMemberEventContent>();
         if (!content) return;
-        const updatedContent: RoomMemberEventContent = { ...content };
+        const updatedContent: CustomRoomMemberEventContent = { ...content };
         if (isRemove) {
           // Reset to global avatar
           const globalAvatar = mx.getUser(mx.getSafeUserId())?.avatarUrl ?? undefined;
-          (updatedContent as RoomMemberEventContent & { avatar_url?: string }).avatar_url =
+          (updatedContent as CustomRoomMemberEventContent & { avatar_url?: string }).avatar_url =
             globalAvatar;
         } else {
           if (!trimmed.match(/^mxc:\/\/\S+$/)) {
             // bad mxc
             return;
           }
-          (updatedContent as RoomMemberEventContent & { avatar_url?: string }).avatar_url = trimmed;
+          (updatedContent as CustomRoomMemberEventContent & { avatar_url?: string }).avatar_url =
+            trimmed;
         }
         await setOwnRoomMemberProfile(mx, room, updatedContent);
       },
     },
     [Command.Color]: {
       name: Command.Color,
-      description: 'Set a room-specific color. Example: /color #ff00ff | /color reset',
+      description: 'Set a room-specific color. Example: /color light #ff00ff | /color reset',
       exe: async (payload) => {
-        const input = payload.trim().toLowerCase();
+        const input = payload.trim().toLowerCase().split(' ');
         const userId = mx.getSafeUserId();
+        const completeClear = input.length >= 0 && (input[0] === 'reset' || input[0] === 'clear');
+        const isLight =
+          input.length === 2 &&
+          (input[0] === 'light' || input[0] === 'on_light' || input[0] === 'both');
+        const isDark =
+          input.length === 2 &&
+          (input[0] === 'dark' || input[0] === 'on_dark' || input[0] === 'both');
+        const color =
+          input[1] === 'reset' || input[1] === 'clear'
+            ? undefined
+            : input[1]?.length
+              ? input[1]
+              : '';
 
         try {
-          if (input === 'reset' || input === 'clear') {
-            await mx.sendStateEvent(room.roomId, CustomStateEvent.RoomCosmeticsColor, {}, userId);
-            sendFeedback('Room color has been reset.', room, userId);
-            return;
-          }
+          if (!color || isValidHex(color) || completeClear) {
+            const mEvent = room
+              .getLiveTimeline()
+              .getState(EventTimeline.FORWARDS)
+              ?.getStateEvents(EventType.RoomMember, mx.getSafeUserId());
+            const content = mEvent?.getContent<CustomRoomMemberEventContent>();
+            if (!content) return;
+            const updatedContent: CustomRoomMemberEventContent = { ...content };
+            if (completeClear) {
+              // Reset
+              updatedContent[prefix.MATRIX_UNSTABLE_COLORS] = undefined;
 
-          if (/^#[0-9A-F]{6}$/i.test(input)) {
-            await mx.sendStateEvent(
-              room.roomId,
-              CustomStateEvent.RoomCosmeticsColor,
-              { color: input },
-              userId
-            );
-            sendFeedback(`Room color set to ${input}.`, room, userId);
-          } else {
-            sendFeedback('Invalid format. Use #RRGGBB.', room, userId);
-          }
-        } catch (e: unknown) {
-          if (e instanceof MatrixError && e.errcode === ErrorCode.M_FORBIDDEN) {
+              await mx.sendStateEvent(room.roomId, CustomStateEvent.RoomCosmeticsColor, {}, userId);
+            } else {
+              if (color && !isValidHex(color)) {
+                return;
+              }
+              updatedContent[prefix.MATRIX_UNSTABLE_COLORS] = {
+                on_dark: isDark ? color : content[prefix.MATRIX_UNSTABLE_COLORS]?.on_dark,
+                on_light: isLight ? color : content[prefix.MATRIX_UNSTABLE_COLORS]?.on_light,
+              };
+            }
+            await setOwnRoomMemberProfile(mx, room, updatedContent);
             sendFeedback(
-              'Permission Denied. An admin must enable "Room Colors" in Settings > Cosmetics in app.sable.moe or another supported client.',
+              `Room color set to:\nOver dark themes ${updatedContent[prefix.MATRIX_UNSTABLE_COLORS]?.on_dark},\nOver light themes ${updatedContent[prefix.MATRIX_UNSTABLE_COLORS]?.on_light}.`,
               room,
               userId
             );
+            await mx.sendStateEvent(room.roomId, CustomStateEvent.RoomCosmeticsColor, {}, userId);
+          } else {
+            sendFeedback(
+              'Invalid format. Use #RRGGBB for colors and specify which color.',
+              room,
+              userId
+            );
+          }
+        } catch (e: unknown) {
+          if (e instanceof MatrixError && e.errcode === ErrorCode.M_FORBIDDEN) {
+            sendFeedback('Permission Denied.', room, userId);
           }
         }
       },
     },
     [Command.SColor]: {
       name: Command.SColor,
-      description: 'Set your color for the current Space. Example: /scolor #ff00ff | /scolor reset',
+      description:
+        'Set your color for the current Space. Example: /scolor light #ff00ff | /scolor reset',
       exe: async (payload) => {
-        const input = payload.trim().toLowerCase();
+        const input = payload.trim().toLowerCase().split(' ');
         const userId = mx.getSafeUserId();
 
         const parents = room
@@ -111,37 +145,77 @@ export const createProfileCommands = (ctx: CommandContext): Partial<CommandRecor
 
         const targetSpaceId =
           parents && parents.length > 0 ? parents[0]!.getStateKey() : room.roomId;
+        const targetRoom = mx.getRoom(targetSpaceId);
+        const completeClear = input.length >= 0 && (input[0] === 'reset' || input[0] === 'clear');
+        const isLight =
+          input.length === 2 &&
+          (input[0] === 'light' || input[0] === 'on_light' || input[0] === 'both');
+        const isDark =
+          input.length === 2 &&
+          (input[0] === 'dark' || input[0] === 'on_dark' || input[0] === 'both');
+        const color =
+          input[1] === 'reset' || input[1] === 'clear'
+            ? undefined
+            : input[1]?.length
+              ? input[1]
+              : '';
 
         try {
-          if (input === 'reset' || input === 'clear') {
-            await mx.sendStateEvent(
-              targetSpaceId as string,
-              CustomStateEvent.RoomCosmeticsColor,
-              {},
-              userId
-            );
-            sendFeedback('Global space color reset.', room, userId);
-            return;
-          }
-
-          if (/^#[0-9A-F]{6}$/i.test(input)) {
-            await mx.sendStateEvent(
-              targetSpaceId as string,
-              CustomStateEvent.RoomCosmeticsColor,
-              { color: input },
-              userId
-            );
-            sendFeedback(`Global space color set to ${input}.`, room, userId);
+          if (!color || isValidHex(color) || completeClear) {
+            const mEvent = room
+              .getLiveTimeline()
+              .getState(EventTimeline.FORWARDS)
+              ?.getStateEvents(EventType.RoomMember, mx.getSafeUserId());
+            const content = mEvent?.getContent<CustomRoomMemberEventContent>();
+            if (!content) return;
+            const updatedContent: CustomRoomMemberEventContent = { ...content };
+            if (completeClear) {
+              // Reset
+              updatedContent[prefix.MATRIX_UNSTABLE_COLORS] = undefined;
+              //This may be ignored since it is to delete the old key when updated
+              try {
+                await mx.sendStateEvent(
+                  room.roomId,
+                  CustomStateEvent.RoomCosmeticsColor,
+                  {},
+                  userId
+                );
+              } catch {}
+            } else {
+              if (color && !isValidHex(color)) {
+                return;
+              }
+              updatedContent[prefix.MATRIX_UNSTABLE_COLORS] = {
+                on_dark: isDark ? color : content[prefix.MATRIX_UNSTABLE_COLORS]?.on_dark,
+                on_light: isLight ? color : content[prefix.MATRIX_UNSTABLE_COLORS]?.on_light,
+              };
+            }
+            if (targetRoom) {
+              await setOwnRoomMemberProfile(mx, targetRoom, updatedContent);
+              sendFeedback(
+                `Room color set to:\nOver dark themes ${updatedContent[prefix.MATRIX_UNSTABLE_COLORS]?.on_dark},\nOver light themes ${updatedContent[prefix.MATRIX_UNSTABLE_COLORS]?.on_light}.`,
+                room,
+                userId
+              );
+              try {
+                await mx.sendStateEvent(
+                  room.roomId,
+                  CustomStateEvent.RoomCosmeticsColor,
+                  {},
+                  userId
+                );
+              } catch {}
+            }
           } else {
-            sendFeedback('Invalid format. Use #RRGGBB.', room, userId);
-          }
-        } catch (e: unknown) {
-          if (e instanceof MatrixError && e.errcode === ErrorCode.M_FORBIDDEN) {
             sendFeedback(
-              'Permission Denied. An admin must enable "Space-Wide Colors" in Settings > Cosmetics in app.sable.moe or another supported client.',
+              'Invalid format. Use #RRGGBB for colors and specify which color (on_light|on_dark).',
               room,
               userId
             );
+          }
+        } catch (e: unknown) {
+          if (e instanceof MatrixError && e.errcode === ErrorCode.M_FORBIDDEN) {
+            sendFeedback('Permission Denied.', room, userId);
           }
         }
       },

@@ -104,7 +104,13 @@ export const settingsLinkFocusIdsBySection: Record<SettingsSectionId, readonly s
     'has-cats',
     'profile-change-propagation',
   ],
-  persona: ['enable-pk-commands', 'enable-pk-shorthands', 'create-pmp', 'enable-pmp-picker'],
+  persona: [
+    'enable-pk-commands',
+    'enable-pk-shorthands',
+    'enable-pk-latching',
+    'create-pmp',
+    'enable-pmp-picker',
+  ],
   appearance: [
     'autoplay-emojis',
     'old-sidebar',
@@ -150,6 +156,7 @@ export const settingsLinkFocusIdsBySection: Record<SettingsSectionId, readonly s
     'render-global-username-colors',
     'render-space-room-fonts',
     'render-space-room-username-colors',
+    'render-persona-username-colors',
     'saturation',
     'selected-language-for-pronouns',
     'show-easter-eggs',

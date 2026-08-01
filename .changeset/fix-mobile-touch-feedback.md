@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Improve mobile touch feedback and prevent accidental presses.
+Improve touch feedback and prevent accidental presses.

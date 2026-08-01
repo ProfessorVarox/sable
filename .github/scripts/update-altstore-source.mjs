@@ -54,9 +54,9 @@ const entry = {
   localizedDescription: description ?? `v${version}`,
 };
 
-// Replace an existing entry for this version, otherwise prepend as latest.
+// Replace the existing entry for this version, otherwise prepend as latest.
 const versions = Array.isArray(app.versions) ? app.versions : [];
-const idx = versions.findIndex((v) => v.version === version);
+const idx = versions.findIndex((v) => v.version === normalizedVersion);
 if (idx >= 0) versions[idx] = entry;
 else versions.unshift(entry);
 

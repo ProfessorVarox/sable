@@ -3,7 +3,11 @@ import type { PointerEventHandler } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as css from '$features/room/message/styles.css';
 import { MobileMenuItem } from './MobileMenuItem';
-import { MobileSwipeDownModal, VIEWPORT_SETTLE_MS } from './MobileSwipeDownModal';
+import {
+  MobileSwipeDownModal,
+  useMobileSheetClose,
+  VIEWPORT_SETTLE_MS,
+} from './MobileSwipeDownModal';
 
 vi.mock('$state/hooks/settings', () => ({
   useSetting: () => [false, vi.fn<() => void>()],
@@ -38,6 +42,11 @@ const renderWithScroller = (requestClose: () => void) => {
   );
   return { scroller: screen.getByTestId('scroller'), row: screen.getByTestId('row') };
 };
+
+function ContentCloseButton() {
+  const close = useMobileSheetClose();
+  return <button onClick={() => close?.()}>Close</button>;
+}
 
 /** jsdom reports zero for both, so a scroll container has to be declared. */
 const makeScrollable = (element: HTMLElement, scrollTop: number) => {
@@ -136,6 +145,21 @@ describe('MobileSwipeDownModal', () => {
     );
 
     expect(screen.getByTestId('immediate-content')).toBeInTheDocument();
+  });
+
+  it('applies sheetStyle to the panel', () => {
+    render(
+      <MobileSwipeDownModal
+        requestClose={vi.fn<() => void>()}
+        sheetClassName="styled-sheet"
+        sheetStyle={{ backgroundColor: '#663399' }}
+      >
+        {() => <div data-testid="styled-content" />}
+      </MobileSwipeDownModal>
+    );
+
+    const panel = screen.getByTestId('styled-content').closest('.styled-sheet');
+    expect(panel).toHaveStyle({ backgroundColor: '#663399' });
   });
 
   it('lifts the sheet clear of the keyboard with a transition, without resizing it', () => {
@@ -309,6 +333,33 @@ describe('MobileSwipeDownModal', () => {
     }
   });
 
+  it('animates a close requested by sheet content', async () => {
+    const requestClose = vi.fn<() => void>();
+    let finish: (() => void) | undefined;
+    const restore = stubElementAnimations((() => ({
+      addEventListener: (_event: string, callback: () => void) => {
+        finish = callback;
+      },
+    })) as unknown as HTMLElement['animate']);
+
+    try {
+      render(
+        <MobileSwipeDownModal requestClose={requestClose}>
+          {() => <ContentCloseButton />}
+        </MobileSwipeDownModal>
+      );
+      await act(async () => {});
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      expect(requestClose).not.toHaveBeenCalled();
+      finish?.();
+      expect(requestClose).toHaveBeenCalledOnce();
+    } finally {
+      restore();
+    }
+  });
+
   describe('dragging the body', () => {
     it('activates a marked menu item exactly once with small jitter', async () => {
       const requestClose = vi.fn<() => void>();
@@ -412,6 +463,30 @@ describe('MobileSwipeDownModal', () => {
 
         expect(requestClose).not.toHaveBeenCalled();
         expect(panel.style.transform).toBe('');
+      } finally {
+        restore();
+      }
+    });
+
+    it('leaves a marked scroll container to native scrolling at its top', async () => {
+      const requestClose = vi.fn<() => void>();
+      const restore = stubElementAnimations();
+
+      try {
+        render(
+          <MobileSwipeDownModal requestClose={requestClose}>
+            {() => (
+              <div data-mobile-sheet-no-drag="" data-testid="marked-scroller">
+                <div data-testid="marked-scroll-row" />
+              </div>
+            )}
+          </MobileSwipeDownModal>
+        );
+        await act(async () => {});
+
+        dragDown(screen.getByTestId('marked-scroll-row'), 100, 240);
+
+        expect(requestClose).not.toHaveBeenCalled();
       } finally {
         restore();
       }

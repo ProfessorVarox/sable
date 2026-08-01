@@ -50,7 +50,7 @@ function trySkipFenceEnd(md: string, i: number): number | null {
   if (!atLineStart) return null;
 
   const rest = md.slice(i);
-  const open = /^(\s{0,3})(`{3,}|~{3,})/.exec(rest);
+  const open = /^( {0,3})(`{3,}|~{3,})/.exec(rest);
   if (!open?.[2]) return null;
 
   const fenceStr = open[2];
@@ -58,20 +58,26 @@ function trySkipFenceEnd(md: string, i: number): number | null {
   const openLen = fenceStr.length;
   const afterOpen = i + open[0].length;
 
-  if (afterOpen < md.length && md[afterOpen] === '\n') {
-    const contentStart = afterOpen + 1;
+  const lineEnd = md.indexOf('\n', afterOpen);
+  const closeIdx = findSameLineFenceClose(md, afterOpen, tick, openLen);
+  if (closeIdx >= 0) {
+    let closeRun = 0;
+    while (closeIdx + closeRun < md.length && md[closeIdx + closeRun] === tick) closeRun++;
+
+    return closeIdx + closeRun;
+  }
+
+  if (lineEnd >= 0) {
+    const info = md.slice(afterOpen, lineEnd);
+    if (tick === '`' && info.includes('`')) return null;
+
+    const contentStart = lineEnd + 1;
     const close = findMultilineFenceEnd(md, contentStart, tick, openLen);
     if (!close) return md.length;
     return close.blockEnd;
   }
 
-  const closeIdx = findSameLineFenceClose(md, afterOpen, tick, openLen);
-  if (closeIdx < 0) return null;
-
-  let closeRun = 0;
-  while (closeIdx + closeRun < md.length && md[closeIdx + closeRun] === tick) closeRun++;
-
-  return closeIdx + closeRun;
+  return null;
 }
 
 function afterLeadingIndent(line: string): string {

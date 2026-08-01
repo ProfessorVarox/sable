@@ -26,6 +26,8 @@ import {
   sendNativeTauriNotification,
   IOS_INVITE_SOUND,
   IOS_NOTIFICATION_SOUND,
+  type NotificationPluginListener,
+  type TauriNotificationsApi,
 } from '$features/settings/notifications/TauriNotificationsApiClient';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
@@ -674,19 +676,39 @@ export function HandleDecryptPushEvent() {
   return null;
 }
 
+// Shared lifecycle for native notification listeners: register asynchronously,
+// swallow failures silently, and unregister the listener if registration
+// resolves after the effect was already torn down.
+function registerNativeNotificationListener(
+  register: (api: TauriNotificationsApi) => Promise<NotificationPluginListener>
+): (() => void) | undefined {
+  if (!isAndroidTauri() && !isIosTauri() && !isDesktopTauri()) return undefined;
+
+  let unregister: (() => Promise<void> | void) | undefined;
+  let disposed = false;
+  getTauriNotificationsApi()
+    .then(register)
+    .then((listener) => {
+      if (disposed) listener.unregister();
+      else unregister = listener.unregister;
+    })
+    .catch(() => {});
+
+  return () => {
+    disposed = true;
+    unregister?.();
+  };
+}
+
 // Routes taps on native plugin notifications (desktop + iOS) using the `extra`
 // payload attached in sendNativeTauriNotification.
 export function NativeNotificationClickRouting() {
   const setPending = useSetAtom(pendingNotificationAtom);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    if (!isAndroidTauri() && !isIosTauri() && !isDesktopTauri()) return undefined;
-
-    let unregister: (() => Promise<void> | void) | undefined;
-    let disposed = false;
-    getTauriNotificationsApi()
-      .then((api) =>
+  useEffect(
+    () =>
+      registerNativeNotificationListener((api) =>
         api.onNotificationClicked(({ data }) => {
           if (isDesktopTauri()) {
             import('@tauri-apps/api/window')
@@ -706,18 +728,9 @@ export function NativeNotificationClickRouting() {
             });
           }
         })
-      )
-      .then((listener) => {
-        if (disposed) listener.unregister();
-        else unregister = listener.unregister;
-      })
-      .catch(() => {});
-
-    return () => {
-      disposed = true;
-      unregister?.();
-    };
-  }, [setPending, navigate]);
+      ),
+    [setPending, navigate]
+  );
 
   return null;
 }
@@ -738,10 +751,6 @@ export function NativeNotificationActionRouting() {
   const setActiveSessionId = useSetAtom(activeSessionIdAtom);
 
   useEffect(() => {
-    if (!isAndroidTauri() && !isIosTauri() && !isDesktopTauri()) return undefined;
-    let disposed = false;
-    let unregister: (() => Promise<void> | void) | undefined;
-
     const route = (event: unknown) => {
       const reply = parseNativeNotificationReply(event);
       if (!reply) return;
@@ -753,26 +762,15 @@ export function NativeNotificationActionRouting() {
       }
     };
 
-    getTauriNotificationsApi()
-      .then(async (api) => {
-        await api.registerActionTypes([
-          {
-            id: SABLE_MESSAGE_ACTION_TYPE,
-            actions: [{ id: SABLE_REPLY_ACTION, title: 'Reply', input: true }],
-          },
-        ]);
-        return api.onAction(route);
-      })
-      .then((listener) => {
-        if (disposed) listener.unregister();
-        else unregister = listener.unregister;
-      })
-      .catch(() => {});
-
-    return () => {
-      disposed = true;
-      unregister?.();
-    };
+    return registerNativeNotificationListener(async (api) => {
+      await api.registerActionTypes([
+        {
+          id: SABLE_MESSAGE_ACTION_TYPE,
+          actions: [{ id: SABLE_REPLY_ACTION, title: 'Reply', input: true }],
+        },
+      ]);
+      return api.onAction(route);
+    });
   }, [enqueue]);
 
   useEffect(() => {

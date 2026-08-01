@@ -10,7 +10,7 @@ type RenderSettingsProps = {
   state: RoomSettingsState;
 };
 function RenderSettings({ state }: RenderSettingsProps) {
-  const { roomId, spaceId, page } = state;
+  const { roomId, spaceId, page, openedViaSwipe } = state;
   const closeSettings = useCloseRoomSettings();
   const allJoinedRooms = useAllJoinedRoomsSet();
   const getRoom = useGetRoom(allJoinedRooms);
@@ -23,7 +23,11 @@ function RenderSettings({ state }: RenderSettingsProps) {
     <ModalOverlay requestClose={closeSettings} mobile="fullscreen" size="500">
       <SpaceProvider value={space ?? null}>
         <RoomProvider value={room}>
-          <RoomSettings initialPage={page} requestClose={closeSettings} />
+          <RoomSettings
+            initialPage={page}
+            openedViaSwipe={openedViaSwipe}
+            requestClose={closeSettings}
+          />
         </RoomProvider>
       </SpaceProvider>
     </ModalOverlay>

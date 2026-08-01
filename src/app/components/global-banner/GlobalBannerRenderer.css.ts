@@ -1,5 +1,25 @@
-import { style } from '@vanilla-extract/css';
+import { keyframes, style } from '@vanilla-extract/css';
 import { color, config, toRem } from 'folds';
+
+const enter = keyframes({
+  from: { opacity: 0, transform: 'translate3d(0, -24px, 0) scale(0.96)' },
+  to: { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' },
+});
+
+const exit = keyframes({
+  from: { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' },
+  to: { opacity: 0, transform: 'translate3d(0, -16px, 0) scale(0.96)' },
+});
+
+const reducedEnter = keyframes({
+  from: { opacity: 0 },
+  to: { opacity: 1 },
+});
+
+const reducedExit = keyframes({
+  from: { opacity: 1 },
+  to: { opacity: 0 },
+});
 
 export const Container = style({
   position: 'fixed',
@@ -25,6 +45,26 @@ export const Banner = style({
   boxShadow: '0 10px 32px rgba(0, 0, 0, 0.22)',
   backdropFilter: 'blur(20px)',
   WebkitBackdropFilter: 'blur(20px)',
+});
+
+export const BannerEnter = style({
+  animation: `${enter} 220ms cubic-bezier(0.22, 1, 0.36, 1)`,
+  willChange: 'transform, opacity',
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      animation: `${reducedEnter} 200ms ease-out`,
+    },
+  },
+});
+
+export const BannerExit = style({
+  animation: `${exit} 150ms cubic-bezier(0.32, 0.72, 0, 1)`,
+  willChange: 'transform, opacity',
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      animation: `${reducedExit} 150ms ease-out`,
+    },
+  },
 });
 
 export const Header = style({

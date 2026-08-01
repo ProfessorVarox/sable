@@ -21,6 +21,7 @@ vi.mock('@tanstack/react-query', () => ({
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen,
+  TauriEvent: { WINDOW_RESUMED: 'tauri://resumed' },
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -171,16 +172,53 @@ describe('useNetworkRecovery', () => {
     expect(nudgeReconnect).toHaveBeenCalledTimes(2);
   });
 
+  describe('foreground nudge verification', () => {
+    it('retries once past the throttle when no Sync follows the nudge', () => {
+      renderHook(() => useNetworkRecovery({ clientRunning: true } as never));
+
+      dispatchEvent(new Event('online'));
+      expect(nudgeReconnect).toHaveBeenCalledTimes(1);
+      expect(nudgeReconnect).toHaveBeenLastCalledWith(expect.anything(), 'online');
+
+      vi.advanceTimersByTime(3_000);
+
+      expect(nudgeReconnect).toHaveBeenCalledTimes(2);
+      expect(nudgeReconnect).toHaveBeenLastCalledWith(expect.anything(), 'retry', { force: true });
+    });
+
+    it('cancels the retry when a Sync arrives after the nudge', () => {
+      renderHook(() => useNetworkRecovery({ clientRunning: true } as never));
+
+      dispatchEvent(new Event('online'));
+      vi.advanceTimersByTime(1_000);
+      syncCallback?.();
+      vi.advanceTimersByTime(3_000);
+
+      expect(nudgeReconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('issues only one follow-up nudge', () => {
+      renderHook(() => useNetworkRecovery({ clientRunning: true } as never));
+
+      dispatchEvent(new Event('online'));
+      vi.advanceTimersByTime(3_000);
+      vi.advanceTimersByTime(30_000);
+
+      expect(nudgeReconnect).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('tauri mobile resume', () => {
     beforeEach(() => {
       mockIsTauri.value = true;
     });
 
-    it('nudges on app-resumed event', () => {
+    it('nudges on tauri://resumed event', () => {
       listen.mockResolvedValue(listenOff);
 
       renderHook(() => useNetworkRecovery({ clientRunning: true } as never));
 
+      expect(listen).toHaveBeenCalledWith('tauri://resumed', expect.any(Function));
       const [, cb] = listen.mock.calls[0] as [string, () => void];
       cb();
 

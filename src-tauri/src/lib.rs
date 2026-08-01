@@ -494,18 +494,6 @@ pub fn run() {
         #[cfg(desktop)]
         desktop::tray::handle_run_event(app, event);
 
-        #[cfg(mobile)]
-        {
-            use tauri::Emitter;
-            if let tauri::RunEvent::WindowEvent {
-                event: tauri::WindowEvent::Resumed,
-                ..
-            } = event
-            {
-                let _ = app.emit("app-resumed", ());
-            }
-        }
-
         #[cfg(not(any(desktop, mobile)))]
         let _ = (app, event);
     });

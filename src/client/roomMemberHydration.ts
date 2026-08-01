@@ -11,6 +11,9 @@ const failedAt = new WeakMap<MatrixClient, Map<string, number>>();
 const activeRequests = new WeakMap<MatrixClient, number>();
 const requestQueues = new WeakMap<MatrixClient, Array<() => void>>();
 
+const REFRESH_TTL_MS = 10 * 60_000;
+const refreshedAt = new WeakMap<MatrixClient, Map<string, number>>();
+
 const scheduleRequest = <T>(mx: MatrixClient, task: () => Promise<T>): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const run = () => {
@@ -38,12 +41,21 @@ const scheduleRequest = <T>(mx: MatrixClient, task: () => Promise<T>): Promise<T
 export const hydrateRoomMember = (
   mx: MatrixClient,
   roomId: string,
-  userId: string
+  userId: string,
+  force = false
 ): Promise<void> => {
   const room = mx.getRoom(roomId);
-  if (!room || room.getMember(userId)) return Promise.resolve();
+  if (!room) return Promise.resolve();
+  if (!force && room.getMember(userId)) return Promise.resolve();
 
   const key = `${roomId}\u0000${userId}`;
+
+  if (force) {
+    const lastRefreshed = refreshedAt.get(mx)?.get(key);
+    if (lastRefreshed !== undefined && Date.now() - lastRefreshed < REFRESH_TTL_MS)
+      return Promise.resolve();
+  }
+
   const failedTs = failedAt.get(mx)?.get(key);
   if (failedTs !== undefined && Date.now() - failedTs < FAILURE_TTL_MS) return Promise.resolve();
 
@@ -56,10 +68,12 @@ export const hydrateRoomMember = (
     // A request may have waited in the queue while another event supplied the
     // member state. Avoid issuing a redundant network request in that case.
     const requestRoom = mx.getRoom(roomId);
-    if (!requestRoom || requestRoom.getMember(userId)) return;
+    if (!requestRoom) return;
+    if (!force && requestRoom.getMember(userId)) return;
     const content = await mx.getStateEvent(roomId, EventType.RoomMember, userId);
     const currentRoom = mx.getRoom(roomId);
-    if (!currentRoom || currentRoom.getMember(userId)) return;
+    if (!currentRoom) return;
+    if (!force && currentRoom.getMember(userId)) return;
     currentRoom.currentState.setStateEvents([
       new MatrixEvent({
         type: EventType.RoomMember,
@@ -72,6 +86,11 @@ export const hydrateRoomMember = (
   })
     .then(() => {
       failedAt.get(mx)?.delete(key);
+      if (force) {
+        const refreshMap = refreshedAt.get(mx) ?? new Map<string, number>();
+        refreshedAt.set(mx, refreshMap);
+        refreshMap.set(key, Date.now());
+      }
     })
     .catch(() => {
       const failures = failedAt.get(mx) ?? new Map<string, number>();

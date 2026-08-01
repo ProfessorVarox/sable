@@ -112,6 +112,25 @@ export async function sendText(
   return ((await res.json()) as { event_id: string }).event_id;
 }
 
+export async function sendMessage(
+  baseUrl: string,
+  token: string,
+  roomId: string,
+  content: Record<string, unknown>,
+  txnId: number
+): Promise<string> {
+  const url = `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify(content),
+  });
+  if (!res.ok) {
+    throw new Error(`sendMessage failed: ${res.status} ${await res.text()}`);
+  }
+  return ((await res.json()) as { event_id: string }).event_id;
+}
+
 export async function inviteUser(
   baseUrl: string,
   token: string,

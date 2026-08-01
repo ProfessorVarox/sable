@@ -2823,7 +2823,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -3893,6 +3893,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-call-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e33ab4dde42f7a6955a9ed8af82b9ff7d163b3791f5cf6288312742dc874403"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-cloud-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4823,7 +4835,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -4861,7 +4873,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -5391,6 +5403,7 @@ dependencies = [
  "log",
  "objc2",
  "objc2-avf-audio",
+ "objc2-call-kit",
  "objc2-foundation",
  "objc2-photos",
  "percent-encoding",

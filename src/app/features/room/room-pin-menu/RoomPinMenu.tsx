@@ -1,5 +1,5 @@
 import type { MouseEventHandler, ReactNode } from 'react';
-import { forwardRef, useCallback, useMemo, useRef } from 'react';
+import { forwardRef, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MatrixEvent, Room, RoomPinnedEventsEventContent } from '$types/matrix-sdk';
 import {
   Box,
@@ -210,11 +210,29 @@ export const RoomPinMenu = forwardRef<HTMLDivElement, RoomPinMenuProps>(
       overscan: 4,
     });
 
+    // Rows re-measure as dynamic content lands (decrypts, lazy media, replies),
+    // nudging the total size back and forth across the sheet's max height. The
+    // sheet sizes itself off this list, so latch the largest size seen for the
+    // current set of pins. Structural changes rebase the latch so removals do
+    // not leave stale empty space.
+    const totalSize = virtualizer.getTotalSize();
+    const pinListKey = JSON.stringify(sortedPinnedEvent);
+    const [latchedSize, setLatchedSize] = useState({ pinListKey, size: 0 });
+    useLayoutEffect(() => {
+      setLatchedSize((prev) => {
+        if (prev.pinListKey !== pinListKey) return { pinListKey, size: totalSize };
+        if (totalSize <= prev.size) return prev;
+        return { pinListKey, size: totalSize };
+      });
+    }, [pinListKey, totalSize]);
+    const currentLatchedSize = latchedSize.pinListKey === pinListKey ? latchedSize.size : totalSize;
+    const mobileMaxHeight = 'calc(85vh - 4rem)';
+
     const renderMatrixEvent = useRoomMessagePreviewRenderer(room);
 
     const handleOpen = (roomId: string, eventId: string) => {
       navigateRoom(roomId, eventId);
-      requestClose();
+      (mobileSheetClose ?? requestClose)();
     };
 
     return (
@@ -233,13 +251,14 @@ export const RoomPinMenu = forwardRef<HTMLDivElement, RoomPinMenuProps>(
           <Box grow="Yes">
             <Scroll
               ref={scrollRef}
+              data-mobile-sheet-no-drag=""
               size="300"
               hideTrack
               visibility="Hover"
               style={{
-                minHeight: 0,
+                minHeight: isMobile ? `min(${currentLatchedSize}px, ${mobileMaxHeight})` : 0,
                 flex: isMobile ? '0 1 auto' : 1,
-                maxHeight: isMobile ? 'calc(85vh - 4rem)' : undefined,
+                maxHeight: isMobile ? mobileMaxHeight : undefined,
                 overflowY: 'auto',
                 touchAction: 'pan-y',
               }}

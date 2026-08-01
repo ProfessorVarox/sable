@@ -201,6 +201,7 @@ export interface Settings {
   filterPronounsLanguages?: string[];
   renderRoomColors: boolean;
   renderRoomFonts: boolean;
+  renderPersonaColors: boolean;
   captionPosition: CaptionPosition;
   customDMCards: boolean;
 
@@ -240,6 +241,7 @@ export interface Settings {
   highlightMentions: boolean;
   pkCompat: boolean;
   pmpProxying: boolean;
+  pmpLatching: boolean;
   pmpPicker: boolean;
   mentionInReplies: boolean;
   profileChangePropagation: ProfileChangePropagation;
@@ -380,6 +382,7 @@ export const defaultSettings: Settings = {
   renderUserCards: 'both',
   renderRoomColors: true,
   renderRoomFonts: true,
+  renderPersonaColors: true,
   captionPosition: CaptionPosition.Below,
   customDMCards: true,
 
@@ -419,6 +422,7 @@ export const defaultSettings: Settings = {
   highlightMentions: true,
   pkCompat: false,
   pmpProxying: false,
+  pmpLatching: false,
   pmpPicker: false,
   mentionInReplies: true,
   profileChangePropagation: 'unchanged',

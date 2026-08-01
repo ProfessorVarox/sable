@@ -1,5 +1,6 @@
 import type { IImageInfo } from './common';
 import * as prefix from '$unstable/prefixes';
+import type { ColorSet } from '$hooks/useUserProfile';
 
 export type IMemberContent = {
   avatar_url?: string;
@@ -70,4 +71,9 @@ export type MemberPowerTag = {
   name: string;
   color?: string;
   icon?: MemberPowerTagIcon;
+};
+
+export type MemberPowerStyle = {
+  name: string;
+  color?: ColorSet;
 };

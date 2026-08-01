@@ -125,7 +125,7 @@ function KatexRenderer({
 
   useEffect(() => {
     let mounted = true;
-    void Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(([katex]) => {
+    void import('katex').then((katex) => {
       if (mounted) {
         setHtml(katex.default.renderToString(math, { throwOnError: false, displayMode }));
       }

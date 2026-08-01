@@ -1,4 +1,3 @@
-import { useMotionValue, useTransform, motion, animate } from 'framer-motion';
 import type { ReactNode } from 'react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
@@ -7,6 +6,12 @@ import { haptic } from '$utils/haptics';
 import { isMobileOrTablet } from '$utils/platform';
 import { RightSwipeAction, settingsAtom } from '$state/settings';
 import { useMobileNavDrawer } from '$components/page/MobileNavDrawerContext';
+import {
+  getTranslateX,
+  NATIVE_EASE_OUT,
+  setTranslateX,
+  transitionTo,
+} from '$utils/nativeAnimation';
 
 export type SwipeActionMode = 'none' | 'reply' | 'edit';
 
@@ -22,19 +27,59 @@ function ActiveSwipeWrapper({
   onActionModeChange?: (mode: SwipeActionMode) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const x = useMotionValue(0);
+  const messageRef = useRef<HTMLDivElement | null>(null);
+  const actionRef = useRef<HTMLDivElement | null>(null);
+  const xRef = useRef(0);
   const [actionMode, setActionMode] = useState<SwipeActionMode>('none');
   const actionModeRef = useRef<SwipeActionMode>('none');
   const gestureActiveRef = useRef(false);
-  const iconOpacity = useTransform(x, [0, -24], [0, 1]);
-  const gapWidth = useTransform(x, (val) => Math.abs(Math.min(0, val)));
+  const settleRef = useRef<{ cancel: () => void }>();
   const drawer = useMobileNavDrawer();
+
+  const setOffset = useCallback((value: number) => {
+    xRef.current = value;
+    if (messageRef.current) setTranslateX(messageRef.current, value);
+    if (actionRef.current) {
+      actionRef.current.style.width = `${Math.abs(Math.min(0, value))}px`;
+      actionRef.current.style.opacity = `${Math.min(1, Math.max(0, -value / 24))}`;
+    }
+  }, []);
+
+  const cancelSettle = useCallback(() => {
+    const message = messageRef.current;
+    const liveOffset = message ? getTranslateX(message, xRef.current) : xRef.current;
+    settleRef.current?.cancel();
+    settleRef.current = undefined;
+    if (message) message.style.transition = 'none';
+    if (actionRef.current) actionRef.current.style.transition = 'none';
+    setOffset(liveOffset);
+  }, [setOffset]);
+
+  const settleToRest = useCallback(() => {
+    const message = messageRef.current;
+    const action = actionRef.current;
+    if (!message || !action) return;
+
+    cancelSettle();
+    const transition = `transform 220ms ${NATIVE_EASE_OUT}`;
+    const actionTransition = `width 220ms ${NATIVE_EASE_OUT}, opacity 220ms ${NATIVE_EASE_OUT}`;
+    action.style.transition = actionTransition;
+    settleRef.current = transitionTo(
+      message,
+      transition,
+      () => setOffset(0),
+      220,
+      () => {
+        settleRef.current = undefined;
+      }
+    );
+  }, [cancelSettle, setOffset]);
 
   const move = useCallback(
     (distanceX: number) => {
       if (!gestureActiveRef.current) {
         gestureActiveRef.current = true;
-        x.stop();
+        cancelSettle();
       }
 
       const width = containerRef.current?.clientWidth || 360;
@@ -52,7 +97,7 @@ function ActiveSwipeWrapper({
         const maxExcess = 45;
         smoothedDist = linearLimit + maxExcess * (1 - Math.exp(-excess / 40));
       }
-      x.set(-smoothedDist);
+      setOffset(-smoothedDist);
 
       let nextMode: SwipeActionMode = 'none';
       if (onEdit && distanceX < editThreshold) {
@@ -70,7 +115,7 @@ function ActiveSwipeWrapper({
         }
       }
     },
-    [onActionModeChange, onEdit, x]
+    [cancelSettle, onActionModeChange, onEdit, setOffset]
   );
 
   const finish = useCallback(
@@ -85,12 +130,12 @@ function ActiveSwipeWrapper({
       }
 
       gestureActiveRef.current = false;
-      animate(x, 0, { type: 'spring', stiffness: 300, damping: 26 });
+      settleToRest();
       actionModeRef.current = 'none';
       setActionMode('none');
       onActionModeChange?.('none');
     },
-    [onActionModeChange, onEdit, onReply, x]
+    [onActionModeChange, onEdit, onReply, settleToRest]
   );
 
   useLayoutEffect(() => {
@@ -123,20 +168,21 @@ function ActiveSwipeWrapper({
       }}
     >
       {/* Keep the action centered in the portion of the message background being revealed. */}
-      <motion.div
+      <div
+        ref={actionRef}
         style={{
           position: 'absolute',
           top: 0,
           bottom: 0,
           right: 0,
-          width: gapWidth,
+          width: 0,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 1,
           pointerEvents: 'none',
           overflow: 'hidden',
-          opacity: iconOpacity,
+          opacity: 0,
         }}
       >
         <IconComponent
@@ -148,11 +194,19 @@ function ActiveSwipeWrapper({
             transform: actionMode === 'edit' ? 'scale(1.2)' : 'scale(1)',
           }}
         />
-      </motion.div>
+      </div>
 
-      <motion.div style={{ x, position: 'relative', zIndex: 2, willChange: 'transform' }}>
+      <div
+        ref={messageRef}
+        style={{
+          transform: 'translate3d(0, 0, 0)',
+          position: 'relative',
+          zIndex: 2,
+          willChange: 'transform',
+        }}
+      >
         {children}
-      </motion.div>
+      </div>
     </div>
   );
 }

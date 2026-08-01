@@ -146,7 +146,7 @@ function installSlidingSyncRequestPatch(mx: MatrixClient, manager: SlidingSyncMa
 
   const mxWritable = mx as MatrixClientWithWritableSlidingSync;
   const original = mx.slidingSync.bind(mx) as SlidingSyncMethod;
-  mxWritable.slidingSync = (reqBody, baseUrl, abortSignal) => {
+  mxWritable.slidingSync = async (reqBody, baseUrl, abortSignal) => {
     const req = reqBody as SlidingSyncRequestWithConnId;
     if (req.conn_id === undefined) {
       req.conn_id = SLIDING_SYNC_CONN_ID;
@@ -155,7 +155,10 @@ function installSlidingSyncRequestPatch(mx: MatrixClient, manager: SlidingSyncMa
     const roomIds = manager.getActiveRoomSubscriptionIds();
     scopeEphemeralExtensions(req.extensions, roomIds);
 
-    return original(reqBody, baseUrl, abortSignal);
+    // Must run before the SDK processes the response.
+    const response = await original(reqBody, baseUrl, abortSignal);
+    manager.sanitizeOptimisticJoinResponse(response);
+    return response;
   };
 
   slidingSyncRequestCleanupByClient.set(mx, () => {

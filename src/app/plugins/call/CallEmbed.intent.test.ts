@@ -95,6 +95,12 @@ describe('CallEmbed.getWidget', () => {
     baseUrl: 'https://matrix.example.com',
     getSafeUserId: () => '@alice:example.com',
     getDeviceId: () => 'ALICEDEVICE',
+    matrixRTC: {
+      getRoomSession: () => ({
+        getOldestMembership: () => undefined,
+        memberships: [],
+      }),
+    },
   } as never;
 
   it('adds ring notification delegation for starting DM calls in non-call rooms', () => {
@@ -172,5 +178,45 @@ describe('CallEmbed.getWidget', () => {
     const url = new URL(widget.getCompleteUrl({ currentUserId: '@alice:example.com' }));
 
     expect(url.searchParams.get('parentUrl')).toBe('https://tauri.localhost');
+  });
+
+  it("forwards the ongoing call's livekit transport as livekitServiceUrl param", () => {
+    const oldest = {};
+    const mxWithOngoingCall = {
+      baseUrl: 'https://matrix.example.com',
+      getSafeUserId: () => '@alice:example.com',
+      getDeviceId: () => 'ALICEDEVICE',
+      matrixRTC: {
+        getRoomSession: () => ({
+          getOldestMembership: () => oldest,
+          memberships: [
+            {
+              getTransport: () => ({
+                type: 'livekit',
+                livekit_service_url: 'https://lk.example.org',
+              }),
+            },
+          ],
+        }),
+      },
+    } as never;
+    const room = createRoom(false);
+    const widget = CallEmbed.getWidget(
+      mxWithOngoingCall,
+      room,
+      ElementCallIntent.JoinExisting,
+      'dark'
+    );
+    const url = new URL(widget.getCompleteUrl({ currentUserId: '@alice:example.com' }));
+
+    expect(url.searchParams.get('livekitServiceUrl')).toBe('https://lk.example.org');
+  });
+
+  it('adds no livekitServiceUrl param when there is no ongoing call', () => {
+    const room = createRoom(false);
+    const widget = CallEmbed.getWidget(mx, room, ElementCallIntent.StartCallVoice, 'dark');
+    const url = new URL(widget.getCompleteUrl({ currentUserId: '@alice:example.com' }));
+
+    expect(url.searchParams.get('livekitServiceUrl')).toBeNull();
   });
 });

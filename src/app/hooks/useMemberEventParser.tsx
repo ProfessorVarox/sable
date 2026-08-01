@@ -2,10 +2,10 @@ import type { MouseEventHandler, ReactNode } from 'react';
 import { useCallback } from 'react';
 import { Text } from 'folds';
 import type { MatrixEvent, Room } from '$types/matrix-sdk';
-import type { IMemberContent } from '$types/matrix/room';
 import {
   At,
   EnvelopeSimple,
+  PaintBrush,
   SignIn,
   SignOut,
   timelineIcon,
@@ -20,6 +20,8 @@ import { useOpenUserRoomProfile } from '$state/hooks/userRoomProfile';
 import { useSableCosmetics } from './useSableCosmetics';
 import { useMatrixClient } from './useMatrixClient';
 import { KnownMembership } from '$types/matrix-sdk';
+import type { CustomRoomMemberEventContent } from '$unstable/CustomRoomMemberEventContent';
+import { MATRIX_UNSTABLE_COLORS } from '$unstable/prefixes';
 
 type DecoratedUserProps = {
   roomId: string;
@@ -57,8 +59,8 @@ export type ParsedResult = {
 export type MemberEventParser = (mEvent: MatrixEvent) => ParsedResult;
 
 const parseMemberEvent: MemberEventParser = (mEvent) => {
-  const content = mEvent.getContent<IMemberContent>();
-  const prevContent = mEvent.getPrevContent() as IMemberContent;
+  const content = mEvent.getContent<CustomRoomMemberEventContent>();
+  const prevContent = mEvent.getPrevContent() as CustomRoomMemberEventContent;
   const senderId = mEvent.getSender();
   const userId = mEvent.getStateKey();
   const roomId = mEvent.getRoomId();
@@ -262,6 +264,42 @@ const parseMemberEvent: MemberEventParser = (mEvent) => {
           <>
             <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
             <Text>{' removed their avatar'}</Text>
+          </>
+        ),
+    };
+  }
+  if (content[MATRIX_UNSTABLE_COLORS]?.on_dark !== prevContent[MATRIX_UNSTABLE_COLORS]?.on_dark) {
+    return {
+      icon: timelineIcon(PaintBrush),
+      body:
+        content[MATRIX_UNSTABLE_COLORS]?.on_dark &&
+        typeof content[MATRIX_UNSTABLE_COLORS]?.on_dark === 'string' ? (
+          <>
+            <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
+            <Text>{' changed one of their room name colors'}</Text>
+          </>
+        ) : (
+          <>
+            <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
+            <Text>{' removed one of their room name colors '}</Text>
+          </>
+        ),
+    };
+  }
+  if (content[MATRIX_UNSTABLE_COLORS]?.on_light !== prevContent[MATRIX_UNSTABLE_COLORS]?.on_light) {
+    return {
+      icon: timelineIcon(PaintBrush),
+      body:
+        content[MATRIX_UNSTABLE_COLORS]?.on_light &&
+        typeof content[MATRIX_UNSTABLE_COLORS]?.on_light === 'string' ? (
+          <>
+            <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
+            <Text>{' changed one of their room name colors'}</Text>
+          </>
+        ) : (
+          <>
+            <DecoratedUser roomId={roomId ?? ''} userId={userId} userName={userName} />
+            <Text>{' removed one of their room name colors '}</Text>
           </>
         ),
     };

@@ -5,7 +5,7 @@ import FocusTrap from 'focus-trap-react';
 import { ScreenSize, useScreenSizeOptionally } from '$hooks/useScreenSize';
 import { stopPropagation } from '$utils/keyboard';
 import { useDismissOnBack } from '$utils/androidBack';
-import { MobileSwipeDownModal } from './MobileSwipeDownModal';
+import { MobileSheetFocusTrap, MobileSwipeDownModal } from './MobileSwipeDownModal';
 import * as css from './ResponsiveMenu.css';
 
 type ComponentPosition = 'Top' | 'Right' | 'Bottom' | 'Left';
@@ -98,11 +98,8 @@ export function ResponsiveMenu({
 
   if (isMobile) {
     const sheetStyle: CSSProperties | undefined = surfaceColor
-      ? ({ '--sheet-surface-color': surfaceColor } as CSSProperties)
+      ? { backgroundColor: surfaceColor }
       : undefined;
-    const sheetClassName = surfaceColor
-      ? `${css.SheetContent} ${css.SheetContentThemed}`
-      : css.SheetContent;
 
     return (
       <>
@@ -113,9 +110,9 @@ export function ResponsiveMenu({
           </MenuDialog>
         )}
         {anchor && mobile === 'sheet' && (
-          <MobileSwipeDownModal requestClose={requestClose}>
+          <MobileSwipeDownModal requestClose={requestClose} sheetStyle={sheetStyle}>
             {() => (
-              <FocusTrap
+              <MobileSheetFocusTrap
                 focusTrapOptions={{
                   ...focusTrapOptions,
                   // The backdrop owns tap-to-dismiss. Left to focus-trap, the
@@ -129,12 +126,11 @@ export function ResponsiveMenu({
                   direction="Column"
                   role="dialog"
                   aria-modal="true"
-                  className={sheetClassName}
-                  style={sheetStyle}
+                  className={css.SheetContent}
                 >
                   {menu}
                 </Box>
-              </FocusTrap>
+              </MobileSheetFocusTrap>
             )}
           </MobileSwipeDownModal>
         )}

@@ -43,10 +43,25 @@ vi.mock('focus-trap-react', () => ({
 }));
 
 vi.mock('./MobileSwipeDownModal', () => ({
-  MobileSwipeDownModal: ({ children, requestClose }: any) => (
-    <div data-testid="mobile-swipe-down" data-request-close={String(!!requestClose)}>
+  MobileSwipeDownModal: ({ children, requestClose, sheetStyle }: any) => (
+    <div
+      data-testid="mobile-swipe-down"
+      data-request-close={String(!!requestClose)}
+      style={sheetStyle}
+    >
       <div data-testid="drag-handle">drag-handle</div>
       {children()}
+    </div>
+  ),
+  MobileSheetFocusTrap: ({ children, focusTrapOptions }: any) => (
+    <div
+      data-testid="focus-trap"
+      data-initial-focus={String(focusTrapOptions?.initialFocus ?? false)}
+      data-return-focus={String(focusTrapOptions?.returnFocusOnDeactivate ?? false)}
+      data-click-outside={String(focusTrapOptions?.clickOutsideDeactivates ?? false)}
+      data-escape-deactivates={String(focusTrapOptions?.escapeDeactivates ?? false)}
+    >
+      {children}
     </div>
   ),
 }));
@@ -204,7 +219,7 @@ describe('ResponsiveMenu', () => {
       expect(screen.getByTestId('focus-trap')).toBeInTheDocument();
     });
 
-    it('applies --sheet-surface-color CSS custom property when surfaceColor is set', () => {
+    it('paints the sheet panel with surfaceColor so the sheet is coloured end to end', () => {
       render(
         <ScreenSizeProvider value={ScreenSize.Mobile}>
           <ResponsiveMenu
@@ -216,12 +231,10 @@ describe('ResponsiveMenu', () => {
         </ScreenSizeProvider>
       );
 
-      const box = screen.getByTestId('box');
-      expect(box.style.getPropertyValue('--sheet-surface-color')).toBe('#663399');
-      expect(box.className).toContain('SheetContentThemed');
+      expect(screen.getByTestId('mobile-swipe-down')).toHaveStyle({ backgroundColor: '#663399' });
     });
 
-    it('does not set surface-color properties when surfaceColor is absent', () => {
+    it('does not paint the sheet panel when surfaceColor is absent', () => {
       render(
         <ScreenSizeProvider value={ScreenSize.Mobile}>
           <ResponsiveMenu
@@ -232,9 +245,7 @@ describe('ResponsiveMenu', () => {
         </ScreenSizeProvider>
       );
 
-      const box = screen.getByTestId('box');
-      expect(box.style.getPropertyValue('--sheet-surface-color')).toBe('');
-      expect(box.className).not.toContain('SheetContentThemed');
+      expect(screen.getByTestId('mobile-swipe-down').style.backgroundColor).toBe('');
     });
   });
 

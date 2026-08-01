@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Box,
@@ -40,6 +40,7 @@ import {
   mxcUrlToHttp,
   rewriteAuthenticatedMediaUrl,
 } from '$utils/matrix';
+import { addTauriMediaRetryRevision, getTauriMediaRetryTarget } from '$utils/mediaUrl';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { isTauri } from '@tauri-apps/api/core';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
@@ -143,6 +144,8 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const [load, setLoad] = useState(false);
     const [error, setError] = useState(false);
+    // Tauri only: each retry gets a distinct sable-media:// src.
+    const retryRevisionRef = useRef(0);
     const [viewer, setViewer] = useState(false);
     const [viewerFullSrc, setViewerFullSrc] = useState<string | null>(null);
     const [blurred, setBlurred] = useState(markedAsSpoiler ?? false);
@@ -169,8 +172,11 @@ export const ImageContent = as<'div', ImageContentProps>(
         if (encInfo) {
           if (!rawMediaUrl) throw new Error('Invalid media URL');
           if (isTauri()) {
-            await setMediaEncryption(rawMediaUrl, encInfo, mimeType ?? FALLBACK_MIMETYPE);
-            return rewriteAuthenticatedMediaUrl(rawMediaUrl)!;
+            // The registration key is the revised target; Rust strips the fragment.
+            const attemptedTarget =
+              getTauriMediaRetryTarget(rawMediaUrl, retryRevisionRef.current) ?? rawMediaUrl;
+            await setMediaEncryption(attemptedTarget, encInfo, mimeType ?? FALLBACK_MIMETYPE);
+            return rewriteAuthenticatedMediaUrl(attemptedTarget)!;
           }
           return createObjectURL(
             downloadEncryptedMedia(rawMediaUrl, (encBuf) =>
@@ -178,7 +184,10 @@ export const ImageContent = as<'div', ImageContentProps>(
             )
           );
         }
-        return resolvedMediaUrl ?? rawMediaUrl ?? url;
+        return addTauriMediaRetryRevision(
+          resolvedMediaUrl ?? rawMediaUrl ?? url,
+          retryRevisionRef.current
+        );
       }, [rawMediaUrl, resolvedMediaUrl, url, mimeType, encInfo, createObjectURL])
     );
 
@@ -216,6 +225,7 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const handleRetry = () => {
       setError(false);
+      retryRevisionRef.current += 1;
       loadSrc().catch(() => undefined);
     };
 

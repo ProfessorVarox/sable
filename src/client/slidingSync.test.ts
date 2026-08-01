@@ -3,10 +3,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { MatrixClient, MSC3575List } from '$types/matrix-sdk';
+import type { MatrixClient, MatrixEvent, MSC3575List } from '$types/matrix-sdk';
 import { EventType, KnownMembership, SlidingSyncEvent, SlidingSyncState } from '$types/matrix-sdk';
 
 import { scopeEphemeralExtensions, SlidingSyncManager } from './slidingSync';
+import type { SlidingSyncSidebarCache } from './slidingSyncSidebarCache';
 
 // ── vi.hoisted mocks ─────────────────────────────────────────────────────────
 // Must be defined via vi.hoisted
@@ -77,6 +78,45 @@ function makeMockMx(overrides: Record<string, unknown> = {}) {
 function makeManager(mx: ReturnType<typeof makeMockMx>): SlidingSyncManager {
   return new SlidingSyncManager(mx, 'https://sliding.example.com');
 }
+
+function makeMemberRoom(roomId: string, initialMembership: string = KnownMembership.Invite) {
+  // Tracked separately, as in the SDK: updateMyMembership() touches only the former.
+  let selfMembership = initialMembership;
+  let memberEventMembership = initialMembership;
+  const setStateEvents = vi.fn<(events: MatrixEvent[]) => void>((events) => {
+    const membership = events[0]?.getContent().membership;
+    if (typeof membership === 'string') memberEventMembership = membership;
+  });
+  return {
+    roomId,
+    setStateEvents,
+    /** Simulate Room.recalculate() reading a stale invite back out. */
+    setMembership: (next: string) => {
+      selfMembership = next;
+      memberEventMembership = next;
+    },
+    getMyMembership: vi.fn<() => string>(() => selfMembership),
+    updateMyMembership: vi.fn<(next: string) => void>((next) => {
+      selfMembership = next;
+    }),
+    getLiveTimeline: vi.fn<() => unknown>(() => ({
+      getEvents: () => [],
+      getState: () => ({
+        getStateEvents: () => ({
+          getContent: () => ({
+            membership: memberEventMembership,
+            displayname: 'Alice',
+          }),
+        }),
+        setStateEvents,
+      }),
+    })),
+  };
+}
+
+const trackedJoins = (manager: SlidingSyncManager): Map<string, unknown> =>
+  (manager as unknown as { optimisticallyJoinedRoomIds: Map<string, unknown> })
+    .optimisticallyJoinedRoomIds;
 
 function makeRoomWithTimeline(eventCount: number) {
   const events = Array.from({ length: eventCount }, () => ({ status: null }));
@@ -496,6 +536,59 @@ describe('SlidingSyncManager room subscription coordination', () => {
     fireLifecycle(SlidingSyncState.Complete);
 
     expect(loadingStates).toEqual([false, true, false]);
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(false);
+  });
+
+  it('stops reporting loading for a room the server never sends data for', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!quiet:example.com';
+    const loadingStates: boolean[] = [];
+
+    manager.onRoomSubscriptionStatus(roomId, (loading) => loadingStates.push(loading));
+    manager.subscribeToRoom(roomId);
+    manager.attach();
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(true);
+
+    // The cycle the subscription was requested in carries no data for it.
+    fireLifecycle(SlidingSyncState.Complete);
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(true);
+
+    // A full cycle later the room is quiet: nothing is coming.
+    fireLifecycle(SlidingSyncState.Complete);
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(false);
+    expect(loadingStates).toEqual([false, true, false]);
+  });
+
+  it('stops reporting loading as soon as the subscription is dropped', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!quiet:example.com';
+
+    manager.subscribeToRoom(roomId);
+    manager.attach();
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(true);
+
+    manager.unsubscribeFromRoom(roomId);
+
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(false);
+  });
+
+  it('keeps reporting loading for a resubscribed room until its cycles elapse', () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!quiet:example.com';
+
+    manager.subscribeToRoom(roomId);
+    manager.attach();
+    fireLifecycle(SlidingSyncState.Complete);
+    fireLifecycle(SlidingSyncState.Complete);
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(false);
+
+    manager.unsubscribeFromRoom(roomId);
+    manager.subscribeToRoom(roomId);
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(true);
+
+    fireLifecycle(SlidingSyncState.Complete);
+    fireLifecycle(SlidingSyncState.Complete);
+    expect(manager.isRoomSubscriptionLoading(roomId)).toBe(false);
   });
 
   it('uses the active subscription while a room is also an image-pack room', () => {
@@ -753,39 +846,22 @@ describe('scopeEphemeralExtensions', () => {
 
 describe('SlidingSyncManager local membership reconciliation', () => {
   it('updates an existing invite immediately after a successful join', () => {
-    const updateMyMembership = vi.fn<() => void>();
-    const manager = makeManager(
-      makeMockMx({
-        getRoom: vi.fn<() => { updateMyMembership: typeof updateMyMembership }>().mockReturnValue({
-          updateMyMembership,
-        }),
-      })
-    );
+    const room = makeMemberRoom('!invite:example.com');
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
 
     manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
 
-    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
+    expect(room.updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
   });
 
   it('updates and unsubscribes a room immediately after a successful leave', () => {
-    const updateMyMembership = vi.fn<() => void>();
-    const manager = makeManager(
-      makeMockMx({
-        getRoom: vi
-          .fn<() => { updateMyMembership: typeof updateMyMembership; getLiveTimeline: unknown }>()
-          .mockReturnValue({
-            updateMyMembership,
-            getLiveTimeline: vi.fn<() => { getEvents: () => unknown[] }>(() => ({
-              getEvents: () => [],
-            })),
-          }),
-      })
-    );
+    const room = makeMemberRoom('!room:example.com', KnownMembership.Join);
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
     manager.subscribeToRoom('!room:example.com');
 
     manager.reconcileRoomMembership('!room:example.com', KnownMembership.Leave);
 
-    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Leave);
+    expect(room.updateMyMembership).toHaveBeenCalledWith(KnownMembership.Leave);
     expect(manager.isRoomActive('!room:example.com')).toBe(false);
     expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(new Set());
   });
@@ -839,11 +915,7 @@ describe('SlidingSyncManager local membership reconciliation', () => {
   });
 
   it('re-asserts join for a joined room hydrated from cache as invite', async () => {
-    const updateMyMembership = vi.fn<(m: string) => void>();
-    const room = {
-      getMyMembership: vi.fn<() => string>().mockReturnValue(KnownMembership.Invite),
-      updateMyMembership,
-    };
+    const room = makeMemberRoom('!joined:example.com');
     const getJoinedRooms = vi
       .fn<() => Promise<{ joined_rooms: string[] }>>()
       .mockResolvedValue({ joined_rooms: ['!joined:example.com'] });
@@ -862,22 +934,31 @@ describe('SlidingSyncManager local membership reconciliation', () => {
     internals.reconcileSidebarCacheMembership();
     await vi.waitFor(() => expect(getJoinedRooms).toHaveBeenCalledOnce());
 
-    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
+    expect(room.updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
+    // Repaired too, otherwise the next Room.recalculate() reverts it.
+    expect(room.setStateEvents).toHaveBeenCalledOnce();
   });
 
-  it('subscribes an optimistically joined room and tracks it for re-assertion', () => {
-    const updateMyMembership = vi.fn<() => void>();
-    const manager = makeManager(
-      makeMockMx({
-        getRoom: vi.fn<() => { updateMyMembership: typeof updateMyMembership }>().mockReturnValue({
-          updateMyMembership,
-        }),
-      })
+  it('clears the persisted invite when joining, so a reload cannot resurrect it', () => {
+    const room = makeMemberRoom('!invite:example.com');
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
+    const clearInviteStateForRooms = vi.spyOn(
+      (manager as unknown as { sidebarCache: SlidingSyncSidebarCache }).sidebarCache,
+      'clearInviteStateForRooms'
     );
 
     manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
 
-    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
+    expect(clearInviteStateForRooms).toHaveBeenCalledWith(['!invite:example.com']);
+  });
+
+  it('subscribes an optimistically joined room and tracks it for re-assertion', () => {
+    const room = makeMemberRoom('!invite:example.com');
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+
+    expect(room.updateMyMembership).toHaveBeenCalledWith(KnownMembership.Join);
     // Room is now an active subscription so the next sync pulls real joined state
     expect(manager.isRoomActive('!invite:example.com')).toBe(true);
     expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(
@@ -886,110 +967,300 @@ describe('SlidingSyncManager local membership reconciliation', () => {
   });
 
   it('re-asserts join after a sync cycle when the SDK reverted to invite', () => {
-    let myMembership: string = KnownMembership.Invite;
-    const updateMyMembership = vi.fn<(m: string) => void>().mockImplementation((m) => {
-      myMembership = m;
-    });
-    const room = {
-      getMyMembership: vi.fn<() => string>().mockImplementation(() => myMembership),
-      updateMyMembership,
-    };
-    const manager = makeManager(
-      makeMockMx({
-        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
-      })
-    );
+    const room = makeMemberRoom('!invite:example.com');
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
     manager.attach();
 
     // Optimistic join
     manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
-    expect(myMembership).toBe(KnownMembership.Join);
+    expect(room.getMyMembership()).toBe(KnownMembership.Join);
 
     // Simulate the SDK reverting to invite during a sync cycle, then fire Complete.
     // (room.recalculate() in the SDK would set this back to invite via invite_state)
-    myMembership = KnownMembership.Invite;
+    room.setMembership(KnownMembership.Invite);
 
     fireLifecycle(SlidingSyncState.Complete, {
-      rooms: {
-        '!invite:example.com': {
-          required_state: [],
-          invite_state: [
-            {
-              type: EventType.RoomMember,
-              state_key: '@user:example.com',
-              sender: '@inviter:example.com',
-              content: { membership: KnownMembership.Invite },
-            },
-          ],
-        },
-      },
+      rooms: { '!invite:example.com': {} },
     });
 
     // The manager re-asserted join
-    expect(updateMyMembership).toHaveBeenLastCalledWith(KnownMembership.Join);
-    expect(myMembership).toBe(KnownMembership.Join);
+    expect(room.updateMyMembership).toHaveBeenLastCalledWith(KnownMembership.Join);
+    expect(room.getMyMembership()).toBe(KnownMembership.Join);
   });
 
-  it('stops tracking a room once the server confirms join (no invite_state)', () => {
-    let myMembership: string = KnownMembership.Join;
-    const updateMyMembership = vi.fn<(m: string) => void>().mockImplementation((m) => {
-      myMembership = m;
+  it('leaves tracking to the response sanitiser rather than the SDK membership', () => {
+    const room = makeMemberRoom('!invite:example.com', KnownMembership.Join);
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
+    manager.attach();
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+    fireLifecycle(SlidingSyncState.Complete, {
+      rooms: { '!invite:example.com': {} },
     });
-    const room = {
-      getMyMembership: vi.fn<() => string>().mockImplementation(() => myMembership),
-      updateMyMembership,
-    };
-    const manager = makeManager(
-      makeMockMx({
-        getRoom: vi.fn<() => typeof room>().mockReturnValue(room),
-      })
-    );
+
+    // Membership reading "join" is not proof the server caught up.
+    expect(trackedJoins(manager).has('!invite:example.com')).toBe(true);
+    // Only the optimistic write; nothing re-asserted.
+    expect(room.updateMyMembership).toHaveBeenCalledOnce();
+    expect(room.setStateEvents).not.toHaveBeenCalled();
+  });
+
+  it('stops re-asserting a join for a room the server stops reporting', () => {
+    const room = makeMemberRoom('!invite:example.com');
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
+    manager.attach();
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+    // Never appears in a response, so sanitisation cannot release it. The
+    // deadline counts cycles *after* the join.
+    for (let cycle = 0; cycle <= 10; cycle += 1) {
+      fireLifecycle(SlidingSyncState.Complete, { rooms: {} });
+    }
+
+    expect(trackedJoins(manager).has('!invite:example.com')).toBe(false);
+  });
+
+  const runStaleInviteCycles = (
+    manager: SlidingSyncManager,
+    room: ReturnType<typeof makeMemberRoom>,
+    cycles: number
+  ) => {
+    for (let cycle = 0; cycle < cycles; cycle += 1) {
+      const response = respond(room.roomId, {
+        invite_state: [selfMember(KnownMembership.Invite)],
+      });
+      manager.sanitizeOptimisticJoinResponse(response as never);
+      room.setMembership(KnownMembership.Invite);
+      fireLifecycle(SlidingSyncState.Complete, response);
+    }
+  };
+
+  it('keeps correcting a server that sends a stale invite past the deadline', async () => {
+    const room = makeMemberRoom('!invite:example.com');
+    const getJoinedRooms = vi
+      .fn<() => Promise<{ joined_rooms: string[] }>>()
+      .mockResolvedValue({ joined_rooms: ['!invite:example.com'] });
+    const manager = makeManager(makeMockMx({ getRoom: () => room, getJoinedRooms }));
     manager.attach();
 
     manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
 
-    // Server caught up: room is joined, no invite_state in the response.
-    fireLifecycle(SlidingSyncState.Complete, {
-      rooms: {
-        '!invite:example.com': {
-          required_state: [
-            {
-              type: EventType.RoomMember,
-              state_key: '@user:example.com',
-              sender: '@user:example.com',
-              content: { membership: KnownMembership.Join },
-            },
-          ],
-          timeline: [],
-        },
-      },
-    });
+    // The deadline must not expire while the server is still sending the room.
+    runStaleInviteCycles(manager, room, 21);
+    await vi.waitFor(() => expect(getJoinedRooms).toHaveBeenCalled());
 
-    // Room is no longer tracked; a subsequent revert would not be re-asserted.
-    expect(updateMyMembership).toHaveBeenCalledTimes(1); // only the initial optimistic join
+    expect(trackedJoins(manager).has('!invite:example.com')).toBe(true);
+    expect(room.getMyMembership()).toBe(KnownMembership.Join);
+  });
+
+  it('defers to the server once it confirms we are not actually joined', async () => {
+    const room = makeMemberRoom('!invite:example.com');
+    // Kicked and re-invited inside one sync gap: the new invite is real.
+    const getJoinedRooms = vi
+      .fn<() => Promise<{ joined_rooms: string[] }>>()
+      .mockResolvedValue({ joined_rooms: [] });
+    const manager = makeManager(makeMockMx({ getRoom: () => room, getJoinedRooms }));
+    manager.attach();
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+    runStaleInviteCycles(manager, room, 4);
+    await vi.waitFor(() => expect(getJoinedRooms).toHaveBeenCalledOnce());
+
+    expect(trackedJoins(manager).has('!invite:example.com')).toBe(false);
+  });
+
+  it('keeps assuming joined when the membership check cannot be made', async () => {
+    const room = makeMemberRoom('!invite:example.com');
+    const getJoinedRooms = vi
+      .fn<() => Promise<{ joined_rooms: string[] }>>()
+      .mockRejectedValue(new Error('offline'));
+    const manager = makeManager(makeMockMx({ getRoom: () => room, getJoinedRooms }));
+    manager.attach();
+
+    manager.reconcileRoomMembership('!invite:example.com', KnownMembership.Join);
+    runStaleInviteCycles(manager, room, 4);
+    await vi.waitFor(() => expect(getJoinedRooms).toHaveBeenCalledOnce());
+
+    // Must not strand the user back on the invite.
+    expect(trackedJoins(manager).has('!invite:example.com')).toBe(true);
+    expect(room.getMyMembership()).toBe(KnownMembership.Join);
   });
 
   it('clears optimistic join tracking on leave', () => {
-    const updateMyMembership = vi.fn<() => void>();
-    const manager = makeManager(
-      makeMockMx({
-        getRoom: vi
-          .fn<() => { updateMyMembership: typeof updateMyMembership; getLiveTimeline: unknown }>()
-          .mockReturnValue({
-            updateMyMembership,
-            getLiveTimeline: vi.fn<() => { getEvents: () => unknown[] }>(() => ({
-              getEvents: () => [],
-            })),
-          }),
-      })
-    );
+    const room = makeMemberRoom('!room:example.com');
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
     manager.subscribeToRoom('!room:example.com');
 
     manager.reconcileRoomMembership('!room:example.com', KnownMembership.Join);
     manager.reconcileRoomMembership('!room:example.com', KnownMembership.Leave);
 
-    expect(updateMyMembership).toHaveBeenCalledWith(KnownMembership.Leave);
+    expect(trackedJoins(manager).has('!room:example.com')).toBe(false);
+    expect(room.updateMyMembership).toHaveBeenCalledWith(KnownMembership.Leave);
     expect(manager.isRoomActive('!room:example.com')).toBe(false);
+  });
+});
+
+const selfMember = (membership: string) => ({
+  type: EventType.RoomMember,
+  state_key: '@user:example.com',
+  sender: '@inviter:example.com',
+  content: { membership },
+});
+
+const respond = (roomId: string, roomData: Record<string, unknown>) => ({
+  rooms: { [roomId]: roomData },
+});
+
+const sanitizedSelfMember = (roomData: Record<string, unknown> | undefined) =>
+  (roomData?.required_state as { state_key?: string; content?: unknown }[] | undefined)?.find(
+    (event) => event.state_key === '@user:example.com'
+  );
+
+describe('SlidingSyncManager optimistic join sanitisation', () => {
+  const ROOM_ID = '!invite:example.com';
+
+  it('replaces stale invite data with a join for an optimistically joined room', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+    const invite = selfMember(KnownMembership.Invite);
+
+    const response = respond(ROOM_ID, {
+      required_state: [invite],
+      invite_state: [invite],
+      timeline: [],
+    });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(response.rooms[ROOM_ID]?.invite_state).toBeUndefined();
+    // Replaced, not removed: the cache clears its invite only on a join here.
+    expect(sanitizedSelfMember(response.rooms[ROOM_ID])?.content).toMatchObject({
+      membership: KnownMembership.Join,
+    });
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(true);
+  });
+
+  it('replaces the invite when the server omits our member event entirely', () => {
+    // Continuwuity does not substitute "$ME", so our member event never appears.
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+
+    const response = respond(ROOM_ID, {
+      required_state: [{ type: EventType.RoomName, state_key: '', content: { name: 'Room' } }],
+      invite_state: [selfMember(KnownMembership.Invite)],
+    });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(response.rooms[ROOM_ID]?.invite_state).toBeUndefined();
+    expect(sanitizedSelfMember(response.rooms[ROOM_ID])?.content).toMatchObject({
+      membership: KnownMembership.Join,
+    });
+    expect(response.rooms[ROOM_ID]?.required_state).toHaveLength(2);
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(true);
+  });
+
+  it('drops a stale invite that accompanies a real join and stops tracking', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+    const join = selfMember(KnownMembership.Join);
+
+    // The SDK ignores required_state whenever invite_state is present.
+    const response = respond(ROOM_ID, {
+      required_state: [join],
+      invite_state: [selfMember(KnownMembership.Invite)],
+    });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(response.rooms[ROOM_ID]?.invite_state).toBeUndefined();
+    expect(response.rooms[ROOM_ID]?.required_state).toEqual([join]);
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(false);
+  });
+
+  it('stops tracking once the server stops sending any invite state', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+
+    // Server caught up without ever spelling the join out.
+    const response = respond(ROOM_ID, { required_state: [], timeline: [] });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(false);
+  });
+
+  it('keeps real join state and stops tracking once the server confirms', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+    const join = selfMember(KnownMembership.Join);
+
+    const response = respond(ROOM_ID, { required_state: [join], timeline: [] });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(response.rooms[ROOM_ID]?.required_state).toEqual([join]);
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(false);
+  });
+
+  it('stops tracking on a join confirmed only by the timeline', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+
+    // A limited timeline can still carry the prior invite, so the newest wins.
+    const response = respond(ROOM_ID, {
+      timeline: [selfMember(KnownMembership.Invite), selfMember(KnownMembership.Join)],
+    });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(false);
+  });
+
+  it('passes through a leave the server reports while the join is still tracked', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+    const leave = selfMember(KnownMembership.Leave);
+
+    // Kicked elsewhere: suppressing this strands us in a room we left.
+    const response = respond(ROOM_ID, {
+      required_state: [leave],
+      timeline: [],
+    });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(response.rooms[ROOM_ID]?.required_state).toEqual([leave]);
+    expect(trackedJoins(manager).has(ROOM_ID)).toBe(false);
+  });
+
+  it('leaves responses untouched for rooms that were not optimistically joined', () => {
+    const manager = makeManager(makeMockMx());
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+    const invite = selfMember(KnownMembership.Invite);
+
+    const response = respond('!other:example.com', {
+      required_state: [invite],
+      invite_state: [invite],
+      timeline: [],
+    });
+    manager.sanitizeOptimisticJoinResponse(response as never);
+
+    expect(response.rooms['!other:example.com']).toMatchObject({
+      required_state: [invite],
+      invite_state: [invite],
+    });
+  });
+
+  it('replaces the stale invite member event with a synthesized join one', () => {
+    const room = makeMemberRoom(ROOM_ID);
+    const manager = makeManager(makeMockMx({ getRoom: () => room }));
+
+    manager.reconcileRoomMembership(ROOM_ID, KnownMembership.Join);
+
+    expect(room.setStateEvents).toHaveBeenCalledOnce();
+    const [events] = room.setStateEvents.mock.calls[0] ?? [];
+    expect(events).toHaveLength(1);
+    expect(events?.[0]?.getContent()).toEqual({
+      membership: KnownMembership.Join,
+      displayname: 'Alice',
+    });
+    expect(events?.[0]?.getRoomId()).toBe(ROOM_ID);
+    // Sent by the user, not the inviter.
+    expect(events?.[0]?.getSender()).toBe('@user:example.com');
   });
 });
 

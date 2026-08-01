@@ -28,6 +28,7 @@ import { parsePronounsStringToPronounsSetArray } from '$utils/pronouns';
 import { generateShortId } from '$utils/shortIdGen';
 import { SettingTile } from '$components/setting-tile';
 import { type AsyncState, AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import { NameColorEditor } from '../account/NameColorEditor';
 
 const constructProxyString = (s: Shorthand) => {
   return `${s.prefix ?? ''}text${s.suffix ?? ''}`;
@@ -319,6 +320,8 @@ type PerMessageProfileEditorProps = {
   avatarMxcUrl?: string;
   displayName?: string;
   pronouns?: PronounSet[];
+  nameColorLightTheme?: string;
+  nameColorDarkTheme?: string;
   shorthands?: Shorthand[];
   onDelete?: (profileId: string) => void;
 };
@@ -329,6 +332,8 @@ export function PerMessageProfileEditor({
   avatarMxcUrl,
   displayName,
   pronouns = Array<PronounSet>(),
+  nameColorLightTheme,
+  nameColorDarkTheme,
   onDelete,
 }: Readonly<PerMessageProfileEditorProps>) {
   const useAuthentication = useMediaAuthentication();
@@ -352,6 +357,12 @@ export function PerMessageProfileEditor({
       : '';
     return pronounsString;
   });
+
+  // Name color
+  const [currentNameColorLight, setCurrentNameColorLight] = useState(nameColorLightTheme ?? null);
+  const [newNameColorLight, setNewNameColorLight] = useState(nameColorLightTheme ?? null);
+  const [currentNameColorDark, setCurrentNameColorDark] = useState(nameColorDarkTheme ?? null);
+  const [newNameColorDark, setNewNameColorDark] = useState(nameColorDarkTheme ?? null);
 
   const [newDisplayName, setNewDisplayName] = useState(currentDisplayName);
   const [imageFile, setImageFile] = useState<File | undefined>();
@@ -396,6 +407,8 @@ export function PerMessageProfileEditor({
     () =>
       newDisplayName !== (currentDisplayName ?? '') ||
       newPronounsString !== currentPronounsString ||
+      newNameColorLight !== currentNameColorLight ||
+      newNameColorDark !== currentNameColorDark ||
       hasIdChange ||
       imageHasChanges,
     [
@@ -403,6 +416,10 @@ export function PerMessageProfileEditor({
       currentDisplayName,
       newPronounsString,
       currentPronounsString,
+      newNameColorLight,
+      currentNameColorLight,
+      newNameColorDark,
+      currentNameColorDark,
       hasIdChange,
       imageHasChanges,
     ]
@@ -433,10 +450,16 @@ export function PerMessageProfileEditor({
         name: newDisplayName,
         avatarUrl: avatarMxc,
         pronouns: newPronouns,
+        colors: {
+          on_light: newNameColorLight ?? undefined,
+          on_dark: newNameColorDark ?? undefined,
+        },
       });
 
       setCurrentDisplayName(newDisplayName);
       setCurrentPronouns(newPronouns);
+      setCurrentNameColorLight(newNameColorLight);
+      setCurrentNameColorDark(newNameColorDark);
       setImageHasChanges(false);
       setChangingDisplayName(false);
       setDisableSetDisplayname(false);
@@ -445,7 +468,17 @@ export function PerMessageProfileEditor({
           setCurrentId(newId);
         });
       }
-    }, [mx, profileId, newDisplayName, avatarMxc, newPronouns, hasIdChange, newId])
+    }, [
+      mx,
+      profileId,
+      newDisplayName,
+      avatarMxc,
+      newPronouns,
+      newNameColorLight,
+      newNameColorDark,
+      hasIdChange,
+      newId,
+    ])
   );
 
   const [deleteState, handleDelete] = useAsyncCallback(
@@ -648,6 +681,35 @@ export function PerMessageProfileEditor({
             />
           }
         ></SettingTile>
+      </SequenceCard>
+
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="400"
+      >
+        <NameColorEditor
+          title="Dark theme Name Color"
+          description="This persona's name color for a dark theme user."
+          focusId={`nameColorDarkTheme-${profileId}`}
+          current={currentNameColorDark ?? undefined}
+          onChange={setNewNameColorDark}
+        />
+      </SequenceCard>
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="400"
+      >
+        <NameColorEditor
+          title="Light theme Name Color"
+          description="This persona's name color for a light theme user."
+          focusId={`nameColorLightTheme-${profileId}`}
+          current={currentNameColorLight ?? undefined}
+          onChange={setNewNameColorLight}
+        />
       </SequenceCard>
       <Box
         direction="Row"

@@ -31,6 +31,7 @@ overrides:
       - libdrm2
       - libxkbcommon0
       - libasound2
+      - libpulse0
       - libcups2
       - xdg-utils
       - xwayland
@@ -44,6 +45,7 @@ overrides:
       - libdrm
       - libxkbcommon
       - alsa-lib
+      - pulseaudio-libs
       - cups-libs
       - xdg-utils
       - xorg-x11-server-Xwayland

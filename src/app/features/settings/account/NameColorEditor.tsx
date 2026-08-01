@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
-import { Box, Button, config, Text, Input, IconButton } from 'folds';
+import { Box, Button, config, color, Text, Input, IconButton } from 'folds';
 import { menuIcon, X } from '$components/icons/phosphor';
 import { HexColorPicker } from 'react-colorful';
 import { SettingTile } from '$components/setting-tile';
 import { HexColorPickerPopOut } from '$components/HexColorPickerPopOut';
+import { isValidHex } from '$hooks/useUserProfile';
 
 type NameColorEditorProps = {
   title: string;
   description?: string;
   focusId?: string;
   current?: string;
-  onSave: (color: string | null) => void;
+  onChange?: (color: string | null) => void;
+  onSave?: (color: string | null) => void;
   disabled?: boolean;
 };
 
@@ -19,43 +21,61 @@ const stripQuotes = (str?: string) => {
   // to solve the silly tuwunel
   return str.replaceAll(/^["']|["']$/g, '');
 };
+
 export function NameColorEditor({
   title,
   description,
   focusId,
   current,
+  onChange,
   onSave,
   disabled,
 }: Readonly<NameColorEditorProps>) {
-  const [tempColor, setTempColor] = useState(stripQuotes(current) || '#FFFFFF');
+  const [tempColor, setTempColor] = useState(stripQuotes(current) || undefined);
   const [hasChanged, setHasChanged] = useState(false);
 
   useEffect(() => {
     const sanitized = stripQuotes(current);
     if (sanitized) setTempColor(sanitized);
-    else setTempColor('#FFFFFF');
+    else setTempColor(undefined);
   }, [current]);
+
+  // Valid in the sense that it should look like an error during input.
+  // It's disruptive to the user to immediately present their input as an error.
+  // We should only present an error if they fail the regex test :)
+  // (Also this change makes the fallback "undefined" instead of #fff so this is required)
+  // oxlint-disable-next-line unicorn/consistent-function-scoping
+  const validInput = (testColor: string | undefined) => {
+    if (!testColor) return true;
+    return isValidHex(testColor);
+  };
 
   const handleUpdate = (newColor: string) => {
     let sanitized = stripQuotes(newColor);
     sanitized = sanitized.startsWith('#') ? sanitized : `#${sanitized}`;
     setTempColor(sanitized);
-    const currentSanitized = stripQuotes(current) || '#FFFFFF';
+    const currentSanitized = stripQuotes(current) || '#ffffff';
     setHasChanged(sanitized.toUpperCase() !== currentSanitized.toUpperCase());
   };
 
   const handleSave = () => {
-    if (/^#[0-9A-F]{6}$/i.test(tempColor)) {
+    if (!!onSave && !!tempColor && isValidHex(tempColor)) {
       onSave(tempColor);
       setHasChanged(false);
     }
   };
 
   const handleReset = () => {
-    onSave(null);
+    if (onChange) onChange(null);
+    if (onSave) onSave(null);
     setHasChanged(false);
-    setTempColor('#FFFFFF');
+    setTempColor(undefined);
   };
+
+  useEffect(() => {
+    const validColor = tempColor !== undefined && isValidHex(tempColor);
+    if (onChange) onChange(validColor ? tempColor : null);
+  }, [onChange, tempColor]);
 
   return (
     <Box direction="Column" gap="100">
@@ -70,24 +90,24 @@ export function NameColorEditor({
             gap="300"
             style={{
               padding: config.space.S100,
-              backgroundColor: 'var(--sable-surface-container)',
+              backgroundColor: color.Surface.Container,
               borderRadius: config.radii.R400,
             }}
           >
             <Box alignItems="Center" gap="300" grow="Yes">
-              {hasChanged && (
+              {onSave && hasChanged && (
                 <Button
                   variant="Primary"
                   size="300"
                   radii="Pill"
                   onClick={handleSave}
-                  disabled={!/^#[0-9A-F]{6}$/i.test(tempColor)}
+                  disabled={!tempColor || !isValidHex(tempColor)}
                 >
                   <Text size="B300">Save</Text>
                 </Button>
               )}
               <HexColorPickerPopOut
-                picker={<HexColorPicker color={tempColor} onChange={handleUpdate} />}
+                picker={<HexColorPicker color={tempColor ?? '#FFFFFF'} onChange={handleUpdate} />}
               >
                 {(onOpen, opened) => (
                   <Button
@@ -107,7 +127,7 @@ export function NameColorEditor({
                         width: '32px',
                         height: '32px',
                         borderRadius: '50%',
-                        backgroundColor: tempColor,
+                        backgroundColor: tempColor ?? '#FFFFFF',
                         boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)',
                       }}
                     />
@@ -117,10 +137,10 @@ export function NameColorEditor({
 
               <Box direction="Row" alignItems="Center" gap="100">
                 <Input
-                  value={tempColor}
+                  value={tempColor ?? ''}
                   onChange={(e) => handleUpdate(e.currentTarget.value)}
                   placeholder="#FFFFFF"
-                  variant="Background"
+                  variant={validInput(tempColor) ? 'Background' : 'Critical'}
                   size="300"
                   radii="300"
                   disabled={disabled ?? false}
@@ -130,7 +150,7 @@ export function NameColorEditor({
                     width: '100px',
                   }}
                 />
-                {current && (
+                {tempColor && (
                   <IconButton
                     variant="Secondary"
                     size="300"

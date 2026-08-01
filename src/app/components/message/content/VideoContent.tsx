@@ -30,6 +30,7 @@ import {
   mxcUrlToHttp,
   rewriteAuthenticatedMediaUrl,
 } from '$utils/matrix';
+import { addTauriMediaRetryRevision, getTauriMediaRetryTarget } from '$utils/mediaUrl';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useCreateObjectURL } from '$hooks/useObjectURL';
@@ -83,6 +84,8 @@ export const VideoContent = as<'div', VideoContentProps>(
 
     const [load, setLoad] = useState(false);
     const [error, setError] = useState(false);
+    // Tauri only: each retry gets a distinct sable-media:// src.
+    const retryRevisionRef = useRef(0);
     const [blurred, setBlurred] = useState(markedAsSpoiler ?? false);
     const [isHovered, setIsHovered] = useState(false);
 
@@ -102,16 +105,20 @@ export const VideoContent = as<'div', VideoContentProps>(
         const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
         if (!mediaUrl) throw new Error('Invalid media URL');
         if (!encInfo) {
-          if (isTauri()) return mediaUrl;
+          if (isTauri()) {
+            return addTauriMediaRetryRevision(mediaUrl, retryRevisionRef.current);
+          }
           // Stream through the service worker only after it proved media-auth
           // support; a stale SW build would otherwise serve the bare URL to
           // the homeserver and the element would fail with a 4xx.
           if (!preferBlobRef.current && (await probeSWMediaAuthSupport())) return mediaUrl;
-          return createObjectURL(downloadMedia(mediaUrl));
+          return createObjectURL(downloadMedia(mediaUrl, { forceDirectAuth: true }));
         }
         if (isTauri()) {
-          await setMediaEncryption(mediaUrl, encInfo, mimeType);
-          return rewriteAuthenticatedMediaUrl(mediaUrl)!;
+          const attemptedTarget =
+            getTauriMediaRetryTarget(mediaUrl, retryRevisionRef.current) ?? mediaUrl;
+          await setMediaEncryption(attemptedTarget, encInfo, mimeType);
+          return rewriteAuthenticatedMediaUrl(attemptedTarget)!;
         }
         return createObjectURL(
           downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
@@ -161,6 +168,7 @@ export const VideoContent = as<'div', VideoContentProps>(
 
     const handleRetry = () => {
       setError(false);
+      retryRevisionRef.current += 1;
       loadSrc().catch(() => undefined);
     };
 

@@ -43,8 +43,49 @@ const withVoid = (editor: Editor): Editor => {
   return editor;
 };
 
+const SLATE_FRAGMENT_TYPE = 'application/x-slate-fragment';
+const slateFragmentAttribute = /data-slate-fragment="(.+?)"/m;
+
+const insertSlateFragment = (editor: Editor, fragment: string): boolean => {
+  if (!fragment) return false;
+
+  const decoded = decodeURIComponent(window.atob(fragment));
+  editor.insertFragment(JSON.parse(decoded));
+  return true;
+};
+
+const withEfficientClipboardReads = (editor: Editor): Editor => {
+  const { insertData } = editor;
+
+  editor.insertData = (data) => {
+    const types = new Set(Array.from(data.types ?? [], (type) => type.toLowerCase()));
+    if (types.size === 0) {
+      insertData(data);
+      return;
+    }
+
+    if (
+      types.has(SLATE_FRAGMENT_TYPE) &&
+      insertSlateFragment(editor, data.getData(SLATE_FRAGMENT_TYPE))
+    ) {
+      return;
+    }
+
+    if (types.has('text/html')) {
+      const [, fragment] = data.getData('text/html').match(slateFragmentAttribute) || [];
+      if (fragment && insertSlateFragment(editor, fragment)) return;
+    }
+
+    if (types.has('text/plain')) editor.insertTextData(data);
+  };
+
+  return editor;
+};
+
 export const useEditor = (): Editor => {
-  const [editor] = useState(() => withInline(withVoid(withReact(withHistory(createEditor())))));
+  const [editor] = useState(() =>
+    withInline(withVoid(withEfficientClipboardReads(withReact(withHistory(createEditor())))))
+  );
   return editor;
 };
 

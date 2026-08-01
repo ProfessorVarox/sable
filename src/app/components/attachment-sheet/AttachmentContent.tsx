@@ -8,6 +8,7 @@ import {
   PlusCircle,
 } from '$components/icons/phosphor';
 import * as css from './AttachmentContent.css';
+import { useMobileSheetClose } from '$components/MobileSwipeDownModal';
 
 interface AttachmentAction {
   icon: Icon;
@@ -30,6 +31,7 @@ export function AttachmentContent({
   onPickLocation,
   skipReturnFocusRef,
 }: AttachmentContentProps) {
+  const mobileSheetClose = useMobileSheetClose();
   const actions: AttachmentAction[] = [
     { icon: PlusCircle, label: 'Add File', onClick: onPickFile },
     { icon: ListBullets, label: 'Create Poll', onClick: onPickPoll },
@@ -39,6 +41,7 @@ export function AttachmentContent({
   const handleAction = (action: () => void) => {
     skipReturnFocusRef.current = true;
     action();
+    mobileSheetClose?.();
   };
 
   return (

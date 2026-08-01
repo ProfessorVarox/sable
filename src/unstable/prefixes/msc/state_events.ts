@@ -8,3 +8,5 @@ export const MATRIX_UNSTABLE_STATE_ROOM_EMOTES_PROPERTY_NAME = 'im.ponies.room_e
  * defined in MSC3401 https://github.com/matrix-org/matrix-spec-proposals/pull/3401
  */
 export const MATRIX_UNSTABLE_ROOM_TYPE_CALL_PROPERTY_NAME = 'org.matrix.msc3401.call';
+
+export const MATRIX_UNSTABLE_ROOM_STYLING = 'eu.she-a.powerlevels_style';

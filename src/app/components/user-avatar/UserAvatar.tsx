@@ -11,6 +11,7 @@ type UserAvatarProps = {
   userId: string;
   src?: string;
   alt?: string;
+  fallbackColor?: string;
   renderFallback: () => ReactNode;
 };
 
@@ -18,7 +19,14 @@ const handleImageLoad: ReactEventHandler<HTMLImageElement> = (evt) => {
   evt.currentTarget.setAttribute('data-image-loaded', 'true');
 };
 
-export function UserAvatar({ className, userId, src, alt, renderFallback }: UserAvatarProps) {
+export function UserAvatar({
+  className,
+  userId,
+  src,
+  alt,
+  fallbackColor,
+  renderFallback,
+}: UserAvatarProps) {
   const [error, setError] = useState(false);
   const resolvedSrc = useRenderableMediaUrl(src);
 
@@ -29,7 +37,10 @@ export function UserAvatar({ className, userId, src, alt, renderFallback }: User
   if (!src || error) {
     return (
       <AvatarFallback
-        style={{ backgroundColor: colorMXID(userId), color: color.Surface.Container }}
+        style={{
+          backgroundColor: fallbackColor ?? colorMXID(userId),
+          color: color.Surface.Container,
+        }}
         className={classNames(css.UserAvatar, className)}
       >
         {renderFallback()}

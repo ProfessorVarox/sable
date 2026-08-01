@@ -37,9 +37,11 @@ import { useCapabilities } from '$hooks/useCapabilities';
 import { NameColorEditor } from '$features/settings/account/NameColorEditor';
 import { PronounEditor } from '$features/settings/account/PronounEditor';
 import type { PronounSet } from '$utils/pronouns';
-import { EventType } from '$types/matrix-sdk';
+import { EventTimeline, EventType } from '$types/matrix-sdk';
 import { CustomStateEvent } from '$types/matrix/room';
 import { AvatarUploadTile } from '$components/avatar-upload-tile/AvatarUploadTile';
+import type { CustomRoomMemberEventContent } from '$unstable/CustomRoomMemberEventContent';
+import * as prefix from '$unstable/prefixes';
 
 const log = createLogger('Cosmetics');
 
@@ -250,6 +252,20 @@ export function Cosmetics({ requestBack, requestClose }: CosmeticsProps) {
   const powerLevels = usePowerLevels(room);
   const isSpace = room.isSpaceRoom();
 
+  const mEvent = room
+    .getLiveTimeline()
+    .getState(EventTimeline.FORWARDS)
+    ?.getStateEvents(EventType.RoomMember, mx.getSafeUserId());
+
+  const oldColorState = room.getLiveTimeline().getState(EventTimeline.FORWARDS);
+  const oldColorEvent = oldColorState?.getStateEvents(CustomStateEvent.RoomCosmeticsColor, userId);
+  const localColorOld = (
+    Array.isArray(oldColorEvent) ? oldColorEvent[0] : oldColorEvent
+  )?.getContent()?.color;
+  const content = mEvent?.getContent<CustomRoomMemberEventContent>();
+  const colorOnDark = content?.[prefix.MATRIX_UNSTABLE_COLORS]?.on_dark ?? localColorOld;
+  const colorOnLight = content?.[prefix.MATRIX_UNSTABLE_COLORS]?.on_light ?? localColorOld;
+
   const permissions = useRoomPermissions(creators, powerLevels);
   const canEditPermissions = permissions.stateEvent(EventType.RoomPowerLevels, mx.getSafeUserId());
 
@@ -257,7 +273,6 @@ export function Cosmetics({ requestBack, requestClose }: CosmeticsProps) {
 
   const getLevel = (eventType: string) => (powerLevels.events ?? {})?.[eventType] ?? 50;
 
-  const canHaveRoomColor = getLevel(CustomStateEvent.RoomCosmeticsColor) === 0;
   const canHaveRoomPronouns = getLevel(CustomStateEvent.RoomCosmeticsPronouns) === 0;
   const canHaveRoomFont = getLevel(CustomStateEvent.RoomCosmeticsFont) === 0;
 
@@ -331,11 +346,27 @@ export function Cosmetics({ requestBack, requestClose }: CosmeticsProps) {
                   gap="400"
                 >
                   <NameColorEditor
-                    title={isSpace ? 'Space Name Color' : 'Room Name Color'}
-                    current={roomProfile.resolvedColor}
-                    disabled={!(canHaveRoomColor || canEditPermissions)}
+                    title={
+                      isSpace
+                        ? 'Space Dark theme Global Name Color'
+                        : 'Room Dark theme Global Name Color'
+                    }
+                    current={colorOnDark}
+                    description="Your name's color for a dark theme user."
                     onSave={(color) =>
-                      commands[isSpace ? Command.SColor : Command.Color].exe(color ?? 'clear')
+                      commands[isSpace ? Command.SColor : Command.Color].exe(
+                        color ? `dark ${color}` : 'dark reset'
+                      )
+                    }
+                  />
+                  <NameColorEditor
+                    title={isSpace ? 'Space Light theme Name Color' : 'Room Light theme Name Color'}
+                    current={colorOnLight}
+                    description="Your name's color for a light theme user."
+                    onSave={(color) =>
+                      commands[isSpace ? Command.SColor : Command.Color].exe(
+                        color ? `light ${color}` : 'light reset'
+                      )
                     }
                   />
                 </SequenceCard>
@@ -381,22 +412,7 @@ export function Cosmetics({ requestBack, requestClose }: CosmeticsProps) {
                   variant="SurfaceVariant"
                   direction="Column"
                   gap="400"
-                >
-                  <SettingTile
-                    title={isSpace ? 'Space-Wide Colors' : 'Room Colors'}
-                    description={`Allow everyone to set a color that applies in ${isSpace ? "all the space's rooms" : 'this room'}.`}
-                    after={
-                      <Switch
-                        variant="Primary"
-                        value={canHaveRoomColor}
-                        onChange={(enabled) =>
-                          handleToggle(CustomStateEvent.RoomCosmeticsColor, enabled)
-                        }
-                        disabled={!canEditPermissions}
-                      />
-                    }
-                  />
-                </SequenceCard>
+                ></SequenceCard>
                 <SequenceCard
                   className={SequenceCardStyle}
                   variant="SurfaceVariant"

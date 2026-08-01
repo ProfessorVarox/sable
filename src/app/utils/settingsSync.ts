@@ -16,6 +16,7 @@ export const NON_SYNCABLE_KEYS = new Set<keyof Settings>([
   'useSystemNotifications',
   // Personal device-level preferences
   'pageZoom',
+  'enterForNewline',
   'isPeopleDrawer',
   'isWidgetDrawer',
   'memberSortFilterIndex',

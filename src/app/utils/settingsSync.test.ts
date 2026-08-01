@@ -31,6 +31,7 @@ describe('NON_SYNCABLE_KEYS', () => {
       'useInAppNotifications',
       'useSystemNotifications',
       'pageZoom',
+      'enterForNewline',
       'isPeopleDrawer',
       'isWidgetDrawer',
       'memberSortFilterIndex',

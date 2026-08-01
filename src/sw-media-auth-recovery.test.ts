@@ -12,13 +12,15 @@ type SwTestHooks = typeof swTestHooksHelper;
 describe('service worker media auth recovery', () => {
   let swTestHooks: SwTestHooks;
   let clients: Map<string, Client>;
+  let addEventListener: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.resetModules();
     clients = new Map();
+    addEventListener = vi.fn();
     vi.stubGlobal('self', {
       __WB_MANIFEST: [],
-      addEventListener: vi.fn(),
+      addEventListener,
       caches: {
         open: vi.fn(async () => ({
           delete: vi.fn(async () => true),
@@ -35,6 +37,22 @@ describe('service worker media auth recovery', () => {
     });
     vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>());
     swTestHooks = (await import('./sw')).swTestHooks;
+  });
+
+  it('does not intercept media requests that already carry authorization', () => {
+    const fetchHandler = addEventListener.mock.calls.find(([type]) => type === 'fetch')?.[1] as
+      | ((event: FetchEvent) => void)
+      | undefined;
+    const respondWith = vi.fn();
+    const request = new Request(
+      'https://matrix.example.org/_matrix/client/v1/media/download/example.org/media-id',
+      { headers: { Authorization: 'Bearer direct-token' } }
+    );
+
+    fetchHandler?.({ request, respondWith, clientId: 'client-a' } as unknown as FetchEvent);
+
+    expect(fetchHandler).toBeTypeOf('function');
+    expect(respondWith).not.toHaveBeenCalled();
   });
 
   it('shares recovery and preserves each Range header on retry', async () => {

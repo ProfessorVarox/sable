@@ -112,4 +112,30 @@ describe('Tauri media session coordinator', () => {
     const scopes = commands.setMediaSession.mock.calls.map(([params]) => params.scope);
     expect(scopes).toEqual(['@a:matrix.example', '@a:matrix.example']);
   });
+
+  it('syncs the native session when the active account changes in this window', async () => {
+    mediaTransport.getActiveMediaSession
+      .mockReturnValueOnce({
+        baseUrl: 'https://one.example',
+        accessToken: 'one',
+        userId: '@a:one.example',
+      })
+      .mockReturnValue({
+        baseUrl: 'https://two.example',
+        accessToken: 'two',
+        userId: '@b:two.example',
+      });
+
+    await initTauriMediaSession();
+    commands.setMediaSession.mockClear();
+
+    window.dispatchEvent(new Event('sable-session-changed'));
+    await vi.waitFor(() => expect(commands.setMediaSession).toHaveBeenCalledTimes(1));
+
+    expect(commands.setMediaSession).toHaveBeenCalledWith({
+      baseUrl: 'https://two.example',
+      token: 'two',
+      scope: '@b:two.example',
+    });
+  });
 });

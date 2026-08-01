@@ -1,5 +1,5 @@
 import { atom as jotaiAtom } from 'jotai';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -103,16 +103,38 @@ vi.mock('$features/common-settings/appearance/Appearance', () => ({
   Appearance: mkSection('Appearance section'),
 }));
 
+// Captures the SwipeableOverlayWrapper onClose (i.e. RoomSettings' swipe-back handler)
+// so tests can trigger it without simulating touch gestures.
+let capturedSwipeBack: (() => void) | undefined;
+let capturedSwipeDirection: 'left' | 'right' | 'both' | undefined;
+vi.mock('$components/SwipeableOverlayWrapper', () => ({
+  SwipeableOverlayWrapper: ({
+    children,
+    direction,
+    onClose,
+  }: {
+    children: ReactNode;
+    direction: 'left' | 'right' | 'both';
+    onClose: () => void;
+  }) => {
+    capturedSwipeBack = onClose;
+    capturedSwipeDirection = direction;
+    return <div>{children}</div>;
+  },
+}));
+
 // ── Render helper ──
 
 function renderRoomSettings({
   isSpace = false,
   screenSize = ScreenSize.Desktop,
   initialPage,
+  openedViaSwipe,
 }: {
   isSpace?: boolean;
   screenSize?: ScreenSize;
   initialPage?: RoomSettingsPage;
+  openedViaSwipe?: boolean;
 } = {}) {
   mockRoom = createMockRoom(isSpace);
 
@@ -120,7 +142,11 @@ function renderRoomSettings({
 
   render(
     <ScreenSizeProvider value={screenSize}>
-      <RoomSettings initialPage={initialPage} requestClose={requestClose} />
+      <RoomSettings
+        initialPage={initialPage}
+        openedViaSwipe={openedViaSwipe}
+        requestClose={requestClose}
+      />
     </ScreenSizeProvider>
   );
 
@@ -209,6 +235,43 @@ describe('RoomSettings menu', () => {
     expect(requestClose).not.toHaveBeenCalled();
     expect(screen.getByText('Test Room')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'General' })).toBeInTheDocument();
+  });
+
+  it('swipe closes the overlay directly when opened via swipe', () => {
+    const { requestClose } = renderRoomSettings({
+      isSpace: false,
+      screenSize: ScreenSize.Mobile,
+      initialPage: RoomSettingsPage.MembersPage,
+      openedViaSwipe: true,
+    });
+
+    expect(screen.getByRole('heading', { name: 'Members section' })).toBeInTheDocument();
+    expect(capturedSwipeDirection).toBe('both');
+
+    expect(capturedSwipeBack).toBeDefined();
+    act(() => capturedSwipeBack?.());
+
+    expect(requestClose).toHaveBeenCalled();
+    // Still on the sections page (never navigated back to the section list)
+    expect(screen.getByRole('heading', { name: 'Members section' })).toBeInTheDocument();
+  });
+
+  it('rightward swipe goes back to the section list when not opened via swipe', () => {
+    const { requestClose } = renderRoomSettings({
+      isSpace: false,
+      screenSize: ScreenSize.Mobile,
+      initialPage: RoomSettingsPage.MembersPage,
+    });
+
+    expect(screen.getByRole('heading', { name: 'Members section' })).toBeInTheDocument();
+    expect(capturedSwipeDirection).toBe('right');
+
+    expect(capturedSwipeBack).toBeDefined();
+    act(() => capturedSwipeBack?.());
+
+    expect(requestClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'Members section' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Members' })).toBeInTheDocument();
   });
 
   it('visible flag gates section content', () => {

@@ -4,6 +4,7 @@
 import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 
 import { createPushNotifications } from './sw/pushNotification';
+import { withMediaFetchSlot } from './app/utils/mediaConcurrency';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -790,8 +791,9 @@ function respondWithInflightMedia(
   // Fetch by URL instead of reusing the subresource Request. Image requests commonly carry
   // mode: "no-cors", which prevents the Authorization header above from reaching the server.
   // Preserve Range header for streaming audio and video.
-  const promise = fetch(request.url, { ...fetchConfig(token, request), redirect })
-    .then(
+  // The slot is held until the body has been read, since that is what holds the connection.
+  const promise = withMediaFetchSlot(() =>
+    fetch(request.url, { ...fetchConfig(token, request), redirect }).then(
       async (res): Promise<BufferedMediaResponse> => ({
         status: res.status,
         statusText: res.statusText,
@@ -799,9 +801,9 @@ function respondWithInflightMedia(
         body: await res.arrayBuffer(),
       })
     )
-    .finally(() => {
-      inflightMediaFetches.delete(key);
-    });
+  ).finally(() => {
+    inflightMediaFetches.delete(key);
+  });
   inflightMediaFetches.set(key, promise);
   return promise.then(
     (data) =>
@@ -888,6 +890,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   }
 
   if (!mediaPath(url)) return;
+
+  // Direct-auth fallback requests already carry the page's token. Let the
+  // browser send them unchanged instead of routing them back through SW auth.
+  if (event.request.headers.has('Authorization')) return;
 
   const { clientId } = event;
 

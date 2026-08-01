@@ -1,13 +1,16 @@
 import type {
+  IRoomEvent,
+  IStateEvent,
   MatrixClient,
-  MatrixEvent,
   MSC3575List,
   MSC3575RoomData,
   MSC3575RoomSubscription,
   MSC3575SlidingSyncResponse,
+  Room,
 } from '$types/matrix-sdk';
 import {
   KnownMembership,
+  MatrixEvent,
   MSC3575_WILDCARD,
   RoomMemberEvent,
   SlidingSync,
@@ -16,6 +19,7 @@ import {
   MSC3575_STATE_KEY_LAZY,
   MSC3575_STATE_KEY_ME,
   EventType,
+  EventTimeline,
   EventEmitterEvents,
   ClientEvent,
 } from '$types/matrix-sdk';
@@ -44,6 +48,14 @@ const SPACE_SUBSCRIPTION_KEY = 'space';
 const IMAGE_PACK_SUBSCRIPTION_KEY = 'image_packs';
 const SPACE_IMAGE_PACK_SUBSCRIPTION_KEY = 'space_image_packs';
 const ACTIVE_ROOM_TIMELINE_LIMIT = 50;
+const OPTIMISTIC_JOIN_MAX_SYNC_CYCLES = 10;
+const OPTIMISTIC_JOIN_VERIFY_AFTER_CYCLES = 3;
+
+type OptimisticJoin = {
+  joinedAtSyncCount: number;
+  lastSeenSyncCount: number;
+  verificationRequested: boolean;
+};
 
 export type PartialSlidingSyncRequest = {
   filters?: MSC3575List['filters'];
@@ -79,6 +91,60 @@ export type HydrationProgress = { loadedRooms: number; totalRooms: number };
 const clampPositive = (value: number | undefined, fallback: number): number => {
   if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) return fallback;
   return Math.round(value);
+};
+
+type SlidingSyncEventLike = IStateEvent | IRoomEvent;
+
+const isSelfMemberEvent = (event: SlidingSyncEventLike, userId: string): boolean =>
+  event.type === (EventType.RoomMember as string) &&
+  'state_key' in event &&
+  event.state_key === userId;
+
+// Scans backwards so the newest wins in a timeline that still holds the
+// previous membership.
+const findSelfMemberEvent = <T extends SlidingSyncEventLike>(
+  events: readonly T[],
+  userId: string
+): T | undefined => {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event && isSelfMemberEvent(event, userId)) return event;
+  }
+  return undefined;
+};
+
+const membershipOf = (event: SlidingSyncEventLike | undefined): string | undefined => {
+  const content = event?.content;
+  return content && typeof content === 'object'
+    ? ((content as { membership?: unknown }).membership as string | undefined)
+    : undefined;
+};
+
+const asString = (value: unknown): string | undefined =>
+  typeof value === 'string' ? value : undefined;
+
+// "~" is the SDK's local-echo event id prefix (see MatrixClient.sendEvent).
+const buildSelfJoinEvent = (
+  roomId: string,
+  userId: string,
+  previousContent: unknown
+): IStateEvent & { room_id: string } => {
+  // Only the profile carries over; is_direct and third_party_invite are invite-only.
+  const previous = (previousContent ?? {}) as { displayname?: unknown; avatar_url?: unknown };
+
+  return {
+    type: EventType.RoomMember,
+    state_key: userId,
+    room_id: roomId,
+    sender: userId,
+    event_id: `~sable-self-join:${roomId}`,
+    origin_server_ts: Date.now(),
+    content: {
+      membership: KnownMembership.Join,
+      displayname: asString(previous.displayname),
+      avatar_url: asString(previous.avatar_url),
+    },
+  };
 };
 
 const buildListRequiredState = (): MSC3575RoomSubscription['required_state'] => [
@@ -237,12 +303,11 @@ export class SlidingSyncManager {
   private readonly activeRoomSubscriptions = new Set<string>();
 
   /**
-   * Room IDs joined locally via reconcileRoomMembership(Join) but not yet
-   * confirmed as joined by the server's sliding-sync response. The SDK can
-   * revert these to "invite" when the server still sends invite_state after a
-   * join; we re-assert join after each sync until the server catches up.
+   * Rooms joined locally via reconcileRoomMembership(Join) but not yet confirmed
+   * joined by a sliding-sync response. The SDK reverts these to "invite" when the
+   * server still sends invite_state after a join, so we re-assert join each sync.
    */
-  private readonly optimisticallyJoinedRoomIds = new Set<string>();
+  private readonly optimisticallyJoinedRoomIds = new Map<string, OptimisticJoin>();
 
   private readonly sidebarRoomSubscriptions = new Set<string>();
 
@@ -341,6 +406,14 @@ export class SlidingSyncManager {
 
   private readonly roomDataAwaitingSyncCompletion = new Set<string>();
 
+  /**
+   * Sync cycle each room subscription was requested in. A quiet room can be
+   * subscribed to without the server ever sending a RoomData envelope for it,
+   * so the loading flag needs a deadline of its own rather than waiting on
+   * pendingRoomDataListeners, which would never fire.
+   */
+  private readonly roomSubscriptionLoadingSince = new Map<string, number>();
+
   /** Wall-clock time recorded in attach() — used to compute true initial-sync latency. */
   private attachTime: number | null = null;
 
@@ -431,6 +504,16 @@ export class SlidingSyncManager {
       this.roomDataAwaitingSyncCompletion.clear();
 
       this.syncCount += 1;
+
+      // A subscription that saw no room data is settled once a full cycle has
+      // completed after the one it was requested in: the server had nothing to
+      // send for it. The extra cycle is the grace period for the request that
+      // actually carried the subscription.
+      this.roomSubscriptionLoadingSince.forEach((since, roomId) => {
+        if (this.syncCount < since + 2) return;
+        this.roomSubscriptionLoadingSince.delete(roomId);
+        this.notifyRoomSubscriptionStatus(roomId, false);
+      });
       Sentry.metrics.count('sable.sync.cycle', 1, {
         attributes: { transport: 'sliding' },
       });
@@ -606,6 +689,7 @@ export class SlidingSyncManager {
     });
 
     this.pendingRoomDataListeners.clear();
+    this.roomSubscriptionLoadingSince.clear();
     this.optimisticallyJoinedRoomIds.clear();
     this.responseProcessing = false;
     this.responseSettledListeners.clear();
@@ -643,17 +727,12 @@ export class SlidingSyncManager {
   private recordServerMembershipRooms(response: MSC3575SlidingSyncResponse): void {
     const userId = this.mx.getSafeUserId();
     Object.entries(response.rooms ?? {}).forEach(([roomId, roomData]) => {
-      const membershipEvent = [
-        ...(roomData.required_state ?? []),
-        ...(roomData.invite_state ?? []),
-      ].find(
-        (event) => event.type === (EventType.RoomMember as string) && event.state_key === userId
+      const membership = membershipOf(
+        findSelfMemberEvent(
+          [...(roomData.required_state ?? []), ...(roomData.invite_state ?? [])],
+          userId
+        )
       );
-      const content = membershipEvent?.content;
-      const membership =
-        content && typeof content === 'object'
-          ? (content as { membership?: unknown }).membership
-          : undefined;
 
       if (membership === KnownMembership.Leave || membership === KnownMembership.Ban) {
         this.serverMembershipRoomIds.delete(roomId);
@@ -691,7 +770,7 @@ export class SlidingSyncManager {
       joinedRoomIds.forEach((roomId) => {
         const room = this.mx.getRoom(roomId);
         if (room?.getMyMembership() === (KnownMembership.Invite as string)) {
-          room.updateMyMembership(KnownMembership.Join);
+          this.assertLocalJoin(room);
         }
       });
 
@@ -1014,22 +1093,157 @@ export class SlidingSyncManager {
    * after the SDK has finished processing all room data for the cycle (Complete
    * fires post-processing) and before the responseSettled microtask that drives
    * unread computation, so the app sees the corrected membership.
+   *
+   * Release is driven by sanitizeOptimisticJoinResponse, not by the SDK
+   * membership read back here: that would release the room merely because
+   * nothing in the cycle touched it, letting a later stale invite win for good.
    */
   private reassertOptimisticJoins(): void {
     if (this.optimisticallyJoinedRoomIds.size === 0) return;
-    for (const roomId of this.optimisticallyJoinedRoomIds) {
+    for (const [roomId, tracked] of this.optimisticallyJoinedRoomIds) {
       const room = this.mx.getRoom(roomId);
       if (!room) {
         this.optimisticallyJoinedRoomIds.delete(roomId);
         continue;
       }
-      if (room.getMyMembership() === (KnownMembership.Join as string)) {
-        // Server has caught up: the room is genuinely joined now. Stop tracking.
-        this.optimisticallyJoinedRoomIds.delete(roomId);
-      } else {
-        // SDK reverted to invite (or another state). Re-assert join.
-        room.updateMyMembership(KnownMembership.Join);
+      this.assertLocalJoin(room);
+
+      if (
+        !tracked.verificationRequested &&
+        this.syncCount - tracked.joinedAtSyncCount >= OPTIMISTIC_JOIN_VERIFY_AFTER_CYCLES
+      ) {
+        tracked.verificationRequested = true;
+        this.verifyOptimisticJoin(roomId);
       }
+
+      if (this.syncCount - tracked.lastSeenSyncCount >= OPTIMISTIC_JOIN_MAX_SYNC_CYCLES) {
+        debugLog.warn('sync', 'Stopped re-asserting optimistic join: room no longer reported', {
+          roomId,
+          syncCycles: OPTIMISTIC_JOIN_MAX_SYNC_CYCLES,
+        });
+        this.optimisticallyJoinedRoomIds.delete(roomId);
+      }
+    }
+  }
+
+  /**
+   * Asks the authoritative /joined_rooms who is right when the disagreement
+   * lasts. A "no" means our /join is stale (a fresh invite after a kick, or a
+   * join that never committed), so stop overriding the server. Errors keep the
+   * optimistic join: an unreachable server must not strand the user on an invite.
+   */
+  private verifyOptimisticJoin(roomId: string): void {
+    void this.mx
+      .getJoinedRooms()
+      .then((response) => {
+        if (this.disposed || !this.optimisticallyJoinedRoomIds.has(roomId)) return;
+        if (response.joined_rooms.includes(roomId)) return;
+
+        this.optimisticallyJoinedRoomIds.delete(roomId);
+        debugLog.warn('sync', 'Stopped re-asserting optimistic join: server reports not joined', {
+          roomId,
+        });
+        Sentry.addBreadcrumb({
+          category: 'sync.sliding',
+          message: 'Stopped re-asserting optimistic join: server reports not joined',
+          level: 'warning',
+        });
+      })
+      .catch((error: unknown) => {
+        debugLog.warn('sync', 'Could not verify optimistic join; still assuming joined', {
+          roomId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  /**
+   * Room.recalculate() derives selfMembership from the m.room.member event, so
+   * fixing only one of the two lets the next recalculate() undo it. The crypto
+   * layer reads membership from that event too.
+   */
+  private assertLocalJoin(room: Room): void {
+    if (room.getMyMembership() !== (KnownMembership.Join as string)) {
+      room.updateMyMembership(KnownMembership.Join);
+    }
+    this.repairSelfJoinMemberEvent(room);
+  }
+
+  private repairSelfJoinMemberEvent(room: Room): void {
+    const myUserId = this.mx.getUserId();
+    if (!myUserId) return;
+    const roomState = room.getLiveTimeline().getState(EventTimeline.FORWARDS);
+    if (!roomState) return;
+    const existing = roomState.getStateEvents(EventType.RoomMember, myUserId)?.getContent();
+    if (existing?.membership === KnownMembership.Join) return;
+
+    roomState.setStateEvents([
+      new MatrixEvent(buildSelfJoinEvent(room.roomId, myUserId, existing)),
+    ]);
+  }
+
+  /**
+   * Strips the stale stripped invite some servers keep sending for a room we
+   * already joined, before the SDK derives an invite from it.
+   *
+   * Which field reports the membership varies: Synapse omits required_state for
+   * invites, and Continuwuity does not substitute the "$ME" state key at all, so
+   * our own member event never appears in its required_state.
+   */
+  public sanitizeOptimisticJoinResponse(resp: MSC3575SlidingSyncResponse | null): void {
+    if (!resp?.rooms || this.optimisticallyJoinedRoomIds.size === 0) return;
+    const myUserId = this.mx.getUserId();
+    if (!myUserId) return;
+
+    for (const [roomId, tracked] of this.optimisticallyJoinedRoomIds) {
+      const roomData = resp.rooms[roomId];
+      if (!roomData) continue;
+
+      tracked.lastSeenSyncCount = this.syncCount;
+
+      const stateMember = findSelfMemberEvent(roomData.required_state ?? [], myUserId);
+      const reported =
+        membershipOf(stateMember) ??
+        membershipOf(findSelfMemberEvent(roomData.timeline ?? [], myUserId));
+      const staleInvite = findSelfMemberEvent(roomData.invite_state ?? [], myUserId);
+
+      if (
+        reported !== undefined &&
+        reported !== (KnownMembership.Invite as string) &&
+        reported !== (KnownMembership.Knock as string)
+      ) {
+        // Our join, or something newer we must not suppress.
+        this.optimisticallyJoinedRoomIds.delete(roomId);
+        // The SDK ignores required_state whenever invite_state is present.
+        if (reported === (KnownMembership.Join as string)) delete roomData.invite_state;
+        continue;
+      }
+
+      if (!roomData.invite_state) {
+        // The server stopped treating us as invited.
+        this.optimisticallyJoinedRoomIds.delete(roomId);
+        continue;
+      }
+
+      // Replaced, not removed: the sidebar cache only clears its persisted
+      // invite once required_state says join.
+      delete roomData.invite_state;
+      roomData.required_state = [
+        ...(roomData.required_state ?? []).filter((event) => !isSelfMemberEvent(event, myUserId)),
+        buildSelfJoinEvent(roomId, myUserId, staleInvite?.content ?? stateMember?.content),
+      ];
+
+      debugLog.info('sync', 'Replaced stale invite data for optimistically joined room', {
+        roomId,
+        reported,
+        syncCycle: this.syncCount,
+      });
+      Sentry.addBreadcrumb({
+        category: 'sync.sliding',
+        message: 'Replaced stale invite data for optimistically joined room',
+        level: 'info',
+        data: { reported, syncCycle: this.syncCount },
+      });
     }
   }
 
@@ -1037,12 +1251,21 @@ export class SlidingSyncManager {
     roomId: string,
     membership: KnownMembership.Join | KnownMembership.Leave
   ): void {
-    this.mx.getRoom(roomId)?.updateMyMembership(membership);
+    const room = this.mx.getRoom(roomId);
+    room?.updateMyMembership(membership);
 
     if (membership === KnownMembership.Join) {
+      if (room) this.repairSelfJoinMemberEvent(room);
+      // The cache clears its own invite only once required_state says join, which
+      // a server without "$ME" substitution never sends, so drop it here.
+      this.sidebarCache.clearInviteStateForRooms([roomId]);
       // Track the room so we can re-assert join if the SDK reverts it while the
       // server's sliding-sync proxy still reports the room in the invite list.
-      this.optimisticallyJoinedRoomIds.add(roomId);
+      this.optimisticallyJoinedRoomIds.set(roomId, {
+        joinedAtSyncCount: this.syncCount,
+        lastSeenSyncCount: this.syncCount,
+        verificationRequested: false,
+      });
       // Subscribe so the next sync pulls real joined member state into the
       // room's current state, letting recalculate() see "join" not "invite".
       this.subscribeToRoom(roomId);
@@ -1169,7 +1392,8 @@ export class SlidingSyncManager {
 
   public isRoomSubscriptionLoading(roomId: string): boolean {
     return (
-      this.pendingRoomDataListeners.has(roomId) || this.roomDataAwaitingSyncCompletion.has(roomId)
+      this.roomSubscriptionLoadingSince.has(roomId) ||
+      this.roomDataAwaitingSyncCompletion.has(roomId)
     );
   }
 
@@ -1229,9 +1453,11 @@ export class SlidingSyncManager {
       });
       this.slidingSync.removeListener(SlidingSyncEvent.RoomData, onFirstRoomData);
       this.pendingRoomDataListeners.delete(roomId);
+      this.roomSubscriptionLoadingSince.delete(roomId);
       this.roomDataAwaitingSyncCompletion.add(roomId);
     };
     this.pendingRoomDataListeners.set(roomId, onFirstRoomData);
+    this.roomSubscriptionLoadingSince.set(roomId, this.syncCount);
     this.slidingSync.on(SlidingSyncEvent.RoomData, onFirstRoomData);
     this.notifyRoomSubscriptionStatus(roomId, true);
     return true;
@@ -1244,6 +1470,7 @@ export class SlidingSyncManager {
       this.slidingSync.removeListener(SlidingSyncEvent.RoomData, pendingListener);
       this.pendingRoomDataListeners.delete(roomId);
     }
+    this.roomSubscriptionLoadingSince.delete(roomId);
     this.roomDataAwaitingSyncCompletion.delete(roomId);
     this.notifyRoomSubscriptionStatus(roomId, false);
     this.activeRoomSubscriptions.delete(roomId);

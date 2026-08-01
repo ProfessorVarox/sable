@@ -33,6 +33,11 @@ describe('expandBlockBoundariesAfterSingleNewlines', () => {
   it('still expands before the first top-level list item after prose', () => {
     expect(expandBlockBoundariesAfterSingleNewlines('intro\n- item')).toBe('intro\n\n- item');
   });
+
+  it('does not expand block-like lines inside a fenced code block with an info string', () => {
+    const md = '```text\n# heading\n- item\n+ item\n-# subheading\n1. item\n```';
+    expect(expandBlockBoundariesAfterSingleNewlines(md)).toBe(md);
+  });
 });
 
 describe('consecutive blockquotes', () => {

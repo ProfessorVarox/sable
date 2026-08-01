@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Fix encrypted images failing to load on Android, and improve media loading on slow connections.
+Improve encrypted-media loading and error handling on slow connections.

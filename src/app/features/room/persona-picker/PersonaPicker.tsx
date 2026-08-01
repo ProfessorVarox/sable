@@ -37,6 +37,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import * as css from './PersonaPicker.css.ts';
 import { InfoCard } from '$components/info-card/InfoCard.tsx';
 import { InfoIcon } from '@phosphor-icons/react';
+import { ThemeKind, useActiveTheme } from '$hooks/useTheme.ts';
 
 const pillStyles = {
   cursor: 'pointer',
@@ -53,6 +54,7 @@ type PersonaPickerProps = {
   roomId: string;
   suppressEditorRefocus: () => void;
   onTabChange: (tab: PersonaPickerTab) => void;
+  latchedPersona: PerMessageProfile | undefined;
 };
 
 export function PersonaPicker({
@@ -61,19 +63,29 @@ export function PersonaPicker({
   roomId,
   suppressEditorRefocus,
   onTabChange,
+  latchedPersona,
 }: PersonaPickerProps) {
   const useAuthentication = useMediaAuthentication();
+  const activeTheme = useActiveTheme();
   const [AddPersonaMenuAnchor, setAddPersonaMenuAnchor] = useState<RectCords>();
   const [profiles, setProfiles] = useState<PerMessageProfile[] | undefined>(undefined);
   const [selectedGlobalPersona, setSelectedGlobalPersona] = useState<PerMessageProfile | null>(
     null
   );
-  const [selectedRoomPersona, setSelectedRoomPersona] = useState<PerMessageProfile | null>(null);
+  const [selectedRoomPersona, setSelectedRoomPersona] = useState<PerMessageProfile | null>(
+    latchedPersona ?? null
+  );
   const isPickerMenuItemSelected = (persona: PerMessageProfile) => {
     const selectedPersona =
       tab === PersonaPickerTab.Global ? selectedGlobalPersona : selectedRoomPersona;
     return persona.id === selectedPersona?.id ? true : undefined;
   };
+
+  const nameColor = useCallback(
+    (persona: PerMessageProfile) =>
+      activeTheme.kind === ThemeKind.Dark ? persona.colors?.on_dark : persona.colors?.on_light,
+    [activeTheme]
+  );
 
   const defactoPersona = () => selectedRoomPersona ?? selectedGlobalPersona;
 
@@ -94,13 +106,13 @@ export function PersonaPicker({
   useEffect(() => {
     const syncProfile = async () => {
       const syncedRoomProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
-      setSelectedRoomPersona(syncedRoomProfile ?? null);
+      if (!selectedRoomPersona) setSelectedRoomPersona(syncedRoomProfile ?? null);
 
       const syncedGlobalProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
       setSelectedGlobalPersona(syncedGlobalProfile ?? null);
     };
     syncProfile();
-  }, [mx, roomId, profiles]);
+  }, [mx, roomId, profiles, latchedPersona, selectedRoomPersona]);
 
   const fetchProfiles = async (mx_: MatrixClient) => {
     const fetchedProfiles = await getAllPerMessageProfiles(mx_);
@@ -256,6 +268,7 @@ export function PersonaPicker({
                         <UserAvatar
                           userId={profile.id}
                           src={avatarUrl(profile)}
+                          fallbackColor={profile.colors?.on_light ?? undefined}
                           renderFallback={() => (
                             <Text as="span" size="H4" aria-label="Avatar fallback">
                               {nameInitials(profile.name)}
@@ -266,7 +279,10 @@ export function PersonaPicker({
                       </Avatar>
                     }
                   >
-                    <Text truncate style={{ maxWidth: toRem(150) }}>
+                    <Text
+                      truncate
+                      style={{ color: nameColor(profile) ?? undefined, maxWidth: toRem(150) }}
+                    >
                       {profile.name}
                     </Text>
                   </MenuItem>

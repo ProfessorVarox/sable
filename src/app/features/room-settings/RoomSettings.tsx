@@ -48,10 +48,10 @@ function makeAbbreviationsComponent(isSpace: boolean) {
   return AbbreviationsWrapper;
 }
 
-function makeSwipeWrapper(onClose: () => void) {
+function makeSwipeWrapper(direction: 'left' | 'right' | 'both', onClose: () => void) {
   function SwipeWrapper(children: ReactNode) {
     return (
-      <SwipeableOverlayWrapper direction="right" onClose={onClose}>
+      <SwipeableOverlayWrapper direction={direction} onClose={onClose}>
         {children}
       </SwipeableOverlayWrapper>
     );
@@ -104,10 +104,11 @@ const sectionIdToPage: Record<RoomSectionId, RoomSettingsPage> = {
 
 type RoomSettingsProps = {
   initialPage?: RoomSettingsPage;
+  openedViaSwipe?: boolean;
   requestClose: () => void;
 };
 
-export function RoomSettings({ initialPage, requestClose }: RoomSettingsProps) {
+export function RoomSettings({ initialPage, openedViaSwipe, requestClose }: RoomSettingsProps) {
   const room = useRoom();
   const isSpace = room.isSpaceRoom();
   const mx = useMatrixClient();
@@ -142,6 +143,10 @@ export function RoomSettings({ initialPage, requestClose }: RoomSettingsProps) {
 
   const handleSwipeBack = () => {
     if (screenSize !== ScreenSize.Mobile) return;
+    if (openedViaSwipe) {
+      requestClose();
+      return;
+    }
     if (activePage !== undefined) {
       setActivePage(undefined);
       return;
@@ -212,7 +217,7 @@ export function RoomSettings({ initialPage, requestClose }: RoomSettingsProps) {
     </>
   );
 
-  const swipeWrapper = makeSwipeWrapper(handleSwipeBack);
+  const swipeWrapper = makeSwipeWrapper(openedViaSwipe ? 'both' : 'right', handleSwipeBack);
 
   return (
     <SettingsShell<RoomSectionId>

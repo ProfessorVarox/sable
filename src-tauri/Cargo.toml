@@ -127,7 +127,13 @@ tauri-plugin-sharekit = { git = "https://github.com/Choochmeque/tauri-plugin-sha
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", features = [
+  "NSError",
+  "NSFileManager",
+  "NSString",
+  "NSURL",
+  "NSUUID",
+] }
 objc2-photos = { version = "0.3.2", default-features = false, features = [
   "std",
   "PHPhotoLibrary",
@@ -144,6 +150,24 @@ tauri-plugin-fs = "2"
 objc2-avf-audio = { version = "0.3", default-features = false, features = [
   "AVAudioSession",
   "AVAudioSessionTypes",
+] }
+objc2-call-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "alloc",
+  "block2",
+  "dispatch2",
+  "CXAction",
+  "CXProvider",
+  "CXProviderConfiguration",
+  "CXCallUpdate",
+  "CXHandle",
+  "CXCall",
+  "CXCallAction",
+  "CXStartCallAction",
+  "CXEndCallAction",
+  "CXSetMutedCallAction",
+  "CXTransaction",
+  "CXCallController",
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]

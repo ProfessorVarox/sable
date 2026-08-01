@@ -5,7 +5,7 @@ import { Box, Modal, Overlay, OverlayBackdrop, OverlayCenter } from 'folds';
 import { ScreenSize, useScreenSizeOptionally } from '$hooks/useScreenSize';
 import { stopPropagation } from '$utils/keyboard';
 import { useDismissOnBack } from '$utils/androidBack';
-import { MobileSwipeDownModal } from '$components/MobileSwipeDownModal';
+import { MobileSheetFocusTrap, MobileSwipeDownModal } from '$components/MobileSwipeDownModal';
 import * as messageCss from '$features/room/message/styles.css';
 
 type FocusTrapOptions = ComponentProps<typeof FocusTrap>['focusTrapOptions'];
@@ -84,11 +84,11 @@ export function ModalOverlay({
     return (
       <MobileSwipeDownModal requestClose={requestClose}>
         {() => (
-          <FocusTrap focusTrapOptions={focusTrapOptions}>
+          <MobileSheetFocusTrap focusTrapOptions={focusTrapOptions}>
             <div role="dialog" aria-modal="true" className={messageCss.MessageOptionsSheetMenu}>
               <Box direction="Column">{children}</Box>
             </div>
-          </FocusTrap>
+          </MobileSheetFocusTrap>
         )}
       </MobileSwipeDownModal>
     );

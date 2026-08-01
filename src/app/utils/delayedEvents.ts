@@ -1,6 +1,6 @@
 import { EventType, MatrixEvent, UpdateDelayedEventAction } from '$types/matrix-sdk';
 import type {
-  DelayedEventInfo,
+  DelayedEventInfoItem,
   SendDelayedEventResponse,
   IContent,
   MatrixClient,
@@ -13,6 +13,15 @@ import type {
 interface EncryptableBackend {
   encryptEvent(event: MatrixEvent, room: Room): Promise<void>;
 }
+
+// matrix-js-sdk's own `DelayedEventInfo` type declares this array under `scheduled`, but its
+// `_unstable_getDelayedEvents` call is a raw passthrough of the server's response, and MSC4140
+// (and every homeserver implementing it) puts the array under `delayed_events`:
+// https://github.com/matrix-org/matrix-spec-proposals/blob/main/proposals/4140-delayed-events-futures.md
+export type DelayedEventsResponse = {
+  delayed_events: DelayedEventInfoItem[];
+  next_batch?: string;
+};
 
 export async function supportsDelayedEvents(mx: MatrixClient): Promise<boolean> {
   try {
@@ -87,8 +96,8 @@ export async function sendDelayedMessageE2EE(
   );
 }
 
-export async function getDelayedEvents(mx: MatrixClient): Promise<DelayedEventInfo> {
-  return mx._unstable_getDelayedEvents();
+export async function getDelayedEvents(mx: MatrixClient): Promise<DelayedEventsResponse> {
+  return mx._unstable_getDelayedEvents() as unknown as Promise<DelayedEventsResponse>;
 }
 
 export async function cancelDelayedEvent(mx: MatrixClient, delayId: string): Promise<void> {

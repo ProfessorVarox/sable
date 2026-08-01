@@ -7,6 +7,7 @@ import { Box, Switch, Text } from 'folds';
 export function PKCompatSettings() {
   const [usePKCompat, setUsePKCompat] = useSetting(settingsAtom, 'pkCompat');
   const [usePmpProxying, setUsePmpProxying] = useSetting(settingsAtom, 'pmpProxying');
+  const [usePmpLatching, setUsePmpLatching] = useSetting(settingsAtom, 'pmpLatching');
 
   return (
     <Box direction="Column" gap="100">
@@ -50,6 +51,30 @@ export function PKCompatSettings() {
                 usePmpProxying
                   ? 'disable checking typed messages for shorthands'
                   : 'enable checking typed messages for shorthands'
+              }
+            />
+          }
+        />
+      </SequenceCard>
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="100"
+      >
+        <SettingTile
+          focusId="enable-pk-latching"
+          title="Enable Shorthand Latching"
+          description="If enabled, you change a room's persona when you use a shorthand."
+          after={
+            <Switch
+              variant="Primary"
+              value={usePmpLatching}
+              onChange={setUsePmpLatching}
+              title={
+                usePmpLatching
+                  ? 'disable latching when using a shorthand'
+                  : 'enable latching when using a shorthand'
               }
             />
           }

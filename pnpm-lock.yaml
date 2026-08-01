@@ -157,9 +157,6 @@ importers:
       folds:
         specifier: ^2.6.2
         version: 2.6.2(@vanilla-extract/css@1.21.1)(@vanilla-extract/recipes@0.5.7(@vanilla-extract/css@1.21.1))(classnames@2.5.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      framer-motion:
-        specifier: ^12.42.2
-        version: 12.42.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       html-dom-parser:
         specifier: ^8.0.0
         version: 8.0.0
@@ -269,6 +266,9 @@ importers:
       '@esbuild-plugins/node-globals-polyfill':
         specifier: ^0.2.3
         version: 0.2.3(esbuild@0.28.1)
+      '@faker-js/faker':
+        specifier: ^10.5.0
+        version: 10.5.0
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
@@ -279,8 +279,8 @@ importers:
         specifier: ^6.2.2
         version: 6.2.2(rollup@4.62.0)
       '@sableclient/sable-call-embedded':
-        specifier: 1.1.7
-        version: 1.1.7
+        specifier: 1.1.8
+        version: 1.1.8
       '@sentry/vite-plugin':
         specifier: ^5.3.0
         version: 5.3.0(rollup@4.62.0)
@@ -1400,6 +1400,10 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@faker-js/faker@10.5.0':
+    resolution: {integrity: sha512-bsxD8WLS5lIj7aaoCx1YJkktqYj5vlBUE6HWzu2Q51ksrGJ0H737ECCKlFU7Yf8Br45z9t99frBp/J7kzbMPAg==}
+    engines: {node: ^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0, npm: '>=10'}
 
   '@fontsource-variable/nunito@5.2.7':
     resolution: {integrity: sha512-2N8QhatkyKgSUbAGZO2FYLioxA32+RyI1EplVLawbpkGjUeui9Qg9VMrpkCaik1ydjFjfLV+kzQ0cGEsMrMenQ==}
@@ -2615,8 +2619,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@sableclient/sable-call-embedded@1.1.7':
-    resolution: {integrity: sha512-I2GSgGSUjY7ytsurTQ7JfBAsO8ZiytniknbNVzJfbN6MQjr69YDmj/UHtB2QUqwPqUmxHVxhtqVTiUgFx0k8mA==}
+  '@sableclient/sable-call-embedded@1.1.8':
+    resolution: {integrity: sha512-+95vxaqTxh5gIrIwMX+FWH4n+K82rv/hlVIO/KIhIl2udJ2+r/GESiAElnTXa1bom1+FWrdekNvkCEEuh7m2Jw==}
 
   '@sableclient/twemoji-font@1.0.4':
     resolution: {integrity: sha512-LzvQB/VZtv5KEq1VYq2azr7v7cYT8oklOVRGkAN2RNwa3sF0XcnqM3lBHSYRFXQleGLSUgs3gA0slbwkD2+sJw==}
@@ -3953,20 +3957,6 @@ packages:
     engines: {node: '>=18.3.0'}
     hasBin: true
 
-  framer-motion@12.42.2:
-    resolution: {integrity: sha512-5XY9luDiu0oHfHBjpDthFMh0ES+122w6p/papSJBweMkO8Sn+PW2QaEgRblQBpWFnuvZS5qvarpt/hO2pjGmnw==}
-    peerDependencies:
-      '@emotion/is-prop-valid': '*'
-      react: ^18.0.0 || ^19.0.0
-      react-dom: ^18.0.0 || ^19.0.0
-    peerDependenciesMeta:
-      '@emotion/is-prop-valid':
-        optional: true
-      react:
-        optional: true
-      react-dom:
-        optional: true
-
   fs-constants@1.0.0:
     resolution: {integrity: sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow==}
 
@@ -4628,12 +4618,6 @@ packages:
 
   modern-ahocorasick@1.1.0:
     resolution: {integrity: sha512-sEKPVl2rM+MNVkGQt3ChdmD8YsigmXdn5NifZn6jiwn9LRJpWm8F3guhaqrJT/JOat6pwpbXEk6kv+b9DMIjsQ==}
-
-  motion-dom@12.42.2:
-    resolution: {integrity: sha512-5gIMWLp/PycBtJRJWRgjxke5n8dlvkSn2DrYW+tr3XcqAZY1xZh6BJyooJXCM8wdfM7wfMjkBJNLge1CKPUIRA==}
-
-  motion-utils@12.39.0:
-    resolution: {integrity: sha512-8nadJAJjTtqRkmRF36FoJTrywK9nnFmnPwnSMyxaOCU7GDjN9RTMJIxx9De8ErM+vpPhMccr/6fo5WciyQLnMQ==}
 
   mrmime@2.0.1:
     resolution: {integrity: sha512-Y3wQdFg2Va6etvQ5I82yUhGdsKrcYox6p7FfL1LbK2J4V01F9TGlepTIhnK24t7koZibmg82KGglhA1XK5IsLQ==}
@@ -6929,6 +6913,8 @@ snapshots:
     optionalDependencies:
       '@noble/hashes': 2.2.0
 
+  '@faker-js/faker@10.5.0': {}
+
   '@fontsource-variable/nunito@5.2.7': {}
 
   '@fontsource/space-mono@5.2.9': {}
@@ -7705,7 +7691,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.62.0':
     optional: true
 
-  '@sableclient/sable-call-embedded@1.1.7': {}
+  '@sableclient/sable-call-embedded@1.1.8': {}
 
   '@sableclient/twemoji-font@1.0.4': {}
 
@@ -9179,15 +9165,6 @@ snapshots:
     dependencies:
       fd-package-json: 2.0.0
 
-  framer-motion@12.42.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
-    dependencies:
-      motion-dom: 12.42.2
-      motion-utils: 12.39.0
-      tslib: 2.8.1
-    optionalDependencies:
-      react: 18.3.1
-      react-dom: 18.3.1(react@18.3.1)
-
   fs-constants@1.0.0: {}
 
   fs-extra@9.1.0:
@@ -9837,12 +9814,6 @@ snapshots:
       ufo: 1.6.4
 
   modern-ahocorasick@1.1.0: {}
-
-  motion-dom@12.42.2:
-    dependencies:
-      motion-utils: 12.39.0
-
-  motion-utils@12.39.0: {}
 
   mrmime@2.0.1: {}
 

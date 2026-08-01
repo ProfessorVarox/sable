@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Keep message input focused after selecting autocomplete suggestions on mobile.
+Keep the message input focused after selecting autocomplete suggestions.

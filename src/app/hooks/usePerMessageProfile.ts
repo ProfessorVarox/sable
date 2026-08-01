@@ -3,7 +3,9 @@ import type { AccountDataCompatVersion } from '$types/matrix/accountData';
 import type { PronounSet } from '$utils/pronouns';
 import type { MatrixClient } from '$types/matrix-sdk';
 import { CustomAccountDataEvent } from '$types/matrix/accountData';
+import { MATRIX_UNSTABLE_COLORS } from '$unstable/prefixes';
 import { MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME } from '$unstable/prefixes';
+import type { ColorSet } from './useUserProfile';
 
 const ACCOUNT_DATA_PREFIX = CustomAccountDataEvent.SablePerProfileMessageProfiles;
 
@@ -31,6 +33,7 @@ export type PerMessageProfile = {
    */
   pronouns?: PronounSet[];
   compat?: AccountDataCompatVersion;
+  colors?: ColorSet;
 };
 
 /**
@@ -55,6 +58,8 @@ export type PerMessageProfileBeeperFormat = {
    * using the unstable prefix for pronouns, under which it is also stored in profiles
    */
   [MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME]?: PronounSet[];
+
+  [MATRIX_UNSTABLE_COLORS]?: ColorSet;
   has_fallback?: boolean;
 };
 
@@ -74,6 +79,7 @@ export function convertPerMessageProfileToBeeperFormat(
     displayname: profile.name,
     avatar_url: profile.avatarUrl,
     [MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME]: profile.pronouns,
+    [MATRIX_UNSTABLE_COLORS]: profile.colors,
     has_fallback,
   };
   // delete empty fields
@@ -102,6 +108,7 @@ export function convertBeeperFormatToOurPerMessageProfile(
     name: beeperProfile.displayname ?? '',
     avatarUrl: beeperProfile.avatar_url,
     pronouns: beeperProfile[MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME],
+    colors: beeperProfile[MATRIX_UNSTABLE_COLORS],
   };
 }
 

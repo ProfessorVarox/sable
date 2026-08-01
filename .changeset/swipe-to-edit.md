@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Add swipe-to-edit gesture on mobile messages.
+Add swipe-to-edit gestures to messages.

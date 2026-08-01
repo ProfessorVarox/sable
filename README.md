@@ -37,10 +37,10 @@ Sable iOS builds are distributed as unsigned IPAs through [AltStore](https://alt
 
 1. Set up [AltStore Classic](https://faq.altstore.io/altstore-classic/altserver) or [SideStore](https://docs.sidestore.io) on your device.
 2. Add the Sable source (tap a button above), or add it manually:
-   - AltStore (stable): `altstore://source?url=https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json`
-   - SideStore (stable): `sidestore://source?url=https://github.com/SableClient/Sable/releases/latest/download/altstore-source.json`
-   - AltStore (nightly): `altstore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json`
-   - SideStore (nightly): `sidestore://source?url=https://github.com/SableClient/Sable/releases/download/nightly/altstore-source.json`
+   - AltStore (stable): `altstore://source?url=https://raw.githubusercontent.com/SableClient/Sable/dev/altstore-source.json`
+   - SideStore (stable): `sidestore://source?url=https://raw.githubusercontent.com/SableClient/Sable/dev/altstore-source.json`
+   - AltStore (nightly): `altstore://source?url=https://raw.githubusercontent.com/SableClient/Sable/dev/altstore-source-nightly.json`
+   - SideStore (nightly): `sidestore://source?url=https://raw.githubusercontent.com/SableClient/Sable/dev/altstore-source-nightly.json`
 3. Install Sable from the source. The IPA is unsigned; AltStore/SideStore re-sign it with your personal development certificate at install time, so apps refresh every 7 days (the standard free-account limitation).
 
 iOS builds are produced by the `ios` job in [`tauri-build.yml`](.github/workflows/tauri-build.yml) and track the same `dev`/`v*` triggers as desktop builds.

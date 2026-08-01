@@ -3,10 +3,26 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ImageContent } from './ImageContent';
 
-const screenMocks = vi.hoisted(() => ({ isMobile: true }));
+const screenMocks = vi.hoisted(() => ({ isMobile: true, tauri: false }));
 vi.mock('$hooks/useScreenSize', () => ({
   ScreenSize: { Desktop: 'Desktop', Tablet: 'Tablet', Mobile: 'Mobile' },
   useScreenSizeOptionally: () => (screenMocks.isMobile ? 'Mobile' : 'Desktop'),
+}));
+
+vi.mock('@tauri-apps/api/core', () => ({
+  isTauri: () => screenMocks.tauri,
+  // Real convertFileSrc percent-encodes the target into the URI path.
+  convertFileSrc: (url: string, protocol: string) =>
+    `${protocol}://localhost/${encodeURIComponent(url)}`,
+}));
+
+const SABLE_MEDIA_URL =
+  'sable-media://https://hs.example/_matrix/client/v1/media/download/example.org/abc123?__sable_media_cache=3';
+vi.mock('$utils/matrix', () => ({
+  mxcUrlToHttp: () => SABLE_MEDIA_URL,
+  rewriteAuthenticatedMediaUrl: (url: string | null) => url,
+  downloadEncryptedMedia: vi.fn<() => Promise<ArrayBuffer>>(),
+  decryptFile: vi.fn<() => Promise<ArrayBuffer>>(),
 }));
 
 vi.mock('$hooks/useMatrixClient', () => ({
@@ -104,6 +120,45 @@ describe('ImageContent', () => {
       expect(messageLongPress).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('renders a distinct sable-media src on retry in Tauri', async () => {
+    screenMocks.tauri = true;
+    try {
+      const srcs: string[] = [];
+      render(
+        <ImageContent
+          url="mxc://example.org/abc123"
+          renderImage={(props) => {
+            srcs.push(props.src);
+            return <img alt="preview" src={props.src} onError={props.onError} />;
+          }}
+          renderViewer={() => <div>viewer</div>}
+        />
+      );
+
+      touchTap(screen.getByRole('button', { name: 'View' }));
+
+      const img = await screen.findByAltText('preview');
+      const initialSrc = srcs[srcs.length - 1];
+      expect(initialSrc).toBe(SABLE_MEDIA_URL);
+
+      fireEvent.error(img);
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+      await waitFor(() => {
+        const retriedSrc = srcs[srcs.length - 1] ?? '';
+        expect(retriedSrc).not.toBe(initialSrc);
+        // The decoded scheme path is the `target` Rust feeds into cache_key.
+        const schemePath = retriedSrc.replace(/^sable-media:\/\/localhost\//, '').split('?')[0]!;
+        expect(decodeURIComponent(schemePath)).toMatch(
+          /^https:\/\/hs\.example\/_matrix\/client\/v1\/media\/download\/example\.org\/abc123#__sable_media_retry=\d+$/
+        );
+        expect(retriedSrc).toContain('__sable_media_cache=3');
+      });
+    } finally {
+      screenMocks.tauri = false;
     }
   });
 

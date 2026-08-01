@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Added a modal for viewing room details on mobile.
+Added a modal for viewing room details on smaller screens.

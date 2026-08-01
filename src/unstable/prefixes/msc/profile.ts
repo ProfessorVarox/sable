@@ -20,3 +20,9 @@ export const MATRIX_STABLE_PROFILE_TIMEZONE_PROPERTY_NAME = 'm.tz';
  */
 export const MATRIX_UNSTABLE_MSC4466_FEATURE = 'computer.gingershaped.msc4466';
 export const MATRIX_UNSTABLE_MSC4466_PROPAGATE_TO = 'computer.gingershaped.msc4466.propagate_to';
+
+/**
+ *  Unstable prefix for username colors. defined in https://github.com/matrix-org/matrix-spec-proposals/pull/4522
+ */
+
+export const MATRIX_UNSTABLE_COLORS = 'eu.she-a.color';

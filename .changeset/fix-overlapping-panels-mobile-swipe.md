@@ -2,4 +2,4 @@
 default: patch
 ---
 
-Smoother mobile navigation and faster room opening.
+Make navigation smoother and room opening faster.

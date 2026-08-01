@@ -93,6 +93,18 @@ export class CallEmbed {
     );
   }
 
+  // Widget-mode discovery can't reach a transport (no access token, iframe
+  // fetch restrictions), so forward the ongoing call's own transport.
+  private static getOngoingCallLivekitServiceUrl(mx: MatrixClient, room: Room): string | undefined {
+    const session = mx.matrixRTC.getRoomSession(room);
+    const oldest = session.getOldestMembership();
+    if (!oldest) return undefined;
+    const transport = session.memberships.map((m) => m.getTransport(oldest)).find(Boolean);
+    return transport?.type === 'livekit'
+      ? (transport as { livekit_service_url?: string }).livekit_service_url
+      : undefined;
+  }
+
   static getWidget(
     mx: MatrixClient,
     room: Room,
@@ -120,8 +132,14 @@ export class CallEmbed {
       perParticipantE2EE: room.hasEncryptionStateEvent().toString(),
       lang: 'en-EN',
       theme: themeKind,
+      background: 'solid',
       header: 'none',
     });
+
+    const ongoingLivekitServiceUrl = CallEmbed.getOngoingCallLivekitServiceUrl(mx, room);
+    if (ongoingLivekitServiceUrl) {
+      params.append('livekitServiceUrl', ongoingLivekitServiceUrl);
+    }
 
     if (!room.isCallRoom() && CallEmbed.startingCall(intent)) {
       params.append('sendNotificationType', CallEmbed.dmCall(intent) ? 'ring' : 'notification');
@@ -429,6 +447,7 @@ export class CallEmbed {
     const doc = this.document;
     if (!doc) return;
 
+    doc.documentElement.style.setProperty('background', 'none', 'important');
     doc.body.style.setProperty('background', 'none', 'important');
 
     // Copy stylesheets from parent just in case
@@ -740,6 +759,7 @@ export class CallEmbed {
           font-family: ${appFontFamily} !important;
         }
       `;
+      if (doc.head.lastChild !== styleEl) doc.head.appendChild(styleEl);
     };
 
     // Sync theme classes from parent html/body
@@ -766,7 +786,12 @@ export class CallEmbed {
       attributes: true,
       attributeFilter: ['class', 'data-theme', 'style'],
     });
+    observer.observe(document.head, { childList: true, subtree: true });
     this.disposables.push(() => observer.disconnect());
+
+    const iframeHeadObserver = new MutationObserver(syncThemeClasses);
+    iframeHeadObserver.observe(doc.head, { childList: true });
+    this.disposables.push(() => iframeHeadObserver.disconnect());
   }
 
   private onEvent(ev: MatrixEvent): void {

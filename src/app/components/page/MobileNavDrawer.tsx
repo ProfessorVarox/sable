@@ -11,7 +11,7 @@ import {
 import { useAtomValue, useSetAtom } from 'jotai';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { lastVisitedRoomAtom } from '$state/room/lastRoom';
-import { useReducedMotion } from 'framer-motion';
+import { usePrefersReducedMotion } from '$hooks/usePrefersReducedMotion';
 import {
   DIRECT_PATH,
   DIRECT_ROOM_PATH,
@@ -55,7 +55,7 @@ type ActiveTouchGesture = {
 
 /** Sliding mobile drawer with one touch coordinator and a GPU-transformed panel track. */
 export function MobileNavDrawer({ nav, rail, bottomNav, children }: MobileNavDrawerProps) {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = usePrefersReducedMotion();
   const location = useLocation();
   const navigate = useNavigate();
   const setLastRoom = useSetAtom(lastVisitedRoomAtom);

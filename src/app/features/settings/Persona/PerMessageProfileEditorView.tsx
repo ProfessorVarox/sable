@@ -11,6 +11,8 @@ type PerMessageProfileEditorViewProps = {
   avatarMxcUrl?: string;
   displayName?: string;
   pronouns?: PronounSet[];
+  nameColorLightTheme?: string;
+  nameColorDarkTheme?: string;
   onChange?: (profile: { id: string; name: string; avatarUrl?: string }) => void;
   onDelete?: (profileId: string) => void;
   requestClose: () => void;
@@ -21,6 +23,8 @@ export function PerMessageProfileEditorView({
   avatarMxcUrl,
   displayName,
   pronouns = Array<PronounSet>(),
+  nameColorLightTheme,
+  nameColorDarkTheme,
   requestClose,
 }: Readonly<PerMessageProfileEditorViewProps>) {
   return (
@@ -53,6 +57,8 @@ export function PerMessageProfileEditorView({
               avatarMxcUrl={avatarMxcUrl}
               displayName={displayName}
               pronouns={pronouns}
+              nameColorLightTheme={nameColorLightTheme}
+              nameColorDarkTheme={nameColorDarkTheme}
               onDelete={requestClose}
             />
           </PageContent>

@@ -412,6 +412,10 @@ function IdentityCosmetics() {
     'renderGlobalNameColors'
   );
   const [renderRoomColors, setRenderRoomColors] = useSetting(settingsAtom, 'renderRoomColors');
+  const [renderPersonaColors, setRenderPersonaColors] = useSetting(
+    settingsAtom,
+    'renderPersonaColors'
+  );
   const [renderRoomFonts, setRenderRoomFonts] = useSetting(settingsAtom, 'renderRoomFonts');
   const [uniformIcons, setUniformIcons] = useSetting(settingsAtom, 'uniformIcons');
 
@@ -486,6 +490,13 @@ function IdentityCosmetics() {
         description="Display the username colors that can be set with /color."
         value={renderRoomColors}
         onChange={setRenderRoomColors}
+      />
+      <SettingToggle
+        title="Render Persona Username Colors"
+        focusId="render-persona-username-colors"
+        description="Display the username colors that can be set on personas."
+        value={renderPersonaColors}
+        onChange={setRenderPersonaColors}
       />
       <SettingToggle
         title="Render Space/Room Fonts"

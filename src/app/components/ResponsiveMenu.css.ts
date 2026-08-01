@@ -25,8 +25,6 @@ export const SheetContent = style({
   flexDirection: 'column',
 });
 
-export const SheetContentThemed = style({});
-
 // Targets the caller's menu element, which may be any component. Reaching it by
 // selector rather than cloneElement keeps it working when the caller does not
 // forward className. The sheet panel draws the background, radius and shadow, so
@@ -46,12 +44,4 @@ globalStyle(`${SheetContent} > *:last-child`, {
   boxShadow: 'none !important',
   paddingTop: '0 !important',
   paddingBottom: `${config.space.S400} !important`,
-});
-
-globalStyle(`${SheetContent}.${SheetContentThemed} > *:last-child`, {
-  backgroundColor: 'var(--sheet-surface-color)',
-});
-
-globalStyle(`${SheetContent}.${SheetContentThemed} > *:last-child::after`, {
-  backgroundColor: 'var(--sheet-surface-color)',
 });

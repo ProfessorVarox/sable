@@ -383,7 +383,9 @@ fn normalize_encryption_key(url: &str) -> String {
             let decoded = percent_encoding::percent_decode_str(path)
                 .decode_utf8()
                 .unwrap_or(std::borrow::Cow::Borrowed(path));
-            if let Ok(parsed) = Url::parse(&decoded) {
+            if let Ok(mut parsed) = Url::parse(&decoded) {
+                // A retry fragment is transport metadata, never part of the params key.
+                parsed.set_fragment(None);
                 return parsed.to_string();
             }
             return decoded.into_owned();
@@ -391,7 +393,10 @@ fn normalize_encryption_key(url: &str) -> String {
     }
     // Parse bare URLs too, so both sides of the map agree on one canonical form.
     Url::parse(url)
-        .map(|parsed| parsed.to_string())
+        .map(|mut parsed| {
+            parsed.set_fragment(None);
+            parsed.to_string()
+        })
         .unwrap_or_else(|_| url.to_string())
 }
 
@@ -494,7 +499,10 @@ async fn handle_request<R: Runtime>(
         return Ok(session_unavailable_response());
     };
 
-    let media_url = Url::parse(&target).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut media_url = Url::parse(&target).map_err(|_| StatusCode::BAD_REQUEST)?;
+    // A retry fragment never goes upstream and must not key encryption params, but stays
+    // in `target` below so the retry gets a fresh cache identity.
+    media_url.set_fragment(None);
     if media_url.scheme() != "http" && media_url.scheme() != "https" {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -1145,6 +1153,7 @@ fn session_unavailable_response() -> Response<Vec<u8>> {
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
         .header(header::RETRY_AFTER, "1")
+        .header(header::CACHE_CONTROL, "no-store")
         .body(Vec::new())
         .expect("failed to build 503 media response")
 }
@@ -1152,6 +1161,7 @@ fn session_unavailable_response() -> Response<Vec<u8>> {
 fn error_response(status: StatusCode) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
+        .header(header::CACHE_CONTROL, "no-store")
         .body(Vec::new())
         .expect("failed to build media error response")
 }
@@ -1834,6 +1844,55 @@ mod tests {
         assert!(!response
             .headers()
             .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
+
+    #[test]
+    fn retry_fragment_never_keys_encryption_params() {
+        let bare = "https://matrix.example.org/_matrix/client/v1/media/download/matrix.org/abc123";
+        for input in [
+            format!("{bare}#retry=1"),
+            format!(
+                "https://sable-media.localhost/{}?__sable_media_session=%40a%3Aexample.org",
+                percent_encoding::utf8_percent_encode(
+                    &format!("{bare}#retry=1"),
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ),
+        ] {
+            assert_eq!(super::normalize_encryption_key(&input), bare);
+        }
+    }
+
+    #[test]
+    fn retry_fragment_gives_a_distinct_cache_identity() {
+        let base = "https://matrix.example.org/_matrix/client/v1/media/download/matrix.org/abc123";
+        let original = cache_key("@a:example.org", base);
+        assert_ne!(
+            original,
+            cache_key("@a:example.org", &format!("{base}#retry=1"))
+        );
+        assert_ne!(
+            original,
+            cache_key("@a:example.org", &format!("{base}#retry=2"))
+        );
+        assert_eq!(
+            cache_key("@a:example.org", &format!("{base}#retry=1")),
+            cache_key("@a:example.org", &format!("{base}#retry=1"))
+        );
+    }
+
+    #[test]
+    fn error_responses_are_no_store() {
+        for response in [
+            super::error_response(StatusCode::UNAUTHORIZED),
+            super::error_response(StatusCode::FORBIDDEN),
+            super::session_unavailable_response(),
+        ] {
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL).unwrap(),
+                "no-store"
+            );
+        }
     }
 
     #[test]

@@ -5,15 +5,11 @@ import { useMatrixClient } from './useMatrixClient';
 import { useIsInactivePanel } from './useRoom';
 import { useTimelineScrolling } from './useTimelineScrollActivity';
 
-/**
- * Under sliding sync, m.room.member events only arrive for senders in the
- * lazy-loaded sync window. Fetch the member on demand and bump local state so
- * the caller re-reads room member state (avatar, display name) once hydrated.
- */
 export const useRoomMemberHydration = (
   room: Room,
   userId: string,
-  hasTimelineMember = false
+  hasTimelineMember = false,
+  profileDisplayName?: string
 ): number => {
   const mx = useMatrixClient();
   const [version, setVersion] = useState(0);
@@ -21,22 +17,32 @@ export const useRoomMemberHydration = (
   const timelineScrolling = useTimelineScrolling();
 
   useEffect(() => {
-    if (
-      isInactivePanel ||
-      timelineScrolling ||
-      hasTimelineMember ||
-      !userId.startsWith('@') ||
-      room.getMember(userId)
-    )
-      return undefined;
-    let disposed = false;
-    void hydrateRoomMember(mx, room.roomId, userId).then(() => {
-      if (!disposed && room.getMember(userId)) setVersion((v) => v + 1);
-    });
-    return () => {
-      disposed = true;
-    };
-  }, [mx, room, userId, hasTimelineMember, isInactivePanel, timelineScrolling]);
+    if (isInactivePanel || timelineScrolling || !userId.startsWith('@')) return undefined;
+
+    const member = room.getMember(userId);
+
+    if (!member && !hasTimelineMember) {
+      let disposed = false;
+      void hydrateRoomMember(mx, room.roomId, userId).then(() => {
+        if (!disposed && room.getMember(userId)) setVersion((v) => v + 1);
+      });
+      return () => {
+        disposed = true;
+      };
+    }
+
+    if (member && profileDisplayName && profileDisplayName !== member.rawDisplayName) {
+      let disposed = false;
+      void hydrateRoomMember(mx, room.roomId, userId, true).then(() => {
+        if (!disposed && room.getMember(userId)) setVersion((v) => v + 1);
+      });
+      return () => {
+        disposed = true;
+      };
+    }
+
+    return undefined;
+  }, [mx, room, userId, hasTimelineMember, isInactivePanel, timelineScrolling, profileDisplayName]);
 
   return version;
 };

@@ -1,13 +1,26 @@
+import { EventEmitter } from 'events';
 import { forwardRef, useImperativeHandle, type ReactNode } from 'react';
 import { act, render } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { Editor } from 'slate';
 import type { Room } from '$types/matrix-sdk';
+import { RoomEvent } from '$types/matrix-sdk';
 import type { ProcessedEvent } from '$hooks/timeline/useProcessedTimeline';
 import type * as DomUtils from '$utils/dom';
 import { RoomTimeline } from './RoomTimeline';
 
-const { vListHandle, timelineSync, setUnreadTimelineMock } = vi.hoisted(() => ({
+const {
+  vListHandle,
+  timelineSync,
+  setUnreadTimelineMock,
+  getRoomUnreadInfoMock,
+  rendererCtxPermissions,
+  rendererCtxSettings,
+  processedTimelineOptions,
+  windowFocused,
+  rowItemIndex,
+  rowRenders,
+} = vi.hoisted(() => ({
   vListHandle: {
     scrollSize: 1000,
     scrollOffset: 0,
@@ -24,13 +37,24 @@ const { vListHandle, timelineSync, setUnreadTimelineMock } = vi.hoisted(() => ({
     backwardStatus: 'idle',
     forwardStatus: 'idle',
     canPaginateBack: false,
-    focusItem: undefined,
+    focusItem: undefined as { index: number; scrollTo: boolean; highlight: boolean } | undefined,
     setFocusItem: vi.fn<() => void>(),
     setTimeline: vi.fn<() => void>(),
     loadEventTimeline: vi.fn<() => void>(),
     handleTimelinePagination: vi.fn<() => void>(),
   },
   setUnreadTimelineMock: vi.fn<() => void>(),
+  getRoomUnreadInfoMock: vi
+    .fn<() => { readUptoEventId: string; inLiveTimeline: boolean; scrollTo: boolean } | undefined>()
+    .mockReturnValue(undefined),
+  rendererCtxPermissions: { canRedact: false },
+  rendererCtxSettings: { hideReads: false },
+  processedTimelineOptions: {
+    current: undefined as Record<string, unknown> | undefined,
+  },
+  windowFocused: { current: false },
+  rowItemIndex: { current: 0 },
+  rowRenders: { count: 0 },
 }));
 
 let lastOnScroll: ((offset: number) => void) | undefined;
@@ -138,43 +162,66 @@ vi.mock('$hooks/timeline/useProcessedTimeline', async (importOriginal) => {
   } as unknown as ProcessedEvent;
   return {
     ...actual,
-    useProcessedTimeline: () => [fakeEvent],
+    useProcessedTimeline: (options: Record<string, unknown>) => {
+      processedTimelineOptions.current = options;
+      // Same object every call so the row memo can compare eventData by identity.
+      fakeEvent.itemIndex = rowItemIndex.current;
+      return (options.items as number[]).length === 0 ? [] : [fakeEvent];
+    },
   };
 });
 
-vi.mock('$hooks/timeline/useTimelineEventRenderer', () => ({
-  useTimelineEventRenderer: () => () => null,
-}));
+vi.mock('$hooks/timeline/useTimelineEventRenderer', () => {
+  // Stable identity like useMatrixEventRenderer's ref dispatch: the row memo,
+  // not this callback, is what has to notice a change.
+  const renderMatrixEvent = () => {
+    rowRenders.count += 1;
+    return `canRedact:${rendererCtxPermissions.canRedact} hideReads:${rendererCtxSettings.hideReads}`;
+  };
+  return {
+    useTimelineEventRenderer: () => renderMatrixEvent,
+  };
+});
 
-vi.mock('$hooks/timeline/useTimelineRendererContext', () => ({
-  useTimelineRendererContext: () => ({
-    settings: {
-      hiddenEvents: {},
-      messageLayout: 0,
-      messageSpacing: '300',
-      hideReads: false,
-      hideMembershipEvents: false,
-      hideNickAvatarEvents: false,
-      hideMemberInReadOnly: false,
-    },
-    linkifyOpts: {},
-    htmlReactParserOptions: {},
-    permissions: {
-      canRedact: false,
-      canDeleteOwn: false,
-      canSendReaction: false,
-      canPinEvent: false,
-      isReadOnly: false,
-      getMemberPowerTag: vi.fn<() => void>(),
-      parseMemberEvent: vi.fn<() => void>(),
-    },
-  }),
-}));
+vi.mock('$hooks/timeline/useTimelineRendererContext', () => {
+  let settings = {
+    hiddenEvents: {},
+    messageLayout: 0,
+    messageSpacing: '300',
+    hideReads: false,
+    hideMembershipEvents: false,
+    hideNickAvatarEvents: false,
+    hideMemberInReadOnly: false,
+  };
+  // New identity only when a value changes, like the real memoized context.
+  const currentSettings = () => {
+    if (settings.hideReads !== rendererCtxSettings.hideReads) {
+      settings = { ...settings, hideReads: rendererCtxSettings.hideReads };
+    }
+    return settings;
+  };
+  return {
+    useTimelineRendererContext: () => ({
+      settings: currentSettings(),
+      linkifyOpts: {},
+      htmlReactParserOptions: {},
+      permissions: {
+        canRedact: rendererCtxPermissions.canRedact,
+        canDeleteOwn: false,
+        canSendReaction: false,
+        canPinEvent: false,
+        isReadOnly: false,
+        getMemberPowerTag: vi.fn<() => void>(),
+        parseMemberEvent: vi.fn<() => void>(),
+      },
+    }),
+  };
+});
 
 vi.mock('$components/room-intro', () => ({ RoomIntro: () => null }));
 
 vi.mock('$utils/timeline', () => ({
-  getRoomUnreadInfo: () => undefined,
+  getRoomUnreadInfo: () => getRoomUnreadInfoMock(),
   getEventTimeline: () => undefined,
   getFirstLinkedTimeline: () => undefined,
   getInitialTimeline: () => undefined,
@@ -185,7 +232,7 @@ vi.mock('$utils/notifications', () => ({ markAsRead: vi.fn<() => void>() }));
 
 vi.mock('$utils/dom', async (importOriginal) => {
   const actual = await importOriginal<typeof DomUtils>();
-  return { ...actual, isWindowFocused: () => false };
+  return { ...actual, isWindowFocused: () => windowFocused.current };
 });
 
 type ObserverEntry = { callback: ResizeObserverCallback; elements: Set<Element> };
@@ -214,10 +261,20 @@ const fireResize = (element: Element) => {
   });
 };
 
+const roomEmitter = new EventEmitter();
 const room = {
   roomId: '!room:example.org',
   getLiveTimeline: () => undefined,
+  on: roomEmitter.on.bind(roomEmitter),
+  removeListener: roomEmitter.removeListener.bind(roomEmitter),
 } as unknown as Room;
+
+const emitReceiptFor = (userId: string) =>
+  roomEmitter.emit(
+    RoomEvent.Receipt,
+    { getContent: () => ({ '$evt:example.org': { 'm.read': { [userId]: { ts: 1 } } } }) },
+    room
+  );
 
 const getContentEl = (container: HTMLElement) => {
   const contentEl = container.querySelector('[data-testid="vlist-content"]');
@@ -226,6 +283,23 @@ const getContentEl = (container: HTMLElement) => {
 };
 
 const renderTimeline = () => render(<RoomTimeline room={room} editor={{} as Editor} />);
+
+beforeEach(() => {
+  getRoomUnreadInfoMock.mockReset();
+  rendererCtxPermissions.canRedact = false;
+  rendererCtxSettings.hideReads = false;
+  processedTimelineOptions.current = undefined;
+  windowFocused.current = false;
+  rowItemIndex.current = 0;
+  rowRenders.count = 0;
+  timelineSync.eventsLength = 1;
+  timelineSync.focusItem = undefined;
+  timelineSync.canPaginateBack = false;
+  timelineSync.liveTimelineLinked = true;
+  timelineSync.backwardStatus = 'idle';
+  timelineSync.forwardStatus = 'idle';
+  (timelineSync.handleTimelinePagination as ReturnType<typeof vi.fn>).mockReset();
+});
 
 describe('RoomTimeline content ResizeObserver', () => {
   beforeEach(() => {
@@ -236,6 +310,8 @@ describe('RoomTimeline content ResizeObserver', () => {
     vListHandle.viewportSize = 600;
     vListHandle.scrollToIndex.mockReset();
     vListHandle.scrollTo.mockReset();
+    timelineSync.focusItem = undefined;
+    (timelineSync.setFocusItem as ReturnType<typeof vi.fn>).mockReset();
     globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
   });
 
@@ -275,6 +351,269 @@ describe('RoomTimeline content ResizeObserver', () => {
 
     const contentEl = getContentEl(container);
     act(() => fireResize(contentEl));
+
+    expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it('scrolls to the nearest visible row when the jump target is filtered out', async () => {
+    const { rerender } = renderTimeline();
+
+    // Let the mount-time initial scroll settle, then isolate the focus jump.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    vListHandle.scrollToIndex.mockClear();
+
+    // The mocked timeline exposes one row (itemIndex 0), so raw index 5 has no
+    // exact row to match.
+    timelineSync.focusItem = { index: 5, scrollTo: true, highlight: true };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'center' })
+    );
+
+    // The highlight is retargeted to the row we actually landed on.
+    const [setFocusItemCall] = (timelineSync.setFocusItem as ReturnType<typeof vi.fn>).mock.calls;
+    type FocusItem = NonNullable<typeof timelineSync.focusItem>;
+    const updater = setFocusItemCall?.[0] as (prev: FocusItem) => FocusItem;
+    expect(updater({ index: 5, scrollTo: true, highlight: true })).toEqual({
+      index: 0,
+      scrollTo: false,
+      highlight: true,
+    });
+  });
+});
+
+describe('remote read receipts', () => {
+  const unread = {
+    readUptoEventId: '$read:example.org',
+    inLiveTimeline: true,
+    scrollTo: false,
+  };
+
+  it('clears the marker when the room is read on another device', () => {
+    getRoomUnreadInfoMock.mockReturnValue(unread);
+    renderTimeline();
+    expect(processedTimelineOptions.current?.readUptoEventId).toBe('$read:example.org');
+
+    getRoomUnreadInfoMock.mockReturnValue(undefined);
+    act(() => {
+      emitReceiptFor('@me:example.org');
+    });
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBeUndefined();
+  });
+
+  it('ignores receipts belonging to other users', () => {
+    getRoomUnreadInfoMock.mockReturnValue(unread);
+    renderTimeline();
+
+    getRoomUnreadInfoMock.mockReturnValue(undefined);
+    act(() => {
+      emitReceiptFor('@bob:example.org');
+    });
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBe('$read:example.org');
+  });
+
+  it('keeps the marker when the room is still unread after the receipt', () => {
+    getRoomUnreadInfoMock.mockReturnValue(unread);
+    renderTimeline();
+
+    act(() => {
+      emitReceiptFor('@me:example.org');
+    });
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBe('$read:example.org');
+  });
+});
+
+describe('failed backfill on an empty timeline', () => {
+  it('surfaces the error with a working Retry instead of endless placeholders', () => {
+    timelineSync.eventsLength = 0;
+    timelineSync.canPaginateBack = true;
+    timelineSync.backwardStatus = 'error';
+
+    const { container, getByText } = renderTimeline();
+
+    expect(container.textContent).toContain('Failed to load history.');
+    expect(container.querySelector('[data-testid="vlist-content"]')?.textContent).not.toContain(
+      'placeholder'
+    );
+    const listWrapper = container.querySelector('[data-testid="vlist-scroll"]')
+      ?.parentElement as HTMLElement;
+    expect(listWrapper.style.opacity).toBe('1');
+
+    act(() => {
+      getByText('Retry').click();
+    });
+    expect(timelineSync.handleTimelinePagination).toHaveBeenCalledWith(true);
+  });
+
+  it('still shows placeholders while the first backfill is in flight', () => {
+    timelineSync.eventsLength = 0;
+    timelineSync.canPaginateBack = true;
+    timelineSync.backwardStatus = 'loading';
+
+    const { container } = renderTimeline();
+
+    expect(container.textContent).not.toContain('Failed to load history.');
+  });
+});
+
+describe('MemoizedTimelineItem', () => {
+  it('re-renders message rows when canRedact flips (power-level update)', () => {
+    const { container, rerender } = renderTimeline();
+    expect(container.textContent).toContain('canRedact:false');
+
+    rendererCtxPermissions.canRedact = true;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(container.textContent).toContain('canRedact:true');
+  });
+
+  it('re-renders message rows when a display setting flips', () => {
+    const { container, rerender } = renderTimeline();
+    expect(container.textContent).toContain('hideReads:false');
+
+    rendererCtxSettings.hideReads = true;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(container.textContent).toContain('hideReads:true');
+  });
+
+  it('does not re-render rows when nothing a row depends on changed', () => {
+    const { rerender } = renderTimeline();
+    const before = rowRenders.count;
+
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(rowRenders.count).toBe(before);
+  });
+
+  it('does not re-render for a focusItem pointing at the -1 merged-row sentinel', () => {
+    rowItemIndex.current = -1;
+    const { rerender } = renderTimeline();
+    const before = rowRenders.count;
+
+    timelineSync.focusItem = { index: -1, highlight: true, scrollTo: false };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(rowRenders.count).toBe(before);
+  });
+});
+
+describe('unread read marker (normal sync)', () => {
+  it('feeds the read marker to timeline processing and clears it on window blur', () => {
+    getRoomUnreadInfoMock.mockReturnValue({
+      readUptoEventId: '$read:example.org',
+      inLiveTimeline: true,
+      scrollTo: false,
+    });
+    windowFocused.current = true;
+    renderTimeline();
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBe('$read:example.org');
+
+    windowFocused.current = false;
+    act(() => {
+      document.dispatchEvent(new Event('focusout'));
+    });
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBeUndefined();
+  });
+});
+
+describe('unread read marker (sliding sync)', () => {
+  it('keeps the marker anchored across a limited-window timeline reset', () => {
+    getRoomUnreadInfoMock.mockReturnValue({
+      readUptoEventId: '$read:example.org',
+      inLiveTimeline: true,
+      scrollTo: false,
+    });
+    const { rerender } = renderTimeline();
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBe('$read:example.org');
+
+    timelineSync.eventsLength = 0;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    timelineSync.eventsLength = 1;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(processedTimelineOptions.current?.readUptoEventId).toBe('$read:example.org');
+  });
+});
+
+describe('scroll-edge pagination', () => {
+  it('paginates backwards near the top only while a pagination token exists', () => {
+    const { rerender } = renderTimeline();
+
+    timelineSync.canPaginateBack = true;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    act(() => lastOnScroll?.(100));
+    expect(timelineSync.handleTimelinePagination).toHaveBeenCalledWith(true);
+
+    (timelineSync.handleTimelinePagination as ReturnType<typeof vi.fn>).mockClear();
+    timelineSync.canPaginateBack = false;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    act(() => lastOnScroll?.(100));
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
+  });
+
+  it('paginates forwards near the bottom only while the live timeline is not linked', () => {
+    const { rerender } = renderTimeline();
+
+    timelineSync.liveTimelineLinked = false;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    act(() => lastOnScroll?.(0));
+    expect(timelineSync.handleTimelinePagination).toHaveBeenCalledWith(false);
+
+    (timelineSync.handleTimelinePagination as ReturnType<typeof vi.fn>).mockClear();
+    timelineSync.liveTimelineLinked = true;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    act(() => lastOnScroll?.(0));
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
+  });
+});
+
+describe('backfill scroll anchoring', () => {
+  it('re-pins to the bottom after a backfill completes if the user was at the bottom', async () => {
+    const { rerender } = renderTimeline();
+
+    // Let the mount-time initial scroll settle, then watch backfill only.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.backwardStatus = 'loading';
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    timelineSync.backwardStatus = 'idle';
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'end' })
+    );
+  });
+
+  it('does not scroll away after a backfill if the user had scrolled up', async () => {
+    const { rerender } = renderTimeline();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+
+    act(() => lastOnScroll?.(0));
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.backwardStatus = 'loading';
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+    timelineSync.backwardStatus = 'idle';
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
 
     expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
   });

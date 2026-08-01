@@ -69,6 +69,7 @@ vi.mock('$components/MobileSwipeDownModal', () => ({
       {children()}
     </div>
   ),
+  MobileSheetFocusTrap: ({ children }: any) => <div data-testid="focus-trap">{children}</div>,
 }));
 
 vi.mock('$utils/androidBack', () => ({

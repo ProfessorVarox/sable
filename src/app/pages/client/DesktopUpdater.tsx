@@ -26,7 +26,6 @@ export function DesktopUpdater() {
   const [bannerVisible, setBannerVisible] = useAtom(updateBannerVisibleAtom);
   const setLastChecked = useSetAtom(desktopUpdateLastCheckedAtom);
   const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
-  const [isDownloaded, setIsDownloaded] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -34,7 +33,6 @@ export function DesktopUpdater() {
   const [useCustomTitleBar] = useDesktopSetting('useCustomTitleBar');
   const hasUpdateRef = useRef(false);
   const runningRef = useRef(false);
-  const downloadedRef = useRef(false);
   const pendingUpdateRef = useRef<Update | null>(null);
   const installStartedRef = useRef(false);
 
@@ -49,18 +47,17 @@ export function DesktopUpdater() {
 
     let mounted = true;
 
-    if (!downloadedRef.current) {
+    if (!installStartedRef.current) {
       setPhase({ type: 'checking' });
     }
 
     async function run() {
-      if (runningRef.current || downloadedRef.current || installStartedRef.current) return;
+      if (runningRef.current || installStartedRef.current) return;
       runningRef.current = true;
       try {
         if (fakeDesktopUpdate()) {
           log.log('Fake update: simulating available update');
           setUpdateInfo({ version: '9.9.9', body: 'Fake changelog for testing.' } as Update);
-          setIsDownloaded(false);
           setPhase({ type: 'ready', version: '9.9.9' });
           setLastChecked(new Date().toISOString());
           if (!hasCustomDesktopTitlebar(useCustomTitleBar)) setBannerVisible(true);
@@ -78,7 +75,6 @@ export function DesktopUpdater() {
           closePendingUpdate(pendingUpdateRef.current);
           pendingUpdateRef.current = null;
           setUpdateInfo(null);
-          setIsDownloaded(false);
           hasUpdateRef.current = false;
           setPhase({ type: 'idle' });
           setLastChecked(new Date().toISOString());
@@ -89,7 +85,6 @@ export function DesktopUpdater() {
         pendingUpdateRef.current = update;
         log.log(`Desktop update ${update.version} available`);
         setUpdateInfo(update);
-        setIsDownloaded(false);
         setIsInstalled(false);
         setDismissed(false);
         hasUpdateRef.current = true;
@@ -150,8 +145,8 @@ export function DesktopUpdater() {
     if (!updateInfo || installStartedRef.current) return;
     installStartedRef.current = true;
     try {
-      setIsDownloading(!isDownloaded);
-      if (!isDownloaded) setPhase({ type: 'downloading', progress: 0 });
+      setIsDownloading(true);
+      setPhase({ type: 'downloading', progress: 0 });
 
       if (fakeDesktopUpdate()) {
         for (let pct = 0; pct <= 100; pct += 2) {
@@ -159,10 +154,10 @@ export function DesktopUpdater() {
           await new Promise((r) => setTimeout(r, 40));
           setPhase({ type: 'downloading', progress: pct });
         }
-      } else if (!isDownloaded) {
+      } else {
         let downloadedBytes = 0;
         let contentLength = 0;
-        await updateInfo.download((event) => {
+        await updateInfo.downloadAndInstall((event) => {
           if (event.event === 'Started') {
             contentLength = event.data.contentLength ?? 0;
           } else if (event.event === 'Progress') {
@@ -174,12 +169,9 @@ export function DesktopUpdater() {
       }
 
       setIsDownloading(false);
-      setIsDownloaded(true);
-      downloadedRef.current = true;
       setIsInstalling(true);
       setPhase({ type: 'installing' });
       if (fakeDesktopUpdate()) await new Promise((r) => setTimeout(r, 1500));
-      else await updateInfo.install();
 
       setPhase({ type: 'ready', version: updateInfo.version });
       setIsInstalling(false);
@@ -192,7 +184,7 @@ export function DesktopUpdater() {
       setIsInstalling(false);
       installStartedRef.current = false;
     }
-  }, [closePendingUpdate, isDownloaded, updateInfo, setPhase]);
+  }, [closePendingUpdate, updateInfo, setPhase]);
 
   const handleRestart = useCallback(async () => {
     try {
@@ -206,13 +198,7 @@ export function DesktopUpdater() {
   const handleDismiss = useCallback(() => {
     setDismissed(true);
     setBannerVisible(false);
-    if (!installStartedRef.current) {
-      closePendingUpdate(pendingUpdateRef.current);
-      pendingUpdateRef.current = null;
-      setUpdateInfo(null);
-      setIsDownloaded(false);
-    }
-  }, [closePendingUpdate, setBannerVisible]);
+  }, [setBannerVisible]);
 
   const bannerData = useMemo<GlobalBanner | null>(() => {
     if (!bannerVisible || !updateInfo || dismissed) return null;
@@ -248,9 +234,7 @@ export function DesktopUpdater() {
           ? 'Downloading...'
           : isInstalling
             ? 'Installing...'
-            : isDownloaded
-              ? 'Install & Update'
-              : 'Download & Install',
+            : 'Download & Install',
         variant: 'Primary',
         onClick: handleInstall,
       },
@@ -264,7 +248,6 @@ export function DesktopUpdater() {
     bannerVisible,
     updateInfo,
     dismissed,
-    isDownloaded,
     isDownloading,
     isInstalled,
     isInstalling,

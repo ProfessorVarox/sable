@@ -136,7 +136,7 @@ export function RoomView({ eventId }: { eventId?: string }) {
 
   const handleOpenMembers = useCallback(() => {
     if (screenSize === ScreenSize.Mobile) {
-      openSettings(room.roomId, space?.roomId, RoomSettingsPage.MembersPage);
+      openSettings(room.roomId, space?.roomId, RoomSettingsPage.MembersPage, { viaSwipe: true });
     }
   }, [screenSize, openSettings, room.roomId, space?.roomId]);
 

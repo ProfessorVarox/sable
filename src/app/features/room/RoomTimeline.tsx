@@ -13,7 +13,7 @@ import {
 import type { Editor } from 'slate';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import type { Room, MatrixEvent, EventTimelineSet } from '$types/matrix-sdk';
-import { Direction, EventTimeline, EventType } from '$types/matrix-sdk';
+import { Direction, EventTimeline, EventType, RoomEvent } from '$types/matrix-sdk';
 import classNames from 'classnames';
 import type { VListHandle } from 'virtua';
 import { VList } from 'virtua';
@@ -23,6 +23,7 @@ import { ArrowDown, ChatTeardropDots, Checks, chipIcon } from '$components/icons
 import { MessageBase, CompactPlaceholder, DefaultPlaceholder } from '$components/message';
 import { RoomIntro } from '$components/room-intro';
 import { useMatrixClient } from '$hooks/useMatrixClient';
+import { useMatrixEvent } from '$hooks/useMatrixEvent';
 import { useAlive } from '$hooks/useAlive';
 import { useMessageEdit } from '$hooks/useMessageEdit';
 import { useDocumentFocusChange } from '$hooks/useDocumentFocusChange';
@@ -107,11 +108,21 @@ const getDayDividerText = (ts: number) => {
 const focusItemAffectsEvent = (focusItem: unknown, eventData: ProcessedEvent | undefined) => {
   if (!focusItem || typeof focusItem !== 'object' || !eventData) return false;
   const index = 'index' in focusItem ? focusItem.index : undefined;
-  return typeof index === 'number' && index === eventData.itemIndex;
+  // itemIndex -1 marks a merged relation row, which is never a focus target.
+  return typeof index === 'number' && index >= 0 && index === eventData.itemIndex;
 };
 
 const eventIdAffectsEvent = (eventId: string | null | undefined, eventData?: ProcessedEvent) =>
   typeof eventId === 'string' && eventId === eventData?.id;
+
+const shallowEqual = (prev: Record<string, unknown>, next: Record<string, unknown>) => {
+  if (prev === next) return true;
+  if (Object.keys(prev).length !== Object.keys(next).length) return false;
+  for (const key in prev) {
+    if (prev[key] !== next[key]) return false;
+  }
+  return true;
+};
 
 const MemoizedTimelineItem = memo(
   function MemoizedTimelineItem({
@@ -134,6 +145,7 @@ const MemoizedTimelineItem = memo(
     messageLayout: MessageLayout;
     messageSpacing: MessageSpacing;
     settings: Record<string, unknown>;
+    permissions: Record<string, unknown>;
     renderMatrixEvent: ReturnType<typeof useTimelineEventRenderer>;
     focusItem: unknown;
     editId: string | undefined;
@@ -241,15 +253,9 @@ const MemoizedTimelineItem = memo(
     if (prev.messageSpacing !== next.messageSpacing) return false;
     if (prev.renderMatrixEvent !== next.renderMatrixEvent) return false;
 
-    // Shallow compare settings since it contains primitive toggles
-    const pSettings = prev.settings as Record<string, unknown>;
-    const nSettings = next.settings as Record<string, unknown>;
-    if (pSettings !== nSettings) {
-      if (Object.keys(pSettings).length !== Object.keys(nSettings).length) return false;
-      for (const key in pSettings) {
-        if (pSettings[key] !== nSettings[key]) return false;
-      }
-    }
+    // Shallow compare settings and permissions since both hold primitive toggles
+    if (!shallowEqual(prev.settings, next.settings)) return false;
+    if (!shallowEqual(prev.permissions, next.permissions)) return false;
 
     if (
       prev.focusItem !== next.focusItem &&
@@ -408,7 +414,12 @@ export function RoomTimeline({
       const v = vListRef.current;
       if (!v) return;
       const scrollTop = offset ?? v.scrollOffset;
-      const isNowAtBottom = v.scrollSize - scrollTop - v.viewportSize < 100;
+      let isNowAtBottom = v.scrollSize - scrollTop - v.viewportSize < 100;
+      // Don't arm atBottom while a focus jump is pending: the swapped-in
+      // context window transiently clamps to its bottom edge.
+      if (isNowAtBottom && !atBottomRef.current && timelineSyncRef.current.focusItem) {
+        isNowAtBottom = false;
+      }
       if (isNowAtBottom !== atBottomRef.current) setAtBottom(isNowAtBottom);
     },
     [setAtBottom]
@@ -724,10 +735,25 @@ export function RoomTimeline({
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     if (timelineSync.focusItem) {
       if (timelineSync.focusItem.scrollTo && vListRef.current) {
-        const processedIndex = getRawIndexToProcessedIndex(timelineSync.focusItem.index);
+        let processedIndex = getRawIndexToProcessedIndex(timelineSync.focusItem.index);
+        let focusRawIndex = timelineSync.focusItem.index;
+        if (processedIndex === undefined) {
+          // Jump targets with no rendered row (thread replies, hidden
+          // membership/name events): land on the nearest visible row.
+          const nearest = getProcessedRowIndexForRawTimelineIndex(
+            processedEventsRef.current,
+            timelineSync.focusItem.index
+          );
+          if (nearest) {
+            processedIndex = nearest.rowIndex;
+            focusRawIndex = nearest.focusRawIndex;
+          }
+        }
         if (processedIndex !== undefined) {
           vListRef.current.scrollToIndex(processedIndex, { align: 'center' });
-          timelineSync.setFocusItem((prev) => (prev ? { ...prev, scrollTo: false } : undefined));
+          timelineSync.setFocusItem((prev) =>
+            prev ? { ...prev, index: focusRawIndex, scrollTo: false } : undefined
+          );
         }
       }
       timeoutId = setTimeout(() => {
@@ -906,6 +932,10 @@ export function RoomTimeline({
     },
   });
 
+  // renderMatrixEvent keeps a stable identity and reads these through a ref, so
+  // the row memo has to compare them itself to notice a power-level change.
+  const rowPermissions = { canRedact, canDeleteOwn, canSendReaction, canPinEvent };
+
   const renderMatrixEvent = useTimelineEventRenderer({
     room,
     mx,
@@ -915,12 +945,7 @@ export function RoomTimeline({
     imagePackRooms,
     settings,
     state: { focusItem: timelineSync.focusItem, editId, activeReplyId, openThreadId },
-    permissions: {
-      canRedact,
-      canDeleteOwn,
-      canSendReaction,
-      canPinEvent,
-    },
+    permissions: rowPermissions,
     callbacks: {
       onUserClick: actions.handleUserClick,
       onUsernameClick: actions.handleUsernameClick,
@@ -965,6 +990,28 @@ export function RoomTimeline({
     )
   );
 
+  // Reading elsewhere clears the room list badge, so clear the in-room marker too.
+  useMatrixEvent(
+    room,
+    RoomEvent.Receipt,
+    useCallback(
+      (mEvent: MatrixEvent) => {
+        const myUserId = mx.getUserId();
+        if (!myUserId) return;
+        const content =
+          mEvent.getContent<Record<string, Record<string, Record<string, unknown>>>>();
+        const isMyReceipt = Object.values(content).some((byType) =>
+          Object.values(byType ?? {}).some((byUser) => myUserId in (byUser ?? {}))
+        );
+        // Re-anchoring on a partial remote read would move the divider mid-read.
+        if (!isMyReceipt || getRoomUnreadInfo(room)) return;
+        readUptoEventIdRef.current = undefined;
+        setUnreadInfo(undefined);
+      },
+      [mx, room]
+    )
+  );
+
   useEffect(() => {
     if (atBottomState && isWindowFocused() && timelineSync.liveTimelineLinked) tryAutoMarkAsRead();
   }, [
@@ -997,8 +1044,14 @@ export function RoomTimeline({
     [notifyScroll, syncAtBottom]
   );
 
+  // A failed backfill keeps its pagination token, so the placeholder condition
+  // would otherwise hold forever and never reach the error and its Retry.
+  const showEmptyPaginationError =
+    timelineSync.eventsLength === 0 && timelineSync.backwardStatus === 'error';
+
   const showLoadingPlaceholders =
     timelineSync.eventsLength === 0 &&
+    !showEmptyPaginationError &&
     (!isReady || timelineSync.canPaginateBack || timelineSync.backwardStatus === 'loading');
 
   let backPaginationJSX: ReactNode | undefined;
@@ -1069,11 +1122,10 @@ export function RoomTimeline({
       ? { top: `calc(${config.space.S400} + ${toRem(52)})` }
       : undefined;
 
-  const vListItemCount =
-    timelineSync.eventsLength === 0 &&
-    (!isReady || timelineSync.canPaginateBack || timelineSync.backwardStatus === 'loading')
-      ? 3
-      : timelineSync.eventsLength;
+  let vListItemCount = timelineSync.eventsLength;
+  if (showLoadingPlaceholders) vListItemCount = 3;
+  // One row so the error and its Retry have somewhere to render.
+  else if (showEmptyPaginationError) vListItemCount = 1;
   const vListIndices = useMemo(() => {
     // Keep the cache-busting timeline identity explicit for exhaustive-deps.
     void timelineSync.timeline;
@@ -1204,7 +1256,11 @@ export function RoomTimeline({
           minHeight: 0,
           overflow: 'hidden',
           position: 'relative',
-          opacity: !hideTimelineForRoomState && (isReady || showLoadingPlaceholders) ? 1 : 0,
+          opacity:
+            !hideTimelineForRoomState &&
+            (isReady || showLoadingPlaceholders || showEmptyPaginationError)
+              ? 1
+              : 0,
         }}
       >
         <TimelineScrollingProvider value={isTimelineScrolling}>
@@ -1235,6 +1291,7 @@ export function RoomTimeline({
                 messageLayout={messageLayout}
                 messageSpacing={messageSpacing}
                 settings={settings as unknown as Record<string, unknown>}
+                permissions={rowPermissions}
                 renderMatrixEvent={renderMatrixEvent}
                 focusItem={timelineSync.focusItem}
                 editId={editId}

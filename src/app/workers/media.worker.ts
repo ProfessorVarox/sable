@@ -34,7 +34,9 @@ const handleBlurHash = (req: BlurHashRequest): void => {
     }
     ctx.drawImage(bitmap, 0, 0, width, height);
     const imageData = ctx.getImageData(0, 0, width, height);
-    post({ id: req.id, hash: encode(imageData.data, width, height, 4, 4) });
+    // The canvas coerces dimensions to integers, so use imageData's real size:
+    // encoding with the requested (possibly float) size mismatches the pixels array.
+    post({ id: req.id, hash: encode(imageData.data, imageData.width, imageData.height, 4, 4) });
   } finally {
     bitmap.close();
   }

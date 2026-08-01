@@ -31,7 +31,7 @@ import {
 import { MessageEditHistoryItem } from './MessageEditHistory';
 import { MessageSourceCodeItem } from './MessageSource';
 import { MessageForwardItem } from './MessageForward';
-import { MobileSwipeDownModal } from '$components/MobileSwipeDownModal';
+import { MobileSwipeDownModal, useMobileSheetClose } from '$components/MobileSwipeDownModal';
 
 import * as css from '$features/room/message/styles.css';
 import { useAtom, useSetAtom, useStore } from 'jotai';
@@ -564,7 +564,7 @@ export type OptionMenuProps = {
 function OptionMenu({
   mEvent,
   room,
-  closeMenu,
+  closeMenu: requestClose,
   onReactionToggle,
   canSendReaction,
   relations,
@@ -580,6 +580,8 @@ function OptionMenu({
   isModal,
   isGif,
 }: OptionMenuProps) {
+  const mobileSheetClose = useMobileSheetClose();
+  const closeMenu = mobileSheetClose ?? requestClose;
   const setModal = useSetAtom(modalAtom);
   const store = useStore();
   const mx = useMatrixClient();

@@ -10,11 +10,15 @@ import {
   PencilSimple,
   X,
 } from '$components/icons/phosphor';
-import type { DelayedEventInfo, Room } from '$types/matrix-sdk';
+import type { Room } from '$types/matrix-sdk';
 import { MatrixEvent } from '$types/matrix-sdk';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import { getDelayedEvents, cancelDelayedEvent } from '$utils/delayedEvents';
+import {
+  getDelayedEvents,
+  cancelDelayedEvent,
+  type DelayedEventsResponse,
+} from '$utils/delayedEvents';
 import {
   delayedEventsSupportedAtom,
   roomIdToScheduledTimeAtomFamily,
@@ -32,7 +36,7 @@ type ScheduledMessagesListProps = {
   onEditMessage?: (body: string, formattedBody?: string) => void;
 };
 
-type ScheduledEvent = NonNullable<DelayedEventInfo['scheduled']>[number];
+type ScheduledEvent = DelayedEventsResponse['delayed_events'][number];
 
 type ScheduledMessageRowProps = {
   room: Room;
@@ -150,7 +154,7 @@ export function ScheduledMessagesList({ room, onEditMessage }: ScheduledMessages
     enabled: supported,
   });
 
-  const roomEvents = data?.scheduled?.filter(
+  const roomEvents = data?.delayed_events.filter(
     (event) =>
       event.room_id === room.roomId &&
       (event.type === 'm.room.message' || event.type === 'm.room.encrypted')

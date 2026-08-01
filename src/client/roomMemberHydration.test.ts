@@ -116,6 +116,41 @@ describe('hydrateRoomMember', () => {
   });
 });
 
+describe('hydrateRoomMember (force)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('re-fetches and injects state when force=true even if the member exists', async () => {
+    const { mx, getStateEvent, setStateEvents, getMember } = makeFakes();
+    getMember.mockReturnValue({ rawDisplayName: 'OldName' } as RoomMember);
+
+    await hydrateRoomMember(mx, ROOM_ID, USER_ID, true);
+
+    expect(getStateEvent).toHaveBeenCalledTimes(1);
+    expect(setStateEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('respects the refresh cooldown so repeated force calls do not refetch', async () => {
+    const { mx, getStateEvent, getMember } = makeFakes();
+    getMember.mockReturnValue({ rawDisplayName: 'OldName' } as RoomMember);
+
+    await hydrateRoomMember(mx, ROOM_ID, USER_ID, true);
+    await hydrateRoomMember(mx, ROOM_ID, USER_ID, true);
+
+    expect(getStateEvent).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+    await hydrateRoomMember(mx, ROOM_ID, USER_ID, true);
+
+    expect(getStateEvent).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('hydrateRoomMembers', () => {
   it('dedups user ids and filters non-user ids', async () => {
     const { mx, getStateEvent } = makeFakes();

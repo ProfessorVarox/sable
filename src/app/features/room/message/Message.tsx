@@ -131,6 +131,8 @@ export type MessageProps = {
 };
 
 import { useMenuAnchor } from '$hooks/useMenuAnchor';
+import { ThemeKind, useActiveTheme } from '$hooks/useTheme';
+import { shouldIgnoreMessageLongPress } from './messageTouch';
 
 const clamp = (str: string, len: number) => (str.length > len ? `${str.slice(0, len)}...` : str);
 
@@ -367,6 +369,8 @@ function MessageInternal(
   const messageRef = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => messageRef.current as HTMLDivElement);
   const [isVisible, setIsVisible] = useState(() => typeof IntersectionObserver === 'undefined');
+  const activeTheme = useActiveTheme();
+  const [renderPersonaColors] = useSetting(settingsAtom, 'renderPersonaColors');
 
   useEffect(() => {
     const element = messageRef.current;
@@ -450,6 +454,14 @@ function MessageInternal(
     return convertBeeperFormatToOurPerMessageProfile(pmp);
   }, [pmp]);
 
+  const pmpNameColor = useMemo(() => {
+    if (!renderPersonaColors) return undefined;
+    const pmpNameColorLight = parsedPMPContent?.colors?.on_light;
+    const pmpNameColorDark = parsedPMPContent?.colors?.on_dark;
+
+    return activeTheme.kind === ThemeKind.Dark ? pmpNameColorDark : pmpNameColorLight;
+  }, [parsedPMPContent, activeTheme, renderPersonaColors]);
+
   /**
    * boolean to indicate wheather we should indicate to the user that it is a pmp
    * We want to not show it, when the name is unset, or whitespace only
@@ -481,7 +493,7 @@ function MessageInternal(
   // Avatars
   // Prefer the room-scoped member avatar (m.room.member) over the global profile
   // avatar so per-room avatar overrides are respected in the timeline.
-  useRoomMemberHydration(room, senderId, mEvent.sender !== null);
+  useRoomMemberHydration(room, senderId, mEvent.sender !== null, profile.displayName);
   const memberAvatarMxc = mEvent.sender?.getMxcAvatarUrl() ?? getMemberAvatarMxc(room, senderId);
   const avatarUrl = useMemo(() => {
     const mxc = pmp?.avatar_url || memberAvatarMxc || profile.avatarUrl;
@@ -574,7 +586,7 @@ function MessageInternal(
             <Username
               as="button"
               style={{
-                color: usernameColor,
+                color: pmpNameColor ?? usernameColor,
                 fontFamily: usernameFont,
               }}
               data-user-id={senderId}
@@ -590,7 +602,10 @@ function MessageInternal(
               </Text>
             </Username>
             {showPronouns && (
-              <Pronouns pronouns={mergedPronouns} tagColor={usernameColor ?? 'currentColor'} />
+              <Pronouns
+                pronouns={mergedPronouns}
+                tagColor={pmpNameColor ?? usernameColor ?? 'currentColor'}
+              />
             )}
             {showPmPInfo && (
               <Box>
@@ -988,7 +1003,7 @@ function MessageInternal(
         onContextMenu={contextMenuHandler}
         onTouchStart={(evt) => {
           const target = evt.target instanceof Element ? evt.target : undefined;
-          if (target?.closest('[data-gestures="ignore"]')) {
+          if (shouldIgnoreMessageLongPress(target)) {
             menu.triggerProps.onTouchCancel();
             return;
           }

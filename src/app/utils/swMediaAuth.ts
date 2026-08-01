@@ -51,7 +51,8 @@ export function probeSWMediaAuthSupport(): Promise<boolean> {
 
   probedController = controller;
   inflightProbe = new Promise<boolean>((resolve) => {
-    const channel = new MessageChannel();
+    let channel: MessageChannel | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
     const onMessage = (ev: MessageEvent) => {
       const data = ev.data as { type?: unknown; supported?: unknown; version?: unknown };
@@ -62,55 +63,58 @@ export function probeSWMediaAuthSupport(): Promise<boolean> {
           data.version >= SW_MEDIA_AUTH_PROTOCOL_VERSION
       );
     };
-    const timeoutId = setTimeout(() => finish(false), PROBE_TIMEOUT_MS);
-
-    const finish = (supported: boolean) => {
+    const finish = (supported: boolean, shouldCache = true) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutId);
-      channel.port1.removeEventListener('message', onMessage);
-      channel.port1.close();
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      channel?.port1.removeEventListener('message', onMessage);
+      channel?.port1.close();
       // Controller may have changed mid-probe; activation resets the cache and
       // starts a fresh probe, so don't clobber that state with a stale answer.
       if (navigator.serviceWorker.controller === controller) {
-        cachedSupport = supported;
-        notify(supported);
+        if (shouldCache) {
+          cachedSupport = supported;
+          notify(supported);
+        }
       }
       resolve(supported);
     };
 
-    channel.port1.addEventListener('message', onMessage);
-    channel.port1.start();
-
     try {
+      channel = new MessageChannel();
+      timeoutId = setTimeout(() => finish(false, false), PROBE_TIMEOUT_MS);
+      channel.port1.addEventListener('message', onMessage);
+      channel.port1.start();
+
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
       controller.postMessage({ type: 'swMediaAuthProbe' }, [channel.port2]);
     } catch {
       // The controller can become redundant between reading it and posting the
       // probe. Treat that race like any other unsupported controller so callers
       // can use their authenticated blob fallback.
-      channel.port2.close();
+      channel?.port2.close();
       finish(false);
     }
-  }).finally(() => {
-    if (probedController === controller) {
-      inflightProbe = undefined;
-    }
-  });
+  })
+    .catch(() => false)
+    .finally(() => {
+      if (probedController === controller) {
+        inflightProbe = undefined;
+      }
+    });
 
   return inflightProbe;
 }
 
 if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && hasServiceWorker()) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    cachedSupport = undefined;
+    const { controller } = navigator.serviceWorker;
+    cachedSupport = controller ? undefined : false;
     inflightProbe = undefined;
     probedController = undefined;
-    if (navigator.serviceWorker.controller) {
+    notify(false);
+    if (controller) {
       void probeSWMediaAuthSupport();
-    } else {
-      cachedSupport = false;
-      notify(false);
     }
   });
 }

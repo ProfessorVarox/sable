@@ -6,6 +6,7 @@ import { getActiveMediaSession } from './mediaTransport';
 const log = createLogger('tauri-media-auth');
 
 let pendingNativeWrite: Promise<void> = Promise.resolve();
+let tauriMediaSessionListenersInstalled = false;
 
 export const updateTauriMediaSession = (
   baseUrl?: string,
@@ -41,9 +42,14 @@ const syncTauriMediaSession = (): Promise<void> => {
 export const initTauriMediaSession = (): Promise<void> => {
   if (!isTauri()) return Promise.resolve();
 
-  const initialSync = syncTauriMediaSession();
-  window.addEventListener('storage', () => {
-    void syncTauriMediaSession();
-  });
-  return initialSync;
+  if (!tauriMediaSessionListenersInstalled) {
+    const sync = () => {
+      void syncTauriMediaSession();
+    };
+    window.addEventListener('storage', sync);
+    window.addEventListener('sable-session-changed', sync);
+    tauriMediaSessionListenersInstalled = true;
+  }
+
+  return syncTauriMediaSession();
 };

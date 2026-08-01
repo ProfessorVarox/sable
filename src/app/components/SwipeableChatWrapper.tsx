@@ -1,5 +1,10 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode } from 'react';
-import { animate, motion, useMotionValue } from 'framer-motion';
+import {
+  getTranslateX,
+  NATIVE_EASE_OUT,
+  setTranslateX,
+  transitionTo,
+} from '$utils/nativeAnimation';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom, RightSwipeAction } from '$state/settings';
 import { haptic } from '$utils/haptics';
@@ -12,31 +17,65 @@ interface SwipeableChatWrapperProps {
   onReply?: () => void;
 }
 
+const SETTLE_MS = 220;
+const SETTLE_TRANSITION = `transform ${SETTLE_MS}ms ${NATIVE_EASE_OUT}`;
+
 export function SwipeableChatWrapper({
   children,
   onOpenMembers,
   onReply,
 }: SwipeableChatWrapperProps) {
   const [rightSwipeAction] = useSetting(settingsAtom, 'rightSwipeAction');
-  const x = useMotionValue(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const xRef = useRef(0);
   const gestureActiveRef = useRef(false);
+  const settleRef = useRef<{ cancel: () => void }>();
   const drawer = useMobileNavDrawer();
+
+  const setOffset = useCallback((value: number) => {
+    xRef.current = value;
+    if (contentRef.current) setTranslateX(contentRef.current, value);
+  }, []);
+
+  const cancelSettle = useCallback(() => {
+    const element = contentRef.current;
+    const liveOffset = element ? getTranslateX(element, xRef.current) : xRef.current;
+    settleRef.current?.cancel();
+    settleRef.current = undefined;
+    if (element) element.style.transition = 'none';
+    setOffset(liveOffset);
+  }, [setOffset]);
+
+  const settleToRest = useCallback(() => {
+    const element = contentRef.current;
+    if (!element) return;
+    cancelSettle();
+    settleRef.current = transitionTo(
+      element,
+      SETTLE_TRANSITION,
+      () => setOffset(0),
+      SETTLE_MS,
+      () => {
+        settleRef.current = undefined;
+      }
+    );
+  }, [cancelSettle, setOffset]);
 
   const move = useCallback(
     (distanceX: number) => {
       if (!gestureActiveRef.current) {
         gestureActiveRef.current = true;
-        x.stop();
+        cancelSettle();
       }
 
       if (!isMobileOrTablet()) return;
 
       const canSwipeLeft =
         rightSwipeAction === RightSwipeAction.Members ? !!onOpenMembers : !!onReply;
-      x.set(canSwipeLeft ? Math.max(-200, Math.min(0, distanceX)) : 0);
+      setOffset(canSwipeLeft ? Math.max(-200, Math.min(0, distanceX)) : 0);
     },
-    [onOpenMembers, onReply, rightSwipeAction, x]
+    [cancelSettle, onOpenMembers, onReply, rightSwipeAction, setOffset]
   );
 
   const finish = useCallback(
@@ -51,9 +90,9 @@ export function SwipeableChatWrapper({
       }
 
       gestureActiveRef.current = false;
-      animate(x, 0, { type: 'spring', stiffness: 400, damping: 40 });
+      settleToRest();
     },
-    [onOpenMembers, onReply, rightSwipeAction, x]
+    [onOpenMembers, onReply, rightSwipeAction, settleToRest]
   );
 
   useLayoutEffect(() => {
@@ -96,9 +135,10 @@ export function SwipeableChatWrapper({
         width: '100%',
       }}
     >
-      <motion.div
+      <div
+        ref={contentRef}
         style={{
-          x,
+          transform: 'translate3d(0, 0, 0)',
           display: 'flex',
           flexDirection: 'column',
           flexGrow: 1,
@@ -107,7 +147,7 @@ export function SwipeableChatWrapper({
         }}
       >
         {children}
-      </motion.div>
+      </div>
     </div>
   );
 }

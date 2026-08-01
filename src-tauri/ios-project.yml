@@ -92,7 +92,7 @@ targets:
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, voip]
         NSMicrophoneUsageDescription: Sable uses your microphone for calls.
         NSCameraUsageDescription: Sable uses your camera for video calls.
         UIRequiredDeviceCapabilities: [arm64, metal]
@@ -107,7 +107,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: {{apple.bundle-version-short}}
         CFBundleVersion: "{{apple.bundle-version}}"
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, voip]
         NSPhotoLibraryAddUsageDescription: Sable saves images you download to your photo library.
         # Mirrors plugins.deep-link in tauri.conf.json: the plugin only patches
         # these in when cargo reruns its build script, so a fresh `tauri ios
@@ -159,7 +159,9 @@ targets:
       - sdk: MetalKit.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
-      - sdk: UIKit.framework{{#if this.ios-frameworks}}{{~#each ios-frameworks}}
+      - sdk: UIKit.framework
+      - sdk: CallKit.framework
+      - sdk: AVFoundation.framework{{#if this.ios-frameworks}}{{~#each ios-frameworks}}
       - sdk: {{this}}.framework{{/each}}{{/if}}
       - sdk: WebKit.framework
     preBuildScripts:
