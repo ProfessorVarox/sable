@@ -21,7 +21,11 @@ import { FALLBACK_MIMETYPE, getBlobSafeMimeType } from '$utils/mimeTypes';
 import { parseGeoUri, scaleYDimension } from '$utils/common';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
-import type { PerMessageProfileBeeperFormat } from '$hooks/usePerMessageProfile';
+import {
+  stripPerMessageProfileFormattedBody,
+  stripPerMessageProfilePlainBody,
+  type PerMessageProfileBeeperFormat,
+} from '$hooks/usePerMessageProfile';
 import { Attachment, AttachmentBox, AttachmentContent, AttachmentHeader } from './attachment';
 import { FileHeader, FileDownloadButton } from './FileHeader';
 import {
@@ -217,29 +221,51 @@ export function MText({
   /**
    * For the unwrapping of per-message profile fallbacks, we look for <strong> tags with the data-mx-profile-fallback attribute
    */
-  const unwrappedPerMessageProfileMessage = useMemo(
-    () =>
-      cleanedMessage?.replace(/<strong[^>]*data-mx-profile-fallback[^>]*>(.*?):\s*<\/strong>/i, ''),
+  const hadPerMessageProfileFallback = useMemo(
+    () => cleanedMessage?.match(/<strong[^>]*data-mx-profile-fallback[^>]*>(.*?):\s*<\/strong>/i),
     [cleanedMessage]
+  );
+  // the html body, with PMP fallback removed
+  const unwrappedPmpCustomBody = useMemo(
+    () => (cleanedMessage ? stripPerMessageProfileFormattedBody(cleanedMessage) : undefined),
+    [cleanedMessage]
+  );
+  // the plain body, with PMP fallback removed
+  const unwrappedPmpBody = useMemo(
+    () =>
+      hadPerMessageProfileFallback
+        ? stripPerMessageProfilePlainBody(trimmedBody ?? '')
+        : trimmedBody,
+    [trimmedBody, hadPerMessageProfileFallback]
   );
 
   const isJumbo = useMemo(() => {
     if (!trimmedBody || trimmedBody.length >= 500) return false;
     if (
-      (unwrappedPerMessageProfileMessage ?? cleanedMessage ?? customBody)?.match(
+      (unwrappedPmpCustomBody ?? cleanedMessage ?? customBody)?.match(
         /^(<img[^>]*data-mx-emoticon[^>]*\/>){1,20}$/i
       )
     )
       return true;
-    if (!isJumboEmojiText(trimmedBody)) return false;
+    if (!isJumboEmojiText(unwrappedPmpBody)) return false;
 
-    if (trimmedBody.includes(':')) {
-      const hasImage = customBody && /<img[^>]*>/i.test(customBody);
+    // we need to strip the plainbody fallback because it contains a colon
+    if (unwrappedPmpBody.includes(':')) {
+      const newCustomBody = hadPerMessageProfileFallback ? unwrappedPmpCustomBody : customBody;
+
+      const hasImage = newCustomBody && /<img[^>]*>/i.test(newCustomBody);
       if (!hasImage) return false;
     }
 
     return true;
-  }, [unwrappedPerMessageProfileMessage, cleanedMessage, trimmedBody, customBody]);
+  }, [
+    unwrappedPmpCustomBody,
+    cleanedMessage,
+    trimmedBody,
+    customBody,
+    unwrappedPmpBody,
+    hadPerMessageProfileFallback,
+  ]);
 
   const { urls, bundleContent } = getUrlsFromContent(content, renderUrlsPreview);
 
@@ -260,7 +286,7 @@ export function MText({
         >
           {renderBody({
             body: trimmedBody,
-            customBody: unwrappedPerMessageProfileMessage,
+            customBody: unwrappedPmpCustomBody,
           })}
           {edited && <MessageEditedContent />}
         </MessageTextBody>

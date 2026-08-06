@@ -12,7 +12,13 @@ import type {
   IRoomTimelineData,
   RoomEventHandlerMap,
 } from '$types/matrix-sdk';
-import { Direction, RoomEvent, RelationType, ThreadEvent } from '$types/matrix-sdk';
+import {
+  Direction,
+  MatrixEventEvent,
+  RoomEvent,
+  RelationType,
+  ThreadEvent,
+} from '$types/matrix-sdk';
 
 import { useAlive } from '$hooks/useAlive';
 import { useMatrixEvent } from '$hooks/useMatrixEvent';
@@ -573,6 +579,33 @@ export function useTimelineSync({
   );
 
   useMatrixEvent(room, RoomEvent.LocalEchoUpdated, handleLocalEchoUpdated);
+
+  // A cached room decrypts its whole backlog, one event per task, so batching does not
+  // collapse it. One reprocess a frame instead of one per event.
+  const decryptedFrameRef = useRef<number>();
+  const handleDecrypted = useCallback(
+    (mEvent: MatrixEvent) => {
+      if (mEvent.getRoomId() !== room.roomId) return;
+      if (decryptedFrameRef.current !== undefined) return;
+      decryptedFrameRef.current = requestAnimationFrame(() => {
+        decryptedFrameRef.current = undefined;
+        if (!alive()) return;
+        setTimeline((ct) => ({ ...ct }));
+      });
+    },
+    [alive, room, setTimeline]
+  );
+
+  useEffect(
+    () => () => {
+      if (decryptedFrameRef.current !== undefined) {
+        cancelAnimationFrame(decryptedFrameRef.current);
+      }
+    },
+    []
+  );
+
+  useMatrixEvent(mx, MatrixEventEvent.Decrypted, handleDecrypted);
 
   useLiveTimelineRefresh(
     room,

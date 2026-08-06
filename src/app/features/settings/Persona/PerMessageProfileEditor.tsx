@@ -1,4 +1,5 @@
 import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
+import { nanoid } from 'nanoid';
 import { Box, Button, Text, Avatar, config, IconButton, Input, toRem, Spinner, color } from 'folds';
 import { menuIcon, Trash, X } from '$components/icons/phosphor';
 import type { MatrixClient } from '$types/matrix-sdk';
@@ -11,80 +12,66 @@ import { useObjectURL } from '$hooks/useObjectURL';
 import { createUploadAtom } from '$state/upload';
 import { UserAvatar } from '$components/user-avatar';
 import { CompactUploadCardRenderer } from '$components/upload-card';
+import type { ProfileTrigger } from '$hooks/usePerMessageProfile';
 import {
   addOrUpdatePerMessageProfile,
-  associateProxyWithProfile,
-  createProxyKey,
   deletePerMessageProfile,
-  dropProxyAssociationForPMP,
-  getAllPerMessageProfileProxies,
-  getAllProxiesForPMP,
-  getPerMessageProfileById,
-  type PerMessageProfileProxyAssociationV2,
   renamePerMessageProfile,
 } from '$hooks/usePerMessageProfile';
 import type { PronounSet } from '$utils/pronouns';
 import { parsePronounsStringToPronounsSetArray } from '$utils/pronouns';
-import { generateShortId } from '$utils/shortIdGen';
 import { SettingTile } from '$components/setting-tile';
-import { type AsyncState, AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { NameColorEditor } from '../account/NameColorEditor';
+import {
+  MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME,
+  MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME,
+  MATRIX_UNSTABLE_COLORS,
+  MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME,
+} from '$unstable/prefixes';
 
-const constructProxyString = (s: Shorthand) => {
-  return `${s.prefix ?? ''}text${s.suffix ?? ''}`;
-};
+type Shorthand = { prefix?: string; suffix?: string };
+type ShorthandRow = Shorthand & { id: string };
 
-type Shorthand = { id: string; prefix?: string; suffix?: string };
-type ShorthandRow = Shorthand & { rowId: string };
-
-type ShorthandListItemProps = Shorthand & {
+type ShorthandListItemProps = ShorthandRow & {
   onDelete: (shorthandId: string) => void;
-  onSave: (shorthandId: string, shorthand: Shorthand) => void;
-  deleteState: AsyncState<void>;
-  saveState: AsyncState<void>;
+  onChange: (shorthandId: string, shorthand: Shorthand) => void;
 };
-function ShorthandListItem({
-  id,
-  prefix,
-  suffix,
-  onDelete,
-  onSave,
-  deleteState,
-  saveState,
-}: ShorthandListItemProps) {
-  const [currentPrefix] = useState(prefix);
-  const [currentSuffix] = useState(suffix);
+function ShorthandListItem({ id, prefix, suffix, onDelete, onChange }: ShorthandListItemProps) {
   const [newPrefix, setNewPrefix] = useState(prefix);
   const [newSuffix, setNewSuffix] = useState(suffix);
 
   const [prefixWarn, setPrefixWarn] = useState(false);
   const [suffixWarn, setSuffixWarn] = useState(false);
 
-  const handlePrefixChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewPrefix(e.target.value);
-  }, []);
-  const handleSuffixChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewSuffix(e.target.value);
-  }, []);
-
-  const hasChanges = useMemo(
-    () =>
-      (newPrefix ?? '') !== (currentPrefix ?? '') || (newSuffix ?? '') !== (currentSuffix ?? ''),
-    [newPrefix, newSuffix, currentPrefix, currentSuffix]
+  const handlePrefixChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      onChange(id, {
+        prefix: e.target.value.trimStart(),
+        suffix: newSuffix?.trimEnd(),
+      });
+      setNewPrefix(e.target.value);
+    },
+    [newSuffix, id, onChange]
   );
+  const handleSuffixChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      // if you call setNewSuffix then use newSuffix you get race conditioned lol
+      onChange(id, {
+        prefix: newPrefix?.trimStart(),
+        suffix: e.target.value.trimEnd(),
+      });
+      setNewSuffix(e.target.value);
+    },
+    [newPrefix, id, onChange]
+  );
+
   const isBlank = useMemo(() => !newPrefix && !newSuffix, [newPrefix, newSuffix]);
 
   useEffect(() => {
     setPrefixWarn((newPrefix ?? '').endsWith(' '));
     setSuffixWarn((newSuffix ?? '').startsWith(' '));
   }, [newPrefix, newSuffix]);
-
-  const handleSave = () =>
-    onSave(id, {
-      id: createProxyKey(newPrefix, newSuffix),
-      prefix: newPrefix?.trimStart(),
-      suffix: newSuffix?.trimEnd(),
-    });
 
   return (
     <SequenceCard
@@ -138,27 +125,7 @@ function ShorthandListItem({
               radii="300"
               aria-label="Delete shorthand"
             >
-              {deleteState.status === AsyncStatus.Loading ? (
-                <Spinner size="100" variant="Primary" fill="Solid" />
-              ) : (
-                menuIcon(Trash)
-              )}
-            </Button>
-            <Button
-              onClick={handleSave}
-              size="300"
-              variant="Primary"
-              disabled={!hasChanges}
-              fill="Soft"
-              outlined
-              radii="300"
-              aria-label="Update shorthand"
-            >
-              {saveState.status === AsyncStatus.Loading ? (
-                <Spinner size="100" variant="Primary" fill="Solid" />
-              ) : (
-                <Text size="B300">Save</Text>
-              )}
+              {menuIcon(Trash)}
             </Button>
           </Box>
         </Box>
@@ -167,154 +134,51 @@ function ShorthandListItem({
   );
 }
 
-type ShorthandEditorProps = {
-  mx: MatrixClient;
-  profileId: string;
-};
-function ShorthandEditor({ mx, profileId }: ShorthandEditorProps) {
-  const [shorthands, setShorthands] = useState<ShorthandRow[]>();
-
-  const containsBlankShorthand = useMemo(
-    () => shorthands && shorthands.some((shorthand) => !shorthand.prefix && !shorthand.suffix),
-    [shorthands]
-  );
-
-  const handleAddShorthand = () => {
-    if (shorthands !== undefined) {
-      setShorthands([...shorthands, { id: 'blank', rowId: generateShortId(16) }]);
+function triggersToShorthandRows(trigger: ProfileTrigger): ShorthandRow[] {
+  const prefixes: ShorthandRow[] = trigger.prefix.map((str) => {
+    return { prefix: str, id: nanoid() };
+  });
+  const suffixes: ShorthandRow[] | undefined = trigger['net.f0rest.suffix']?.map((str) => {
+    return { suffix: str, id: nanoid() };
+  });
+  const circumfixes: ShorthandRow[] | undefined = trigger['net.f0rest.circumfix']?.map(
+    ({ prefix, suffix }) => {
+      return { prefix: prefix, suffix: suffix, id: nanoid() };
     }
-  };
-
-  const [deleteShorthandState, handleDeleteShorthand] = useAsyncCallback(
-    useCallback(
-      async (id: string) => {
-        if (shorthands === undefined) return;
-
-        const shorthandToDelete = shorthands.find((shorthand) => shorthand.id === id);
-        if (!shorthandToDelete) return;
-
-        const proxy = constructProxyString(shorthandToDelete);
-
-        await dropProxyAssociationForPMP(mx, proxy);
-
-        setShorthands((s) => s?.filter((shorthand) => shorthand.id !== id));
-      },
-      [mx, shorthands]
-    )
   );
 
-  const [saveShorthandState, handleSaveShorthand] = useAsyncCallback<
-    void,
-    Error,
-    [string, Shorthand]
-  >(
-    useCallback(
-      async (oldId: string, shorthand: Shorthand) => {
-        if (shorthands === undefined) return;
-
-        const shorthandAssociation = (await getAllPerMessageProfileProxies(mx)).find(
-          (association) => createProxyKey(association.prefix, association.suffix) === shorthand.id
-        );
-        const shorthandAssociatedProfile = shorthandAssociation
-          ? await getPerMessageProfileById(mx, shorthandAssociation.profileId)
-          : undefined;
-        if (shorthandAssociatedProfile) {
-          throw new Error(
-            `Shorthand is already associated with profile ${shorthandAssociatedProfile.name} (${shorthandAssociatedProfile.id})`
-          );
-        }
-
-        if (oldId !== 'blank') {
-          await dropProxyAssociationForPMP(mx, oldId);
-        }
-        await associateProxyWithProfile(mx, profileId, shorthand.prefix, shorthand.suffix, false);
-
-        setShorthands((currentShorthands) => {
-          if (currentShorthands === undefined) return currentShorthands;
-
-          const oldShorthandIdx = currentShorthands.findIndex((s) => s.id === oldId);
-          if (oldShorthandIdx < 0) return currentShorthands;
-          const oldShorthand = currentShorthands[oldShorthandIdx];
-          if (oldShorthand === undefined) return currentShorthands;
-
-          return currentShorthands.with(oldShorthandIdx, {
-            ...shorthand,
-            rowId: oldShorthand.rowId,
-          });
-        });
-      },
-      [mx, shorthands, profileId]
-    )
-  );
-
-  useEffect(() => {
-    const fetchShorthands = async () => {
-      const fetchedShorthands: PerMessageProfileProxyAssociationV2[] = await getAllProxiesForPMP(
-        mx,
-        profileId
-      );
-      const enumeratedShorthands: ShorthandRow[] = fetchedShorthands.map((v) => {
-        return { id: createProxyKey(v.prefix, v.suffix), rowId: generateShortId(16), ...v };
-      });
-      setShorthands(enumeratedShorthands);
-    };
-    fetchShorthands();
-  }, [mx, profileId]);
-
-  return (
-    <>
-      <SequenceCard
-        className={SequenceCardStyle}
-        variant="SurfaceVariant"
-        direction="Column"
-        gap="400"
-      >
-        <SettingTile
-          title="Shorthands"
-          description="Use this persona for a single message using a prefix or suffix."
-          focusId={`shorthandsInput-${profileId}`}
-        >
-          {saveShorthandState.status === AsyncStatus.Error && (
-            <Text size="T200" style={{ color: color.Critical.Main }}>
-              {saveShorthandState.error.toString()}
-            </Text>
-          )}
-          {shorthands === undefined ? (
-            <Spinner size="400" />
-          ) : (
-            shorthands.map((shorthand: ShorthandRow) => (
-              <ShorthandListItem
-                key={shorthand.rowId}
-                id={shorthand.id}
-                prefix={shorthand.prefix}
-                suffix={shorthand.suffix}
-                onDelete={handleDeleteShorthand}
-                onSave={handleSaveShorthand}
-                deleteState={deleteShorthandState}
-                saveState={saveShorthandState}
-              />
-            ))
-          )}
-          <Button
-            onClick={handleAddShorthand}
-            size="400"
-            radii="300"
-            variant="Primary"
-            disabled={containsBlankShorthand}
-            /* add aria label and title pls */
-          >
-            <Text size="B300">Add new shorthand</Text>
-          </Button>
-        </SettingTile>
-      </SequenceCard>
-    </>
-  );
+  return prefixes.concat(suffixes ?? [], circumfixes ?? []);
 }
 
+function shorthandRowsToTriggers(rows: ShorthandRow[]): ProfileTrigger {
+  const prefix: string[] = [];
+  const suffix: string[] = [];
+  const circumfix: { prefix: string; suffix: string }[] = [];
+
+  rows.forEach((row) => {
+    if (row.prefix && row.suffix) {
+      circumfix.push({ prefix: row.prefix, suffix: row.suffix });
+    } else if (row.prefix) {
+      prefix.push(row.prefix);
+    } else if (row.suffix) {
+      suffix.push(row.suffix);
+    }
+  });
+
+  return {
+    prefix,
+    ...(suffix.length > 0
+      ? { [MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME]: suffix }
+      : {}),
+    ...(circumfix.length > 0
+      ? { [MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME]: circumfix }
+      : {}),
+  };
+}
 /**
  * the props we use for the per-message profile editor, which is used to edit a per-message profile. This is used in the settings page when the user wants to edit a profile.
  */
-type PerMessageProfileEditorProps = {
+export type PerMessageProfileEditorProps = {
   mx: MatrixClient;
   profileId: string;
   avatarMxcUrl?: string;
@@ -322,7 +186,7 @@ type PerMessageProfileEditorProps = {
   pronouns?: PronounSet[];
   nameColorLightTheme?: string;
   nameColorDarkTheme?: string;
-  shorthands?: Shorthand[];
+  shorthands?: ProfileTrigger;
   onDelete?: (profileId: string) => void;
 };
 
@@ -334,6 +198,7 @@ export function PerMessageProfileEditor({
   pronouns = Array<PronounSet>(),
   nameColorLightTheme,
   nameColorDarkTheme,
+  shorthands,
   onDelete,
 }: Readonly<PerMessageProfileEditorProps>) {
   const useAuthentication = useMediaAuthentication();
@@ -363,6 +228,44 @@ export function PerMessageProfileEditor({
   const [newNameColorLight, setNewNameColorLight] = useState(nameColorLightTheme ?? null);
   const [currentNameColorDark, setCurrentNameColorDark] = useState(nameColorDarkTheme ?? null);
   const [newNameColorDark, setNewNameColorDark] = useState(nameColorDarkTheme ?? null);
+
+  // shorthands
+  const shorthandProp = shorthands ? triggersToShorthandRows(shorthands) : undefined;
+  const [currentShorthands, setCurrentShorthands] = useState<ShorthandRow[] | undefined>(
+    shorthandProp
+  );
+  const [newShorthands, setNewShorthands] = useState<ShorthandRow[] | undefined>(shorthandProp);
+
+  const containsBlankShorthand = useMemo(
+    () =>
+      newShorthands && newShorthands.some((shorthand) => !shorthand.prefix && !shorthand.suffix),
+    [newShorthands]
+  );
+
+  const handleAddShorthand = () => {
+    if (newShorthands !== undefined) {
+      setNewShorthands([...newShorthands, { id: nanoid() }]);
+    }
+  };
+
+  const handleDeleteShorthand = (id: string) => {
+    if (newShorthands === undefined) return;
+    setNewShorthands((s) => s?.filter((shorthand) => shorthand.id !== id));
+  };
+
+  const handleSaveShorthand = (oldId: string, shorthand: Shorthand) => {
+    setNewShorthands((rows = []) => {
+      const index = rows.findIndex((row) => row.id === oldId);
+      if (index === -1) return rows;
+      const oldShorthand = rows[index];
+      if (oldShorthand === undefined) return rows;
+
+      return rows.with(index, {
+        ...shorthand,
+        id: oldShorthand.id,
+      });
+    });
+  };
 
   const [newDisplayName, setNewDisplayName] = useState(currentDisplayName);
   const [imageFile, setImageFile] = useState<File | undefined>();
@@ -409,6 +312,7 @@ export function PerMessageProfileEditor({
       newPronounsString !== currentPronounsString ||
       newNameColorLight !== currentNameColorLight ||
       newNameColorDark !== currentNameColorDark ||
+      newShorthands !== currentShorthands ||
       hasIdChange ||
       imageHasChanges,
     [
@@ -420,6 +324,8 @@ export function PerMessageProfileEditor({
       currentNameColorLight,
       newNameColorDark,
       currentNameColorDark,
+      newShorthands,
+      currentShorthands,
       hasIdChange,
       imageHasChanges,
     ]
@@ -447,10 +353,11 @@ export function PerMessageProfileEditor({
     useCallback(async () => {
       await addOrUpdatePerMessageProfile(mx, {
         id: profileId,
-        name: newDisplayName,
-        avatarUrl: avatarMxc,
-        pronouns: newPronouns,
-        colors: {
+        displayname: newDisplayName,
+        avatar_url: avatarMxc,
+        [MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME]: newPronouns,
+        trigger: shorthandRowsToTriggers(newShorthands ?? []),
+        [MATRIX_UNSTABLE_COLORS]: {
           on_light: newNameColorLight ?? undefined,
           on_dark: newNameColorDark ?? undefined,
         },
@@ -460,6 +367,7 @@ export function PerMessageProfileEditor({
       setCurrentPronouns(newPronouns);
       setCurrentNameColorLight(newNameColorLight);
       setCurrentNameColorDark(newNameColorDark);
+      setCurrentShorthands(newShorthands);
       setImageHasChanges(false);
       setChangingDisplayName(false);
       setDisableSetDisplayname(false);
@@ -476,6 +384,7 @@ export function PerMessageProfileEditor({
       newPronouns,
       newNameColorLight,
       newNameColorDark,
+      newShorthands,
       hasIdChange,
       newId,
     ])
@@ -753,7 +662,43 @@ export function PerMessageProfileEditor({
       </Box>
 
       <Text size="L400">Shorthands</Text>
-      <ShorthandEditor mx={mx} profileId={profileId} />
+      <SequenceCard
+        className={SequenceCardStyle}
+        variant="SurfaceVariant"
+        direction="Column"
+        gap="400"
+      >
+        <SettingTile
+          title="Shorthands"
+          description="Use this persona for a single message using a prefix or suffix."
+          focusId={`shorthandsInput-${profileId}`}
+        >
+          {newShorthands === undefined ? (
+            <Spinner size="400" />
+          ) : (
+            newShorthands.map((shorthand: ShorthandRow) => (
+              <ShorthandListItem
+                key={shorthand.id}
+                id={shorthand.id}
+                prefix={shorthand.prefix}
+                suffix={shorthand.suffix}
+                onDelete={handleDeleteShorthand}
+                onChange={handleSaveShorthand}
+              />
+            ))
+          )}
+          <Button
+            onClick={handleAddShorthand}
+            size="400"
+            radii="300"
+            variant="Primary"
+            disabled={containsBlankShorthand}
+            /* add aria label and title pls */
+          >
+            <Text size="B300">Add new shorthand</Text>
+          </Button>
+        </SettingTile>
+      </SequenceCard>
     </Box>
   );
 }

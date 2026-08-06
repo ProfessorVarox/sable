@@ -7,18 +7,6 @@ export type GroupMemberInfo = {
   avatarUrl?: string;
 };
 
-// Filter out bridge bots (not bridged users)
-const isBridgeBot = (userId: string): boolean => {
-  const localpart = userId.split(':')[0]?.substring(1) ?? '';
-  const lowerLocalpart = localpart.toLowerCase();
-
-  // Only filter out users ending with 'bot' (e.g., discordbot, blueskybot)
-  // Don't filter bridge users with IDs like discord_378405164077547520
-  if (lowerLocalpart.endsWith('bot')) return true;
-
-  return false;
-};
-
 /**
  * Fetches member information for a group DM.
  * Gets all joined members from room state and fetches their profiles.
@@ -32,23 +20,13 @@ export const useGroupDMMembers = (
   const currentUserId = mx.getUserId();
   const members = room
     .getMembers()
-    .filter(
-      (member) =>
-        member.membership === 'join' &&
-        member.userId !== currentUserId &&
-        !isBridgeBot(member.userId)
-    );
+    .filter((member) => member.membership === 'join' && member.userId !== currentUserId);
 
   const recentSenderRank = new Map<string, number>();
   const events = room.getLiveTimeline().getEvents();
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const sender = events[index]?.getSender();
-    if (
-      sender &&
-      sender !== currentUserId &&
-      !isBridgeBot(sender) &&
-      !recentSenderRank.has(sender)
-    ) {
+    if (sender && sender !== currentUserId && !recentSenderRank.has(sender)) {
       recentSenderRank.set(sender, recentSenderRank.size);
     }
   }

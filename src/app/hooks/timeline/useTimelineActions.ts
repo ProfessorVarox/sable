@@ -2,7 +2,7 @@ import type { MouseEventHandler } from 'react';
 import { useCallback } from 'react';
 import type { MatrixClient, Room, MatrixEvent } from '$types/matrix-sdk';
 import type { UserProfile } from '$hooks/useUserProfile';
-import { EventStatus } from '$types/matrix-sdk';
+import { EventStatus, RelationType } from '$types/matrix-sdk';
 import type { Editor } from 'slate';
 import { ReactEditor } from 'slate-react';
 
@@ -154,7 +154,7 @@ export function useTimelineActions({
                 userId: mx.getUserId() ?? '',
                 eventId: threadRootId,
                 body: '',
-                relation: { rel_type: 'm.thread', event_id: threadRootId },
+                relation: { rel_type: RelationType.Thread, event_id: threadRootId },
               }
             : undefined
         );
@@ -165,7 +165,7 @@ export function useTimelineActions({
       const { body, formattedBody } = extractReplyDraftBody(replyEvt, timelineSet);
 
       const { 'm.relates_to': relation } = startThread
-        ? { 'm.relates_to': { rel_type: 'm.thread', event_id: draftEventId } }
+        ? { 'm.relates_to': { rel_type: RelationType.Thread, event_id: draftEventId } }
         : replyEvt.getWireContent();
 
       const senderId = replyEvt.getSender();

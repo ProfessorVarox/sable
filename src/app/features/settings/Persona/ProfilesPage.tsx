@@ -3,7 +3,7 @@ import { Box, Scroll } from 'folds';
 import { PerMessageProfileOverview } from './PerMessageProfileOverview';
 import { PKCompatSettings } from './PKCompat';
 import { PickerPageSettings } from './PickerPage';
-import type { PerMessageProfile } from '$hooks/usePerMessageProfile';
+import type { PerMessageProfileMsc4461 } from '$hooks/usePerMessageProfile';
 import { useState } from 'react';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { PerMessageProfileEditorView } from './PerMessageProfileEditorView';
@@ -15,7 +15,7 @@ type PerMessageProfilePageProps = {
 
 export function PerMessageProfilePage({ requestBack, requestClose }: PerMessageProfilePageProps) {
   const mx = useMatrixClient();
-  const [editingProfile, setEditingProfile] = useState<PerMessageProfile>();
+  const [editingProfile, setEditingProfile] = useState<PerMessageProfileMsc4461>();
 
   const handleEditorClose = () => {
     setEditingProfile(undefined);
@@ -26,11 +26,12 @@ export function PerMessageProfilePage({ requestBack, requestClose }: PerMessageP
       <PerMessageProfileEditorView
         mx={mx}
         profileId={editingProfile.id}
-        avatarMxcUrl={editingProfile.avatarUrl}
-        displayName={editingProfile.name}
-        pronouns={editingProfile.pronouns}
-        nameColorLightTheme={editingProfile.colors?.on_light}
-        nameColorDarkTheme={editingProfile.colors?.on_dark}
+        avatarMxcUrl={editingProfile.avatar_url}
+        displayName={editingProfile.displayname}
+        pronouns={editingProfile['io.fsky.nyx.pronouns']}
+        nameColorLightTheme={editingProfile['eu.she-a.color']?.on_light}
+        nameColorDarkTheme={editingProfile['eu.she-a.color']?.on_dark}
+        shorthands={editingProfile.trigger}
         requestClose={handleEditorClose}
       />
     );

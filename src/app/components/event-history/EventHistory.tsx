@@ -48,7 +48,7 @@ import { usePowerLevelsContext } from '$hooks/usePowerLevels';
 
 import { useSettingsLinkBaseUrl } from '$features/settings/useSettingsLinkBaseUrl';
 import * as css from './EventHistory.css';
-import { EventType } from '$types/matrix-sdk';
+import { EventType, RelationType } from '$types/matrix-sdk';
 
 type EventHistoryProps = {
   room: Room;
@@ -104,7 +104,7 @@ export const EventHistory = as<'div', EventHistoryProps>(
         const formattedBody =
           content?.['m.new_content']?.formatted_body ?? content?.formatted_body ?? '';
         const { 'm.relates_to': relation } = startThread
-          ? { 'm.relates_to': { rel_type: 'm.thread', event_id: replyId } }
+          ? { 'm.relates_to': { rel_type: RelationType.Thread, event_id: replyId } }
           : replyEvt.getWireContent();
         const senderId = replyEvt.getSender();
         if (senderId) {

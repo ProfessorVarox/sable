@@ -19,6 +19,7 @@ import { useKeyDown } from '$hooks/useKeyDown';
 import { onTabPress } from '$utils/keyboard';
 
 type CommandAutoCompleteHandler = (commandName: string) => void;
+const GIF_COMMAND = 'gif';
 
 type CommandAutocompleteProps = {
   room: Room;
@@ -41,7 +42,10 @@ export function CommandAutocomplete({
 }: CommandAutocompleteProps) {
   const mx = useMatrixClient();
   const commands = useCommands(mx, room);
-  const commandNames = useMemo(() => Object.keys(commands) as Command[], [commands]);
+  const commandNames = useMemo(
+    () => [GIF_COMMAND, ...(Object.keys(commands) as Command[])],
+    [commands]
+  );
 
   const [result, search, resetSearch] = useAsyncSearch(
     commandNames,
@@ -106,7 +110,9 @@ export function CommandAutocomplete({
               {`/${commandName}`}
             </Text>
             <Text truncate priority="300" size="T200">
-              {commands[commandName].description}
+              {commandName === GIF_COMMAND
+                ? 'Search and send a GIF: /gif <search>'
+                : commands[commandName as Command].description}
             </Text>
           </Box>
         </MenuItem>

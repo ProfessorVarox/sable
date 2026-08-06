@@ -5,7 +5,7 @@
 fn prompt_cef_permission(message: String, tx: std::sync::mpsc::Sender<bool>) {
     use gtk::glib;
     use gtk::prelude::*;
-    use gtk::{ButtonsType, DialogFlags, MessageDialog, MessageType, ResponseType};
+    use gtk::{ButtonsType, DialogFlags, MessageDialog, MessageType, ResponseType, WindowPosition};
 
     // Non-blocking: show() + response signal instead of run().
     // dialog.run() blocks the GLib main loop, which CEF's message pump
@@ -19,6 +19,7 @@ fn prompt_cef_permission(message: String, tx: std::sync::mpsc::Sender<bool>) {
             &message,
         );
         dialog.set_title("Permission request");
+        dialog.set_position(WindowPosition::CenterAlways);
 
         let tx = std::cell::RefCell::new(Some(tx));
         dialog.connect_response(move |dlg, response| {
@@ -130,7 +131,7 @@ fn main() {
                 .cloned()
                 .collect();
 
-            if permission_kinds.is_empty() {
+            if permission_kinds.is_empty() || permission_kinds.len() != request.kinds.len() {
                 return responder.deny(DenyReason::NoPolicy);
             }
 

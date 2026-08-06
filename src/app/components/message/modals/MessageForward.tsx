@@ -6,6 +6,7 @@ import { MenuItem, Text, as } from 'folds';
 import { ArrowRight, menuIcon } from '$components/icons/phosphor';
 import { useSetAtom } from 'jotai';
 import type { MatrixEvent, Room } from '$types/matrix-sdk';
+import { MsgType } from '$types/matrix-sdk';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAllJoinedRoomsSet, useGetRoom } from '$hooks/useGetRoom';
 import { useMessageTargetRooms } from '$hooks/useMessageTargetRooms';
@@ -129,7 +130,7 @@ export function MessageForwardInternal({
 
       const eventType = mEvent.getType() as SendEventType;
       const originalContent = mEvent.getContent();
-      const isTextMessage = originalContent.msgtype === 'm.text';
+      const isTextMessage = originalContent.msgtype === MsgType.Text;
 
       const originalBody = typeof originalContent.body === 'string' ? originalContent.body : '';
       const originalFormattedBody =

@@ -415,11 +415,13 @@ export function MessagePreview({
   const [showPronouns] = useSetting(settingsAtom, 'showPronouns');
   const [parsePronouns] = useSetting(settingsAtom, 'parsePronouns');
   const { cleanedDisplayName: displayName, inlinePronoun } = useMemo(
-    () => getParsedPronouns(perMessageProfile?.name || fallbackDisplayName, parsePronouns),
-    [perMessageProfile?.name, fallbackDisplayName, parsePronouns]
+    () => getParsedPronouns(perMessageProfile?.displayname || fallbackDisplayName, parsePronouns),
+    [perMessageProfile?.displayname, fallbackDisplayName, parsePronouns]
   );
   const pronouns = useMemo(() => {
-    const resolved = [...(perMessageProfile?.pronouns ?? userProfile.pronouns ?? [])];
+    const resolved = [
+      ...(perMessageProfile?.['io.fsky.nyx.pronouns'] ?? userProfile.pronouns ?? []),
+    ];
     if (
       inlinePronoun &&
       !resolved.some((item) => item.summary?.toLowerCase() === inlinePronoun.toLowerCase())
@@ -427,9 +429,9 @@ export function MessagePreview({
       resolved.push({ summary: inlinePronoun, language: 'en' });
     }
     return resolved;
-  }, [perMessageProfile?.pronouns, userProfile.pronouns, inlinePronoun]);
+  }, [perMessageProfile, userProfile.pronouns, inlinePronoun]);
   const avatarMxc =
-    perMessageProfile?.avatarUrl ??
+    perMessageProfile?.avatar_url ??
     getMemberAvatarMxc(room, sender) ??
     userProfile.avatarUrl ??
     profile?.avatarUrl;

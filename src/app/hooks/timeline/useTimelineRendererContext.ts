@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { Room } from '$types/matrix-sdk';
+import { EventType } from '$types/matrix-sdk';
 import type { HTMLReactParserOptions } from 'html-react-parser';
 import type { Opts as LinkifyOpts } from 'linkifyjs';
 import {
@@ -109,9 +110,9 @@ export function useTimelineRendererContext(room: Room): TimelineRendererContextV
   const creators = useRoomCreators(room);
   const permissions = useRoomPermissions(creators, powerLevels);
   const canRedact = permissions.action('redact', mx.getSafeUserId());
-  const canDeleteOwn = permissions.event('m.room.redaction', mx.getSafeUserId());
-  const canSendReaction = permissions.event('m.reaction', mx.getSafeUserId());
-  const canPinEvent = permissions.stateEvent('m.room.pinned_events', mx.getSafeUserId());
+  const canDeleteOwn = permissions.event(EventType.RoomRedaction, mx.getSafeUserId());
+  const canSendReaction = permissions.event(EventType.Reaction, mx.getSafeUserId());
+  const canPinEvent = permissions.stateEvent(EventType.RoomPinnedEvents, mx.getSafeUserId());
   const isReadOnly = !permissions.message(room.hasEncryptionStateEvent(), mx.getSafeUserId());
   const getMemberPowerTag = useGetMemberPowerTag(room, creators, powerLevels);
   const parseMemberEvent = useMemberEventParser();

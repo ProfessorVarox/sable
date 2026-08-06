@@ -1,5 +1,11 @@
 import type { MatrixClient, MatrixEvent, Room } from '$types/matrix-sdk';
-import { ClientEvent, KnownMembership, MatrixEventEvent, RoomStateEvent } from '$types/matrix-sdk';
+import {
+  ClientEvent,
+  EventType,
+  KnownMembership,
+  MatrixEventEvent,
+  RoomStateEvent,
+} from '$types/matrix-sdk';
 import { invoke } from '@tauri-apps/api/core';
 import type { IRoomEvent, IWidget, WidgetDriver } from 'matrix-widget-api';
 import {
@@ -333,11 +339,11 @@ export class CallEmbed {
       });
 
       // Sliding sync may not have delivered m.room.member yet.
-      if (!this.room.currentState.getStateEvents('m.room.member', myUserId)) {
+      if (!this.room.currentState.getStateEvents(EventType.RoomMember, myUserId)) {
         const membership = this.room.getMyMembership();
         if (membership) {
           const memberRaw = {
-            type: 'm.room.member',
+            type: EventType.RoomMember,
             state_key: myUserId,
             room_id: this.roomId,
             sender: myUserId,

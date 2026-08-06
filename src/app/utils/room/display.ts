@@ -1,3 +1,4 @@
+import { EventType } from '$types/matrix-sdk';
 import type { MatrixClient, Room, RoomMember } from '$types/matrix-sdk';
 
 import { getMxIdLocalPart } from '$utils/matrix';
@@ -24,13 +25,31 @@ export const getRoomAvatarUrl = (
   useAuthentication = false
 ): string | undefined => getAvatarUrl(mx, room.getMxcAvatarUrl(), size, useAuthentication);
 
+export const getDmOtherMember = (mx: MatrixClient, room: Room): RoomMember | undefined => {
+  const currentUserId = mx.getUserId();
+  const mDirect = mx.getAccountData(EventType.Direct)?.getContent<Record<string, string[]>>();
+  const directUserIds = Object.entries(mDirect ?? {})
+    .filter(
+      ([userId, roomIds]) =>
+        userId !== currentUserId && Array.isArray(roomIds) && roomIds.includes(room.roomId)
+    )
+    .map(([userId]) => userId);
+
+  if (directUserIds.length === 1) {
+    const member = room.getMember(directUserIds[0]!);
+    if (member?.membership === 'join' || member?.membership === 'invite') return member;
+  }
+
+  return room.getAvatarFallbackMember();
+};
+
 export const getDirectRoomAvatarUrl = (
   mx: MatrixClient,
   room: Room,
   size: 32 | 96 = 32,
   useAuthentication = false
 ): string | undefined => {
-  const mxcUrl = room.getAvatarFallbackMember()?.getMxcAvatarUrl();
+  const mxcUrl = getDmOtherMember(mx, room)?.getMxcAvatarUrl();
 
   if (!mxcUrl) {
     return getRoomAvatarUrl(mx, room, size, useAuthentication);

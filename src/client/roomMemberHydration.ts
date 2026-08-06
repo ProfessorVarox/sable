@@ -1,5 +1,5 @@
 import type { MatrixClient } from '$types/matrix-sdk';
-import { EventType, MatrixEvent } from '$types/matrix-sdk';
+import { EventType, KnownMembership, MatrixEvent } from '$types/matrix-sdk';
 
 const inFlight = new WeakMap<MatrixClient, Map<string, Promise<void>>>();
 
@@ -100,6 +100,50 @@ export const hydrateRoomMember = (
     .finally(() => pending.delete(key));
 
   pending.set(key, request);
+  return request;
+};
+
+// The SDK only fetches /members when the sync store holds no out-of-band member
+// set for the room. Sliding sync sends $LAZY members, so a room whose stored set
+// predates most joins keeps a short roster forever. Refill it from the server.
+const BULK_TTL_MS = 5 * 60_000;
+const bulkInFlight = new WeakMap<MatrixClient, Map<string, Promise<void>>>();
+const bulkAttemptedAt = new WeakMap<MatrixClient, Map<string, number>>();
+
+export const hydrateAllRoomMembers = (mx: MatrixClient, roomId: string): Promise<void> => {
+  const room = mx.getRoom(roomId);
+  if (!room) return Promise.resolve();
+  if (room.getJoinedMembers().length >= room.getJoinedMemberCount()) return Promise.resolve();
+
+  const attemptedTs = bulkAttemptedAt.get(mx)?.get(roomId);
+  if (attemptedTs !== undefined && Date.now() - attemptedTs < BULK_TTL_MS) return Promise.resolve();
+
+  const pending = bulkInFlight.get(mx) ?? new Map<string, Promise<void>>();
+  bulkInFlight.set(mx, pending);
+  const existing = pending.get(roomId);
+  if (existing) return existing;
+
+  const attempts = bulkAttemptedAt.get(mx) ?? new Map<string, number>();
+  bulkAttemptedAt.set(mx, attempts);
+  attempts.set(roomId, Date.now());
+
+  const request = mx
+    .members(roomId, undefined, KnownMembership.Leave)
+    .then(({ chunk }) => {
+      const currentRoom = mx.getRoom(roomId);
+      if (!currentRoom || !chunk) return;
+      // The response is current state, which may be ahead of our sync position,
+      // so only fill in members we are missing rather than overwriting known ones.
+      const missing = chunk.filter(
+        (event) => event.state_key && !currentRoom.getMember(event.state_key)
+      );
+      if (missing.length === 0) return;
+      currentRoom.currentState.setStateEvents(missing.map((event) => new MatrixEvent(event)));
+    })
+    .catch(() => undefined)
+    .finally(() => pending.delete(roomId));
+
+  pending.set(roomId, request);
   return request;
 };
 

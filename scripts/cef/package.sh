@@ -74,35 +74,6 @@ stage_appindicator() {
   done
 }
 
-# Bundle the PulseAudio client and its audio dependencies for CEF.
-stage_pulseaudio() {
-  local dest="$1" main
-  mkdir -p "$dest"
-  main="$(ldconfig -p 2>/dev/null | awk '$1=="libpulse.so.0"{v=$NF} END{print v}')"
-  [ -n "$main" ] || main="$(find /usr/lib /usr/lib64 /lib -name libpulse.so.0 2>/dev/null | sort | tail -n1)"
-  if [ -z "$main" ] || [ ! -e "$main" ]; then
-    echo "warning: libpulse.so.0 not found; PulseAudio disabled in the AppImage" >&2
-    return 0
-  fi
-  local -A seen=()
-  local -a queue=("$main")
-  local lib dep
-  while [ "${#queue[@]}" -gt 0 ]; do
-    lib="${queue[-1]}"
-    queue=("${queue[@]:0:${#queue[@]}-1}")
-    [ -n "$lib" ] && [ -e "$lib" ] || continue
-    seen["$lib"]=1
-    while read -r dep; do
-      [ -n "$dep" ] && [ -z "${seen[$dep]:-}" ] || continue
-      seen["$dep"]=1
-      queue+=("$dep")
-    done < <(ldd "$lib" 2>/dev/null | awk '/=>/ {print $3}' | grep -iE 'pulse|sndfile|asyncns|FLAC|ogg|vorbis|opus|mpg123|mp3lame|lame|speexdsp' || true)
-  done
-  for lib in "${!seen[@]}"; do
-    cp -Lf "$lib" "$dest/$(basename "$lib")"
-  done
-}
-
 write_desktop() {
   cat > "$1" <<EOF
 [Desktop Entry]
@@ -159,7 +130,6 @@ if [ -n "$APPIMAGETOOL_CMD" ]; then
   APPDIR="$WORK/Sable.AppDir"
   stage_runtime "$APPDIR/usr/bin"
   stage_appindicator "$APPDIR/usr/bin"
-  stage_pulseaudio "$APPDIR/usr/bin"
   # nosuid AppImage mount: drop setuid chrome-sandbox, use the namespace sandbox.
   rm -f "$APPDIR/usr/bin/chrome-sandbox"
   write_desktop "$APPDIR/sable.desktop"

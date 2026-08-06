@@ -164,6 +164,22 @@ const dividerIds = (processed: ProcessedEvent[]) =>
   processed.filter((e) => e.willRenderNewDivider).map((e) => e.id);
 
 describe('useProcessedTimeline new-messages divider', () => {
+  it('renders an event that is still encrypted', () => {
+    const processed = processTimeline(
+      [
+        createEvent({ id: '$a' }),
+        createEvent({
+          id: '$encrypted',
+          type: EventType.RoomMessageEncrypted as string,
+          content: { algorithm: 'm.megolm.v1.aes-sha2', ciphertext: 'AwgAEnB...' },
+        }),
+      ],
+      undefined
+    );
+
+    expect(renderedIds(processed)).toEqual(['$a', '$encrypted']);
+  });
+
   it('keeps poll start events with default hidden-event settings', () => {
     const processed = processTimeline(
       [
@@ -816,5 +832,96 @@ describe('append-only fast path vs full reprocess (fuzz)', () => {
       const fresh = processTimeline(live, undefined);
       expect(rowSignature(result.current), `seed ${seed}`).toEqual(rowSignature(fresh));
     }
+  });
+});
+
+function createEncryptedEvent(id: string, ts: number) {
+  const state = {
+    type: EventType.RoomMessageEncrypted as string,
+    content: { algorithm: 'm.megolm.v1.aes-sha2', ciphertext: 'AwgAEnB' } as Record<
+      string,
+      unknown
+    >,
+  };
+  const mEvent = {
+    getId: () => id,
+    getType: () => state.type,
+    getSender: () => OTHER_USER,
+    getContent: () => state.content,
+    getPrevContent: () => ({}),
+    getWireContent: () => state.content,
+    getTs: () => ts,
+    isRedacted: () => false,
+    isRedaction: () => false,
+    isEncrypted: () => true,
+    getRelation: () => null,
+    threadRootId: undefined,
+  } as unknown as MatrixEvent;
+  const decrypt = () => {
+    state.type = EventType.RoomMessage as string;
+    state.content = { msgtype: 'm.text', body: 'the secret' };
+  };
+  return { mEvent, decrypt };
+}
+
+const bodyOf = (processed: ProcessedEvent[], id: string) =>
+  (processed.find((e) => e.id === id)?.content as Record<string, unknown> | undefined)?.body;
+
+describe('useProcessedTimeline decryption', () => {
+  // Stable so the append-only fast path is reachable.
+  const ignoredUsersSet = new Set<string>();
+  const renderTimeline = (getEvents: () => MatrixEvent[]) =>
+    renderHook(() =>
+      useProcessedTimeline({
+        items: getEvents().map((_, i) => i),
+        linkedTimelines: [createTimeline(getEvents())],
+        ignoredUsersSet,
+        hiddenEvents,
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: true,
+        hideNickAvatarEvents: true,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+  it('refreshes a row whose event decrypted since it was cached', () => {
+    const { mEvent: encrypted, decrypt } = createEncryptedEvent('$enc', 1_000_000);
+    let events: MatrixEvent[] = [createEvent({ id: '$a', ts: 999_000 }), encrypted];
+
+    const { result, rerender } = renderTimeline(() => events);
+    expect(renderedIds(result.current)).toEqual(['$a', '$enc']);
+
+    decrypt();
+    rerender();
+
+    expect(bodyOf(result.current, '$enc')).toBe('the secret');
+  });
+
+  it('does not carry a stale encrypted row through the append-only fast path', () => {
+    const { mEvent: encrypted, decrypt } = createEncryptedEvent('$enc', 1_000_000);
+    let events: MatrixEvent[] = [createEvent({ id: '$a', ts: 999_000 }), encrypted];
+
+    const { result, rerender } = renderTimeline(() => events);
+
+    decrypt();
+    events = [...events, createEvent({ id: '$live', ts: 1_001_000 })];
+    rerender();
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$enc', '$live']);
+    expect(bodyOf(result.current, '$enc')).toBe('the secret');
+  });
+
+  it('keeps the append-only fast path for unencrypted events', () => {
+    let events: MatrixEvent[] = [createEvent({ id: '$a', ts: 999_000 })];
+    const { result, rerender } = renderTimeline(() => events);
+    const firstRow = result.current[0];
+
+    events = [...events, createEvent({ id: '$b', ts: 1_000_000 })];
+    rerender();
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$b']);
+    expect(result.current[0]).toBe(firstRow);
   });
 });

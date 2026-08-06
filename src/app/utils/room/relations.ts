@@ -211,7 +211,6 @@ export const collectRelationEditEvents = (
 export const isRedactableMessageType = (type: string): boolean =>
   type === (EventType.RoomMessage as string) ||
   type === (EventType.RoomMessageEncrypted as string) ||
-  type === 'm.room.encrypted' ||
   type === (EventType.Sticker as string);
 
 export const getRedactionTargetId = (redactionEvent: MatrixEvent): string | undefined => {

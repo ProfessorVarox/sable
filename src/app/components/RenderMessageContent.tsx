@@ -54,6 +54,12 @@ import { PollEvent } from './message/PollEvent';
 import { M_POLL_START, M_TEXT } from 'matrix-js-sdk';
 import type { IImageInfo, IGalleryContent } from '$types/matrix/common';
 import { GALLERY_MSGTYPE } from '$types/matrix/common';
+import {
+  convertBeeperFormatToOurPerMessageProfile,
+  type PerMessageProfileBeeperFormat,
+  stripPerMessageProfileFormattedBody,
+  stripPerMessageProfilePlainBody,
+} from '$hooks/usePerMessageProfile';
 
 type RenderMessageContentProps = {
   displayName: string;
@@ -339,6 +345,21 @@ function RenderMessageContentInternal({
   }
 
   if (msgType === (MsgType.Emote as string)) {
+    const beeperProfile = content['com.beeper.per_message_profile'] as
+      | PerMessageProfileBeeperFormat
+      | undefined;
+    const pmp = beeperProfile
+      ? convertBeeperFormatToOurPerMessageProfile(beeperProfile)
+      : undefined;
+
+    const strippedContent = pmp
+      ? {
+          ...content,
+          formatted_body: stripPerMessageProfileFormattedBody(content['formatted_body'] as string),
+          body: stripPerMessageProfilePlainBody(content['body'] as string),
+        }
+      : content;
+
     if ((content as { 'fyi.cisnt.headpat'?: boolean })['fyi.cisnt.headpat']) {
       return (
         <MCuteEvent
@@ -352,9 +373,9 @@ function RenderMessageContentInternal({
     }
     return (
       <MEmote
-        displayName={displayName}
+        displayName={pmp?.displayname ?? displayName}
         edited={edited}
-        content={content}
+        content={strippedContent}
         renderBody={renderBody}
         renderUrlsPreview={messageUrlsPreview}
         renderBundledPreviews={messageBundlePreview}

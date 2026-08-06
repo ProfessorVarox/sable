@@ -5,7 +5,7 @@
 // IPA asset, then prints the updated file. Used by .github/workflows/tauri-build.yml.
 //
 // Usage: update-altstore-source.mjs <source.json> <version> <build> <ipa-size> <downloadURL> <date> [description]
-// Env:   none
+// Env:   ALTSTORE_MAX_VERSIONS - how many version entries to keep (default 20)
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import process from 'node:process';
@@ -60,8 +60,15 @@ const idx = versions.findIndex((v) => v.version === normalizedVersion);
 if (idx >= 0) versions[idx] = entry;
 else versions.unshift(entry);
 
-// Keep only the most recent 20 versions in the manifest.
-app.versions = versions.slice(0, 20);
+// Keep only the most recent versions in the manifest.
+const maxVersions = Number(process.env.ALTSTORE_MAX_VERSIONS ?? 20);
+if (!Number.isInteger(maxVersions) || maxVersions <= 0) {
+  console.error(
+    `ALTSTORE_MAX_VERSIONS must be a positive integer (got: ${process.env.ALTSTORE_MAX_VERSIONS})`
+  );
+  process.exit(1);
+}
+app.versions = versions.slice(0, maxVersions);
 
 writeFileSync(sourcePath, `${JSON.stringify(source, null, 2)}\n`);
 console.log(

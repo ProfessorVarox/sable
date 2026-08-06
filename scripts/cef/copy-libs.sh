@@ -12,15 +12,6 @@ PROFILE="${1:-debug}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEST="${2:-$ROOT/src-tauri/target/$PROFILE}"
 
-CEF_DIR="$(
-  find "$ROOT/src-tauri/target/$PROFILE/build" \
-    -type d -name cef_linux_x86_64 -print -quit 2>/dev/null || true
-)"
-if [ -z "$CEF_DIR" ]; then
-  echo "❌ CEF dist not found under target/$PROFILE/build — build with --features cef first." >&2
-  exit 1
-fi
-
 CEF_VERSION="$(awk '
   /^\[\[package\]\]$/ { in_cef=0 }
   /^name = "cef"$/ { in_cef=1 }
@@ -35,6 +26,18 @@ if [ -z "$CEF_VERSION" ]; then
   exit 1
 fi
 CEF_MAJOR="${CEF_VERSION%%.*}"
+
+CEF_DIR=""
+while IFS= read -r candidate; do
+  if grep -q "^#define CEF_VERSION_MAJOR $CEF_MAJOR$" "$candidate/include/cef_version.h" 2>/dev/null; then
+    CEF_DIR="$candidate"
+    break
+  fi
+done < <(find "$ROOT/src-tauri/target/$PROFILE/build" -type d -name cef_linux_x86_64 2>/dev/null)
+if [ -z "$CEF_DIR" ]; then
+  echo "❌ CEF $CEF_MAJOR dist not found under target/$PROFILE/build — build with --features cef first." >&2
+  exit 1
+fi
 
 CEF_LIB="$CEF_DIR/libcef.so"
 if [ ! -f "$CEF_LIB" ]; then

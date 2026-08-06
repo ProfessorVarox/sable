@@ -1,13 +1,7 @@
-import type {
-  PerMessageProfile,
-  PerMessageProfileProxyAssociationV2,
-} from '$hooks/usePerMessageProfile';
-import {
-  getAllPerMessageProfileProxies,
-  getPerMessageProfileById,
-} from '$hooks/usePerMessageProfile';
+import type { PerMessageProfileMsc4461 } from '$hooks/usePerMessageProfile';
+import { getAllPerMessageProfiles, getPerMessageProfileById } from '$hooks/usePerMessageProfile';
 import type { MatrixClient } from '$types/matrix-sdk';
-import { stripProxy, testProxy } from './PKitCommandMessageHandler';
+import { stripTrigger, testTriggers } from './PKitCommandMessageHandler';
 
 /**
  * proxy message handler
@@ -24,12 +18,12 @@ export class PKitProxyMessageHandler {
   private readonly mx: MatrixClient;
 
   /**
-   * a list of proxies; is not initialized in the constructor
+   * a list of profiles; is not initialized in the constructor
    * @private
-   * @type {PerMessageProfileProxyAssociation[]}
+   * @type {PerMessageProfileMsc4461[]}
    * @memberof PKitProxyMessageHandler
    */
-  private proxiesAssocs: PerMessageProfileProxyAssociationV2[];
+  private profiles: PerMessageProfileMsc4461[];
 
   private succInit: boolean;
 
@@ -39,7 +33,7 @@ export class PKitProxyMessageHandler {
    */
   public constructor(mx: MatrixClient) {
     this.mx = mx;
-    this.proxiesAssocs = [];
+    this.profiles = [];
     this.succInit = false;
   }
 
@@ -48,7 +42,7 @@ export class PKitProxyMessageHandler {
    */
   public async init(): Promise<void> {
     try {
-      this.proxiesAssocs = await getAllPerMessageProfileProxies(this.mx);
+      this.profiles = await getAllPerMessageProfiles(this.mx);
       this.succInit = true;
     } catch (err) {
       this.succInit = false;
@@ -64,7 +58,7 @@ export class PKitProxyMessageHandler {
    */
   public isAProxiedMessage(message: string): boolean {
     if (!this.succInit) return false;
-    return this.proxiesAssocs.some((assoc) => testProxy(assoc, message));
+    return this.profiles.some((profile) => testTriggers(profile.trigger, message));
   }
 
   /**
@@ -72,11 +66,13 @@ export class PKitProxyMessageHandler {
    * @param message the message to look at
    * @returns the matching Per-Message-Profile, if any
    */
-  public async getPmpBasedOnMessage(message: string): Promise<PerMessageProfile | undefined> {
+  public async getPmpBasedOnMessage(
+    message: string
+  ): Promise<PerMessageProfileMsc4461 | undefined> {
     // Always refresh so newly-added proxies apply immediately.
     await this.init();
     // check if the message matches our formats
-    const profileId = this.proxiesAssocs.find((assoc) => testProxy(assoc, message))?.profileId;
+    const profileId = this.profiles.find((profile) => testTriggers(profile.trigger, message))?.id;
     if (!profileId) return undefined;
     return getPerMessageProfileById(this.mx, profileId);
   }
@@ -91,8 +87,8 @@ export class PKitProxyMessageHandler {
   public stripProxyFromMessage(message: string): string | undefined {
     if (!this.succInit) return undefined;
     let m;
-    this.proxiesAssocs.forEach((assoc) => {
-      if (testProxy(assoc, message)) m = stripProxy(assoc, message);
+    this.profiles.forEach((profile) => {
+      if (testTriggers(profile.trigger, message)) m = stripTrigger(profile.trigger, message);
     });
     return m;
   }

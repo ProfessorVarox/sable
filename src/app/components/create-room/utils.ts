@@ -80,7 +80,7 @@ const createSpacePowerLevelsOverride = () => ({
 });
 
 export const createRoomEncryptionState = () => ({
-  type: 'm.room.encryption',
+  type: EventType.RoomEncryption,
   state_key: '',
   content: {
     algorithm: 'm.megolm.v1.aes-sha2',

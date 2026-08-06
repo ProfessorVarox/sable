@@ -102,7 +102,11 @@ export function DeveloperTools({ requestBack, requestClose }: DeveloperToolsProp
     const latestTimelineEventId = latestTimelineEvent?.getId() ?? null;
     const latestMessageEvent = [...liveEvents].toReversed().find((event) => {
       const type = event.getType();
-      return type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.sticker';
+      return (
+        type === (EventType.RoomMessage as string) ||
+        type === (EventType.RoomMessageEncrypted as string) ||
+        type === (EventType.Sticker as string)
+      );
     });
     const latestMessageEventId = latestMessageEvent?.getId() ?? null;
     const latestNotificationEvent = [...liveEvents]

@@ -1,5 +1,10 @@
 import type { IPushRule, IPushRules, MatrixClient, MatrixEvent, Room } from '$types/matrix-sdk';
-import { EventType, NotificationCountType, PushRuleActionName } from '$types/matrix-sdk';
+import {
+  EventType,
+  NotificationCountType,
+  PushRuleActionName,
+  RelationType,
+} from '$types/matrix-sdk';
 
 import type { UnreadInfo } from '$types/matrix/room';
 import { NotificationType } from '$types/matrix/room';
@@ -86,13 +91,13 @@ export const getNotificationType = (mx: MatrixClient, roomId: string): Notificat
   return NotificationType.MentionsAndKeywords;
 };
 
-const NOTIFICATION_EVENT_TYPES = new Set([
-  'm.room.create',
-  'm.room.message',
-  'm.room.encrypted',
-  'm.room.member',
-  'm.sticker',
-  'm.reaction',
+const NOTIFICATION_EVENT_TYPES = new Set<string>([
+  EventType.RoomCreate,
+  EventType.RoomMessage,
+  EventType.RoomMessageEncrypted,
+  EventType.RoomMember,
+  EventType.Sticker,
+  EventType.Reaction,
 ]);
 export const isNotificationEvent = (mEvent: MatrixEvent, room?: Room, userId?: string) => {
   const eType = mEvent.getType();
@@ -109,7 +114,7 @@ export const isNotificationEvent = (mEvent: MatrixEvent, room?: Room, userId?: s
   if (relationType === 'm.replace') return false;
 
   // For reactions: only count them if they're reactions to the current user's messages
-  if (relationType === 'm.annotation') {
+  if (relationType === RelationType.Annotation) {
     if (!room || !userId || !relation) {
       // If we don't have room/userId/relation context, filter out all reactions (safe default)
       return false;

@@ -6754,7 +6754,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-notifications"
 version = "0.5.0-rc.11"
-source = "git+https://github.com/SableClient/tauri-plugin-notifications.git?rev=0175b5ec58a31ab15397e981a67f47fa32254620#0175b5ec58a31ab15397e981a67f47fa32254620"
+source = "git+https://github.com/SableClient/tauri-plugin-notifications.git?rev=057d323862d815a0c7459a1f1acd5a3c08750a51#057d323862d815a0c7459a1f1acd5a3c08750a51"
 dependencies = [
  "log",
  "notify-rust",
@@ -6957,7 +6957,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-cef"
 version = "0.1.0"
-source = "git+https://github.com/SableClient/tauri-runtime-cef?branch=main#23464067ddcfe61239e41faeb26e1ce200ff3242"
+source = "git+https://github.com/SableClient/tauri-runtime-cef?branch=main#c0d9ff8ecf0eac8504c1947932274e7fe7d9fb8c"
 dependencies = [
  "base64 0.22.1",
  "cef",

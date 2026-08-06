@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { NavButton, NavItem, NavItemContent, NavItemOptions } from '$components/nav';
 import { UnreadBadge, UnreadBadgeCenter } from '$components/unread-badge';
 import { RoomAvatar, RoomIcon } from '$components/room-avatar';
-import { getDirectRoomAvatarUrl, getRoomAvatarUrl } from '$utils/room/display';
+import { getDirectRoomAvatarUrl, getDmOtherMember, getRoomAvatarUrl } from '$utils/room/display';
 import { roomHaveUnread } from '$utils/room/unread';
 import { nameInitials } from '$utils/common';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -335,7 +335,7 @@ export function RoomNavItem({
 
   const [roomIconOverlay] = useSetting(settingsAtom, 'roomIconOverlay');
   const nicknames = useAtomValue(nicknamesAtom);
-  const dmUserId = direct ? room.getAvatarFallbackMember()?.userId : undefined;
+  const dmUserId = direct ? getDmOtherMember(mx, room)?.userId : undefined;
   const matrixRoomName = useRoomName(room);
   const roomName = (dmUserId && nicknames[dmUserId]) || matrixRoomName;
   const presence = useUserPresence(dmUserId ?? '');

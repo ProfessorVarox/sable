@@ -1,6 +1,7 @@
 import type { CryptoBackend, IDeviceLists, IToDeviceEvent, MatrixClient } from '$types/matrix-sdk';
 import {
   ClientEvent,
+  EventType,
   Filter,
   Method,
   processToDeviceMessages,
@@ -106,7 +107,7 @@ export class PresenceSyncManager {
       if (
         typeof rawEvent !== 'object' ||
         !rawEvent ||
-        (rawEvent as Record<string, unknown>).type !== 'm.presence'
+        (rawEvent as Record<string, unknown>).type !== (EventType.Presence as string)
       )
         return;
 
@@ -137,7 +138,7 @@ export class PresenceSyncManager {
         filter.setDefinition({
           room: { rooms: [] },
           account_data: { types: [] },
-          presence: { types: ['m.presence'] },
+          presence: { types: [EventType.Presence] },
         });
 
         const filterId = await this.mx.getOrCreateFilter('presence_only', filter);

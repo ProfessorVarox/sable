@@ -2,6 +2,7 @@ import type { SerializableMap } from '$types/wrapper/SerializableMap';
 import type { SerializableSet } from '$types/wrapper/SerializableSet';
 import type { EncryptedAttachmentInfo } from 'browser-encrypt-attachment';
 import type { MsgType } from '$types/matrix-sdk';
+import type { RelationType } from '$types/matrix-sdk';
 import type * as prefix from '$unstable/prefixes';
 
 export type IImageInfo = {
@@ -13,7 +14,7 @@ export type IImageInfo = {
 };
 
 export type MatrixRelatesTo = {
-  rel_type: 'm.annotation';
+  rel_type: RelationType.Annotation;
   event_id: string;
   key?: string;
 };

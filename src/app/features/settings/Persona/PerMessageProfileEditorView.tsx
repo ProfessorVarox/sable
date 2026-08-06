@@ -1,32 +1,13 @@
 import { Box, IconButton, Text, Scroll, Chip } from 'folds';
 import { ArrowLeft, composerIcon, sizedIcon, X } from '$components/icons/phosphor';
 import { Page, PageHeader, PageContent } from '$components/page';
-import type { MatrixClient } from 'matrix-js-sdk';
-import type { PronounSet } from '$utils/pronouns';
+import type { PerMessageProfileEditorProps } from './PerMessageProfileEditor';
 import { PerMessageProfileEditor } from './PerMessageProfileEditor';
 
-type PerMessageProfileEditorViewProps = {
-  mx: MatrixClient;
-  profileId: string;
-  avatarMxcUrl?: string;
-  displayName?: string;
-  pronouns?: PronounSet[];
-  nameColorLightTheme?: string;
-  nameColorDarkTheme?: string;
-  onChange?: (profile: { id: string; name: string; avatarUrl?: string }) => void;
-  onDelete?: (profileId: string) => void;
-  requestClose: () => void;
-};
 export function PerMessageProfileEditorView({
-  mx,
-  profileId,
-  avatarMxcUrl,
-  displayName,
-  pronouns = Array<PronounSet>(),
-  nameColorLightTheme,
-  nameColorDarkTheme,
   requestClose,
-}: Readonly<PerMessageProfileEditorViewProps>) {
+  ...editorProps
+}: Readonly<PerMessageProfileEditorProps & { requestClose: () => void }>) {
   return (
     <Page>
       <PageHeader outlined={false} balance>
@@ -51,16 +32,7 @@ export function PerMessageProfileEditorView({
       <Box grow="Yes">
         <Scroll hideTrack visibility="Hover">
           <PageContent>
-            <PerMessageProfileEditor
-              mx={mx}
-              profileId={profileId}
-              avatarMxcUrl={avatarMxcUrl}
-              displayName={displayName}
-              pronouns={pronouns}
-              nameColorLightTheme={nameColorLightTheme}
-              nameColorDarkTheme={nameColorDarkTheme}
-              onDelete={requestClose}
-            />
+            <PerMessageProfileEditor {...editorProps} onDelete={requestClose} />
           </PageContent>
         </Scroll>
       </Box>

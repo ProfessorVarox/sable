@@ -5,7 +5,10 @@ import { useEffect, useState } from 'react';
 
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { scheduleDecrypt } from '$utils/decryptScheduler';
+import { createDebugLogger } from '$utils/debugLogger';
 import * as Sentry from '@sentry/react';
+
+const debugLog = createDebugLogger('EncryptedContent');
 
 type EncryptedContentProps = {
   mEvent: MatrixEvent;
@@ -39,6 +42,12 @@ export function EncryptedContent({ mEvent, children }: EncryptedContentProps) {
     toggleEncrypted(mEvent.getType() === (EventType.RoomMessageEncrypted as string));
     const handleDecrypted: MatrixEventHandlerMap[MatrixEventEvent.Decrypted] = (event) => {
       if (event.isDecryptionFailure()) {
+        debugLog.error('error', 'Failed to decrypt room event', {
+          eventId: event.getId(),
+          roomId: event.getRoomId(),
+          sender: event.getSender(),
+          reason: event.decryptionFailureReason ?? 'UNKNOWN_ERROR',
+        });
         Sentry.metrics.count('sable.decryption.failure', 1, {
           attributes: { reason: event.decryptionFailureReason ?? 'UNKNOWN_ERROR' },
         });

@@ -66,7 +66,8 @@ const mergeStateEvents = (
   const merged = new Map<string, StateEvent>();
   previous?.forEach((event) => merged.set(stateEventKey(event), event));
   incoming?.forEach((event) => {
-    const cacheMember = event.type === 'm.room.member' && event.state_key === userId;
+    const cacheMember =
+      event.type === (EventType.RoomMember as string) && event.state_key === userId;
     if (cacheMember || CACHED_STATE_TYPES.has(event.type)) {
       merged.set(stateEventKey(event), event);
     }
@@ -75,7 +76,9 @@ const mergeStateEvents = (
 };
 
 const selfMembership = (events: StateEvent[] | undefined, userId: string): string | undefined => {
-  const event = events?.find((e) => e.type === 'm.room.member' && e.state_key === userId);
+  const event = events?.find(
+    (e) => e.type === (EventType.RoomMember as string) && e.state_key === userId
+  );
   const content = event?.content;
   return content && typeof content === 'object'
     ? (content as { membership?: string }).membership

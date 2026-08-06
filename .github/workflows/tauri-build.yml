@@ -408,6 +408,33 @@ jobs:
             gh release upload "$TAG" "$f" --clobber
           done
 
+  obtainium:
+    name: Publish Obtainium config
+    needs: [setup-release, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.setup-release.outputs.tag }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup-release.outputs.ref }}
+          persist-credentials: false
+
+      - name: Generate obtainium.json
+        shell: bash
+        run: node scripts/obtainium-generate.js "$VERSION" "$TAG" obtainium.json
+
+      - name: Attach Obtainium config to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" obtainium.json --clobber
+
   ios:
     name: Build iOS (AltStore/SideStore)
     needs: setup-release
@@ -455,7 +482,14 @@ jobs:
 
       - name: Stamp release version into tauri.conf.json
         shell: bash
-        run: node .github/scripts/set-tauri-version.mjs "$VERSION"
+        env:
+          IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
+        run: |
+          if [ "$IS_NIGHTLY" = "true" ]; then
+            node .github/scripts/set-tauri-version.mjs "$VERSION" --apple-short-version
+          else
+            node .github/scripts/set-tauri-version.mjs "$VERSION"
+          fi
 
       - name: Set up iOS
         shell: bash
@@ -541,6 +575,8 @@ jobs:
           set -euo pipefail
           if [ "$NIGHTLY" = "true" ]; then
             SOURCE_FILE="altstore-source-nightly.json"
+            # Superseded nightly IPAs get deleted, so older entries would be dead links.
+            export ALTSTORE_MAX_VERSIONS=1
           else
             SOURCE_FILE="altstore-source.json"
           fi

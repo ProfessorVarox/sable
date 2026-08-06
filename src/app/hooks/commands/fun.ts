@@ -1,4 +1,5 @@
 import type { RoomMessageEventContent } from '$types/matrix-sdk';
+import { MsgType } from '$types/matrix-sdk';
 import type { CommandContext, CommandRecord } from './types';
 import { Command } from './types';
 
@@ -102,7 +103,7 @@ export const createFunCommands = (ctx: CommandContext): Partial<CommandRecord> =
       exe: async (payload) => {
         const target = payload.trim();
         await mx.sendMessage(room.roomId, {
-          msgtype: 'm.emote',
+          msgtype: MsgType.Emote,
           'm.mentions': {
             user_ids: target ? [target] : [],
           },

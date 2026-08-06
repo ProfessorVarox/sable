@@ -15,12 +15,13 @@ import {
 } from '$components/sidebar';
 import { RoomAvatar } from '$components/room-avatar';
 import { UserAvatar } from '$components/user-avatar';
-import { getDirectRoomAvatarUrl, getRoomAvatarUrl } from '$utils/room/display';
+import { getAvatarUrl, getDmOtherMember, getRoomAvatarUrl } from '$utils/room/display';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { nameInitials } from '$utils/common';
 import { getCanonicalAliasOrRoomId, mxcUrlToHttp } from '$utils/matrix';
 import { useSelectedOrLastRoom } from '$hooks/router/useSelectedRoom';
 import { useGroupDMMembers } from '$hooks/useGroupDMMembers';
+import { useRoomAvatar, useRoomName } from '$hooks/useRoomMeta';
 import { useSidebarDirectRoomIds } from './useSidebarDirectRoomIds';
 import * as css from './DirectDMsList.css';
 
@@ -41,23 +42,17 @@ function DMItem({ room, selected }: DMItemProps) {
     navigate(getDirectRoomPath(getCanonicalAliasOrRoomId(mx, room.roomId)));
   };
 
-  // Check if this is a group DM (more than 2 members)
-  const isGroupDM = room.getJoinedMemberCount() > 2;
+  const roomName = useRoomName(room);
+  const dmAvatarMxc = useRoomAvatar(room, true);
+  const dmAvatarUrl = getAvatarUrl(mx, dmAvatarMxc, 96, useAuthentication);
 
   // Use already-synced room state only; sidebar rendering must not trigger member/profile requests.
   const groupMembers = useGroupDMMembers(mx, room, MAX_GROUP_MEMBERS);
 
+  const isGroupDM = !getDmOtherMember(mx, room) && groupMembers.length > 1;
+
   // Get unread info for badge
   const unread = roomToUnread.get(room.roomId);
-
-  // Determine avatar src for single group DM member to avoid nested ternary
-  const getSingleMemberAvatarSrc = () => {
-    const member = groupMembers[0];
-    if (groupMembers.length !== 1 || !member?.avatarUrl) {
-      return undefined;
-    }
-    return mxcUrlToHttp(mx, member.avatarUrl, useAuthentication, 96, 96, 'crop') ?? undefined;
-  };
 
   // Render appropriate avatar based on DM type
   const renderAvatar = () => {
@@ -67,33 +62,11 @@ function DMItem({ room, selected }: DMItemProps) {
         <Avatar size="400" radii="400">
           <RoomAvatar
             roomId={room.roomId}
-            src={
-              getRoomAvatarUrl(mx, room, 96, useAuthentication) ||
-              getDirectRoomAvatarUrl(mx, room, 96, useAuthentication)
-            }
-            alt={room.name}
+            src={getRoomAvatarUrl(mx, room, 96, useAuthentication) || dmAvatarUrl}
+            alt={roomName}
             renderFallback={() => (
               <Text as="span" size="H6">
-                {nameInitials(room.name)}
-              </Text>
-            )}
-          />
-        </Avatar>
-      );
-    }
-
-    if (groupMembers.length === 1) {
-      const member = groupMembers[0];
-      if (!member) return null;
-      return (
-        <Avatar size="400" radii="400">
-          <UserAvatar
-            userId={member.userId}
-            src={getSingleMemberAvatarSrc()}
-            alt={member.displayName || member.userId}
-            renderFallback={() => (
-              <Text as="span" size="H6">
-                {nameInitials(member.displayName || member.userId)}
+                {nameInitials(roomName)}
               </Text>
             )}
           />
@@ -132,7 +105,7 @@ function DMItem({ room, selected }: DMItemProps) {
 
   return (
     <SidebarItemLeft active={selected}>
-      <SidebarItemTooltip tooltip={room.name}>
+      <SidebarItemTooltip tooltip={roomName}>
         {(triggerRef) => (
           <SidebarAvatar as="button" ref={triggerRef} outlined onClick={handleClick} size="400">
             {renderAvatar()}

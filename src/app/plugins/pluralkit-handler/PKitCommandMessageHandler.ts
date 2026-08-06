@@ -1,11 +1,10 @@
 import type {
-  PerMessageProfile,
+  PerMessageProfileMsc4461,
   PerMessageProfileProxyAssociationV2,
+  ProfileTrigger,
 } from '$hooks/usePerMessageProfile';
 import {
   addOrUpdatePerMessageProfile,
-  associateProxyWithProfile,
-  dropProxyAssociationForPMP,
   extractCircumfixProxyTagsFromKey,
   getAllPerMessageProfiles,
   getPerMessageProfileById,
@@ -13,6 +12,10 @@ import {
 import { sendFeedback } from '$utils/sendFeedbackToUser';
 import type { MatrixClient, Room } from '$types/matrix-sdk';
 import { generateShortId } from '$utils/shortIdGen';
+import {
+  MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME,
+  MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME,
+} from '$unstable/prefixes';
 
 const pkMemberRenameRegex = /^(pk;member)\s+"?([\w\s]+)"?\s*rename\s+"?([\w\s]+)"?$/;
 const pkMemberNewRegex = /^(pk;member)\s+new\s+"?([\w\s]+)"?$/;
@@ -47,6 +50,27 @@ export function buildProxyRegex({ prefix, suffix }: PerMessageProfileProxyAssoci
   return new RegExp(`^${pattern}$`);
 }
 
+export function testTriggers(triggers: ProfileTrigger, input: string): boolean {
+  const matchesPrefix = triggers.prefix.some((prefix) => input.startsWith(prefix));
+  if (matchesPrefix) return true;
+
+  const matchesSuffix = triggers[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME]?.some(
+    (suffix) => input.startsWith(suffix)
+  );
+  if (matchesSuffix) return true;
+
+  const matchesCircumfix = triggers[
+    MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME
+  ]?.some(({ prefix, suffix }) => {
+    const casePrefix = prefix ? input.startsWith(prefix) : true;
+    const caseSuffix = suffix ? input.endsWith(suffix) : true;
+
+    return casePrefix && caseSuffix;
+  });
+
+  return !!matchesCircumfix;
+}
+
 export function testProxy(
   { prefix, suffix }: PerMessageProfileProxyAssociationV2,
   input: string
@@ -56,8 +80,26 @@ export function testProxy(
 
   return matchesPrefix && matchesSuffix;
 }
+
+export function stripTrigger(triggers: ProfileTrigger, input: string): string {
+  const prefix = triggers.prefix.find((value) => input.startsWith(value));
+  if (prefix !== undefined) return stripProxy({ prefix }, input);
+
+  const suffix = triggers[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME]?.find(
+    (value) => input.endsWith(value)
+  );
+  if (suffix !== undefined) return stripProxy({ suffix }, input);
+
+  const circumfix = triggers[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME]?.find(
+    (trigger) => input.startsWith(trigger.prefix) && input.endsWith(trigger.suffix)
+  );
+  if (circumfix) return stripProxy(circumfix, input);
+
+  return input;
+}
+
 export function stripProxy(
-  { prefix, suffix }: PerMessageProfileProxyAssociationV2,
+  { prefix, suffix }: { prefix?: string; suffix?: string },
   input: string
 ): string {
   let message = input;
@@ -128,7 +170,8 @@ export class PKitCommandMessageHandler {
       );
       await addOrUpdatePerMessageProfile(this.mx, {
         id: generatedID,
-        name: memberName,
+        displayname: memberName,
+        trigger: { prefix: [] },
       });
       sendFeedback(
         `added new member has been created with id: ${generatedID} and name ${memberName}`,
@@ -159,7 +202,7 @@ export class PKitCommandMessageHandler {
        * The id of the per-message-profile
        */
       const pmpId = (await getAllPerMessageProfiles(this.mx)).find(
-        (pmp) => pmp.name === oldName
+        (pmp) => pmp.displayname === oldName
       )?.id;
       if (!pmpId) {
         sendFeedback(
@@ -190,7 +233,7 @@ export class PKitCommandMessageHandler {
         );
         return;
       }
-      pmp.name = newName;
+      pmp.displayname = newName;
       sendFeedback(
         `renaming your profile ${pmpId} from ${oldName} to ${newName}`,
         this.room,
@@ -204,7 +247,7 @@ export class PKitCommandMessageHandler {
       const matchAgainst = cmdParts[3];
       const pmpId = this.useIdInsteadOfNameWherePossible
         ? name
-        : (await getAllPerMessageProfiles(this.mx)).find((pmp) => pmp.name === name)?.id;
+        : (await getAllPerMessageProfiles(this.mx)).find((pmp) => pmp.displayname === name)?.id;
       if (!pmpId) {
         sendFeedback(
           `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" doesn't exist in your records, ${helpTextPkMemberNew}`,
@@ -222,13 +265,33 @@ export class PKitCommandMessageHandler {
         );
         return;
       }
-      await dropProxyAssociationForPMP(this.mx, matchAgainst);
+      const proxyTags = extractCircumfixProxyTagsFromKey(matchAgainst);
+      const pmp = await getPerMessageProfileById(this.mx, pmpId);
 
-      sendFeedback(
-        `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" (${pmpId}) is now no longer associated with ${matchAgainst}`,
-        this.room,
-        this.mx.getSafeUserId()
-      );
+      if (pmp && proxyTags) {
+        const { prefix, suffix } = proxyTags;
+
+        if (prefix && suffix) {
+          pmp.trigger[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME] ??= [];
+          pmp.trigger[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME] = pmp.trigger[
+            MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME
+          ].filter((trigger) => trigger.prefix !== prefix && trigger.suffix !== suffix);
+        } else if (prefix && !suffix) {
+          pmp.trigger.prefix = pmp.trigger.prefix.filter((trigger) => trigger !== prefix);
+        } else if (!prefix && suffix) {
+          pmp.trigger[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME] ??= [];
+          pmp.trigger[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME] = pmp.trigger[
+            MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME
+          ].filter((trigger) => trigger !== suffix);
+        }
+        await addOrUpdatePerMessageProfile(this.mx, pmp);
+
+        sendFeedback(
+          `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" (${pmpId}) is now no longer associated with ${matchAgainst}`,
+          this.room,
+          this.mx.getSafeUserId()
+        );
+      }
     } else if (pkMemberNewProxy.test(this.message)) {
       const cmdParts = pkMemberNewProxy.exec(this.message);
       if (!cmdParts) return;
@@ -236,7 +299,7 @@ export class PKitCommandMessageHandler {
       const matchAgainst = cmdParts[4];
       const pmpId = this.useIdInsteadOfNameWherePossible
         ? name
-        : (await getAllPerMessageProfiles(this.mx)).find((pmp) => pmp.name === name)?.id;
+        : (await getAllPerMessageProfiles(this.mx)).find((pmp) => pmp.displayname === name)?.id;
       if (!pmpId) {
         sendFeedback(
           `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" doesn't exist in your records, ${helpTextPkMemberNew}`,
@@ -263,17 +326,37 @@ export class PKitCommandMessageHandler {
         );
         return;
       }
-      await associateProxyWithProfile(this.mx, pmpId, proxyTags.prefix, proxyTags.suffix, false);
-      sendFeedback(
-        `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" (${pmpId}) is now associated with ${matchAgainst}`,
-        this.room,
-        this.mx.getSafeUserId()
-      );
+      let pmp = await getPerMessageProfileById(this.mx, pmpId);
+      if (pmp) {
+        const { prefix, suffix } = proxyTags;
+
+        if (prefix && suffix) {
+          (pmp.trigger[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_CIRCUMFIX_PROPERTY_NAME] ??= []).push({
+            prefix: prefix,
+            suffix: suffix,
+          });
+        } else if (!prefix && suffix) {
+          (pmp.trigger[MATRIX_SABLE_UNSTABLE_MSC4461_TRIGGER_SUFFIX_PROPERTY_NAME] ??= []).push(
+            suffix
+          );
+        } else if (prefix && !suffix) {
+          pmp.trigger.prefix.push(prefix);
+        }
+        await addOrUpdatePerMessageProfile(this.mx, pmp);
+        sendFeedback(
+          `Persona with ${this.useIdInsteadOfNameWherePossible ? 'id' : 'name'} "${name}" (${pmpId}) is now associated with ${matchAgainst}`,
+          this.room,
+          this.mx.getSafeUserId()
+        );
+      }
     } else {
       // default to looking up member info
-      const listOfProfiles: PerMessageProfile[] = await getAllPerMessageProfiles(this.mx);
+      const listOfProfiles: PerMessageProfileMsc4461[] = await getAllPerMessageProfiles(this.mx);
       const stringListOfProfiles: string = listOfProfiles
-        .map((pmp: PerMessageProfile) => `${pmp.id}: ${pmp.name ? pmp.name : '(empty name)'}`)
+        .map(
+          (pmp: PerMessageProfileMsc4461) =>
+            `${pmp.id}: ${pmp.displayname ? pmp.displayname : '(empty name)'}`
+        )
         .join('\n');
       sendFeedback(
         `If you see this, you have messed up a command\n\nYou currently have the following persona set up:\n${stringListOfProfiles}\n\n${helpTextPkMember}`,

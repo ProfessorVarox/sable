@@ -243,6 +243,7 @@ export interface Settings {
   pmpProxying: boolean;
   pmpLatching: boolean;
   pmpPicker: boolean;
+  pmpNoFallback: boolean;
   mentionInReplies: boolean;
   profileChangePropagation: ProfileChangePropagation;
   showPersonaSetting: boolean;
@@ -424,6 +425,7 @@ export const defaultSettings: Settings = {
   pmpProxying: false,
   pmpLatching: false,
   pmpPicker: false,
+  pmpNoFallback: false,
   mentionInReplies: true,
   profileChangePropagation: 'unchanged',
   showPersonaSetting: false,

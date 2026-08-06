@@ -2,6 +2,7 @@ min_version = '2026.7.11'
 
 [env]
 _.path = ["{{config_root}}/node_modules/.bin"]
+NODE_OPTIONS = "--max-old-space-size=4192"
 
 [settings]
 idiomatic_version_file_enable_tools = ["pnpm", "node"]

@@ -13,6 +13,7 @@ import {
 } from 'matrix-js-sdk';
 import * as css from './PollEvent.css';
 import { useCallback, useEffect, useState } from 'react';
+import { MsgType, RelationType } from '$types/matrix-sdk';
 import { PollResponsesViewer } from '$features/room/poll-modals';
 import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 import { useMatrixEvent } from '$hooks/useMatrixEvent';
@@ -188,7 +189,7 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
 
     let newContent: PollResponse = {
       'm.relates_to': {
-        rel_type: 'm.reference',
+        rel_type: RelationType.Reference,
         event_id: eventId,
       },
       [M_POLL_RESPONSE.name]: {
@@ -220,13 +221,13 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
 
     const endContent = {
       'm.relates_to': {
-        rel_type: 'm.reference',
+        rel_type: RelationType.Reference,
         event_id: eventId,
       },
       'org.matrix.msc3381.poll.end': {},
       [M_TEXT.name]: endText,
       body: endText,
-      msgtype: 'm.text',
+      msgtype: MsgType.Text,
     };
     mx.sendEvent(
       roomId,

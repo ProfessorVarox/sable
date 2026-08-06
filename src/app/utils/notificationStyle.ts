@@ -1,3 +1,5 @@
+import { EventType } from 'matrix-js-sdk/lib/@types/event';
+
 export const DEFAULT_NOTIFICATION_ICON = '/public/res/logo-maskable/logo-maskable-180x180.png';
 export const DEFAULT_NOTIFICATION_BADGE = '/public/res/logo-maskable/logo-maskable-72x72.png';
 const DEFAULT_MESSAGE_PREVIEW = 'new message';
@@ -63,7 +65,7 @@ export const resolveNotificationPreviewText = ({
     return 'Added a reaction';
   }
 
-  const encryptedContext = isEncryptedRoom || eventType === 'm.room.encrypted';
+  const encryptedContext = isEncryptedRoom || eventType === EventType.RoomMessageEncrypted;
 
   if (!showMessageContent) {
     return encryptedContext ? ENCRYPTED_MESSAGE_PREVIEW : DEFAULT_MESSAGE_PREVIEW;

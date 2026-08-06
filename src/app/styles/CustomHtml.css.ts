@@ -63,7 +63,6 @@ export const Code = style([
 const SpoilerBase = style([
   DefaultReset,
   {
-    padding: `0 ${config.space.S100}`,
     backgroundColor: color.SurfaceVariant.ContainerLine,
     borderRadius: config.radii.R300,
     selectors: {

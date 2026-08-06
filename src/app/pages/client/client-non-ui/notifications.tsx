@@ -34,6 +34,7 @@ import { settingsAtom } from '$state/settings';
 import { nicknamesAtom } from '$state/nicknames';
 import { mDirectAtom } from '$state/mDirectList';
 import { allInvitesAtom } from '$state/room-list/inviteList';
+import { markAsRead } from '$utils/notifications';
 import { usePreviousValue } from '$hooks/usePreviousValue';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { getStateEvent } from '$utils/room/hierarchy';
@@ -248,7 +249,7 @@ export function MessageNotifications() {
       // For encrypted events that haven't been decrypted yet, wait for decryption
       // before processing the notification. The SDK's Timeline re-emission after
       // decryption comes with data.liveEvent=false which would wrongly block it.
-      if (mEvent.getType() === 'm.room.encrypted' && mEvent.isEncrypted()) {
+      if (mEvent.getType() === (EventType.RoomMessageEncrypted as string) && mEvent.isEncrypted()) {
         if (eventId) {
           // Mark this event to skip focus check when decrypted, so we use the focus
           // state from when the encrypted event originally arrived, not when it decrypts.
@@ -704,6 +705,7 @@ function registerNativeNotificationListener(
 // payload attached in sendNativeTauriNotification.
 export function NativeNotificationClickRouting() {
   const setPending = useSetAtom(pendingNotificationAtom);
+  const setActiveSessionId = useSetAtom(activeSessionIdAtom);
   const navigate = useNavigate();
 
   useEffect(
@@ -716,6 +718,8 @@ export function NativeNotificationClickRouting() {
               .catch(() => {});
           }
           if (!data) return;
+          if (!data.user_id) return;
+          setActiveSessionId(data.user_id);
           if (data.type === 'invite') {
             navigate(getInboxInvitesPath());
             return;
@@ -729,7 +733,7 @@ export function NativeNotificationClickRouting() {
           }
         })
       ),
-    [setPending, navigate]
+    [setPending, setActiveSessionId, navigate]
   );
 
   return null;
@@ -740,6 +744,7 @@ const SABLE_REPLY_ACTION = 'sable-reply';
 
 export function NativeNotificationActionRouting() {
   const mx = useMatrixClient();
+  const [hideReads] = useSetting(settingsAtom, 'hideReads');
   const queue = useAtomValue(nativeNotificationRepliesAtom);
   const sessions = useAtomValue(sessionsAtom);
   const sessionsRef = useRef(sessions);
@@ -811,6 +816,9 @@ export function NativeNotificationActionRouting() {
     setInFlight((previous: Set<string>) => new Set(previous).add(item.key));
     void mx
       .sendMessage(item.roomId, null, { msgtype: MsgType.Text, body: item.text })
+      // Replying is reading; otherwise the room stays unread and its
+      // notification lingers while later pushes stack onto it.
+      .then(() => markAsRead(mx, item.roomId, hideReads).catch(() => undefined))
       .catch(() => {
         showToast('Reply was not sent. Open the room to retry.');
       })
@@ -823,7 +831,7 @@ export function NativeNotificationActionRouting() {
         remove(item.key);
       });
     return clearExpiryTimer;
-  }, [mx, queue, remove, setActiveSessionId, inFlight, setInFlight, replyWakeup]);
+  }, [mx, queue, remove, setActiveSessionId, inFlight, setInFlight, replyWakeup, hideReads]);
 
   return null;
 }

@@ -1,5 +1,5 @@
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import type { PerMessageProfile } from '$hooks/usePerMessageProfile';
+import type { PerMessageProfileMsc4461 } from '$hooks/usePerMessageProfile';
 import {
   addOrUpdatePerMessageProfile,
   getAllPerMessageProfiles,
@@ -12,10 +12,14 @@ import { SequenceCard, SequenceCardStyle } from '$components/sequence-card';
 import { PerMessageProfileListItem } from './PerMessageProfileListItem';
 import { SettingTile } from '$components/setting-tile';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
+import {
+  MATRIX_UNSTABLE_COLORS,
+  MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME,
+} from '$unstable/prefixes';
 
 type PerMessageProfileOverviewProps = {
-  onCreateProfile: (profile: PerMessageProfile) => void;
-  onEditProfile: (profile: PerMessageProfile) => void;
+  onCreateProfile: (profile: PerMessageProfileMsc4461) => void;
+  onEditProfile: (profile: PerMessageProfileMsc4461) => void;
 };
 /**
  * Renders a list of per-message profiles along with an editor.
@@ -26,7 +30,7 @@ export function PerMessageProfileOverview({
   onEditProfile,
 }: PerMessageProfileOverviewProps) {
   const mx = useMatrixClient();
-  const [profiles, setProfiles] = useState<PerMessageProfile[]>([]);
+  const [profiles, setProfiles] = useState<PerMessageProfileMsc4461[]>([]);
 
   useEffect(() => {
     const fetchProfiles = async () => {
@@ -43,9 +47,10 @@ export function PerMessageProfileOverview({
 
   const [addState, handleAdd] = useAsyncCallback(
     useCallback(async () => {
-      const newProfile: PerMessageProfile = {
+      const newProfile: PerMessageProfileMsc4461 = {
         id: generateShortId(5),
-        name: 'New Profile',
+        displayname: 'New Profile',
+        trigger: { prefix: [] },
       };
       await addOrUpdatePerMessageProfile(mx, newProfile);
       onCreateProfile(newProfile);
@@ -92,12 +97,12 @@ export function PerMessageProfileOverview({
         >
           <PerMessageProfileListItem
             mx={mx}
+            avatarMxcUrl={profile.avatar_url}
+            displayName={profile.displayname}
+            pronouns={profile[MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME]}
             profileId={profile.id}
-            avatarMxcUrl={profile.avatarUrl}
-            displayName={profile.name}
-            pronouns={profile.pronouns}
-            nameColorLight={profile.colors?.on_light}
-            nameColorDark={profile.colors?.on_dark}
+            nameColorLight={profile[MATRIX_UNSTABLE_COLORS]?.on_light}
+            nameColorDark={profile[MATRIX_UNSTABLE_COLORS]?.on_dark}
             onOpenEditor={handleEdit}
           />
         </SequenceCard>

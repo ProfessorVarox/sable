@@ -1,5 +1,5 @@
 import type { RoomMessageEventContent } from '$types/matrix-sdk';
-import { MatrixError } from '$types/matrix-sdk';
+import { MatrixError, MsgType } from '$types/matrix-sdk';
 import { sendFeedback } from '$utils/sendFeedbackToUser';
 import { CustomStateEvent } from '$types/matrix/room';
 import { ErrorCode } from '../../cs-errorcode';
@@ -140,7 +140,7 @@ export const createMiscCommands = (ctx: CommandContext): Partial<CommandRecord> 
 
         if (mlat && mlon)
           await mx.sendMessage(room.roomId, {
-            msgtype: 'm.location',
+            msgtype: MsgType.Location,
             geo_uri: `geo:${mlat},${mlon};u=0`,
             body: `https://www.openstreetmap.org/?mlat=${mlat}&mlon=${mlon}#map=16/${mlat}/${mlon}"`,
           } as RoomMessageEventContent);
@@ -176,7 +176,7 @@ export const createMiscCommands = (ctx: CommandContext): Partial<CommandRecord> 
             return;
           }
           mx.sendMessage(room.roomId, {
-            msgtype: 'm.location',
+            msgtype: MsgType.Location,
             geo_uri: `geo:${mlat},${mlon}${malt ? `,${malt}` : ''};u=0`,
             body: `https://www.openstreetmap.org/?mlat=${mlat}&mlon=${mlon}#map=16/${mlat}/${mlon}"`,
           } as unknown as RoomMessageEventContent);

@@ -25,7 +25,7 @@ const getAllMessageDefaultRule = (
   conditions.push({
     kind: ConditionKind.EventMatch,
     key: 'type',
-    pattern: encrypted ? 'm.room.encrypted' : 'm.room.message',
+    pattern: encrypted ? EventType.RoomMessageEncrypted : EventType.RoomMessage,
   });
 
   return {

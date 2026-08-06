@@ -108,6 +108,7 @@ export const settingsLinkFocusIdsBySection: Record<SettingsSectionId, readonly s
     'enable-pk-commands',
     'enable-pk-shorthands',
     'enable-pk-latching',
+    'prevent-sending-pmp-fallback',
     'create-pmp',
     'enable-pmp-picker',
   ],

@@ -10,7 +10,7 @@ import { useMediaAuthentication } from '$hooks/useMediaAuthentication.ts';
 import {
   getCurrentlyUsedPerMessageProfileForRoom,
   getAllPerMessageProfiles,
-  type PerMessageProfile,
+  type PerMessageProfileMsc4461,
   setCurrentlyUsedPerMessageProfileIdForRoom,
   getCurrentlyUsedPerMessageProfileForAccount,
   setCurrentlyUsedPerMessageProfileIdForAccount,
@@ -33,7 +33,14 @@ import {
   Badge,
 } from 'folds';
 import type { MatrixClient } from 'matrix-js-sdk';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MutableRefObject,
+} from 'react';
 import * as css from './PersonaPicker.css.ts';
 import { InfoCard } from '$components/info-card/InfoCard.tsx';
 import { InfoIcon } from '@phosphor-icons/react';
@@ -48,42 +55,74 @@ export enum PersonaPickerTab {
   PerRoom = 'PerRoom',
 }
 
+export enum PersonaPickerPresentation {
+  TemporarySelectorMenu = 'TemporarySelectorMenu',
+  PersistentPicker = 'PersistentPicker',
+}
+
 type PersonaPickerProps = {
   tab?: PersonaPickerTab;
   mx: MatrixClient;
-  roomId: string;
-  suppressEditorRefocus: () => void;
-  onTabChange: (tab: PersonaPickerTab) => void;
-  latchedPersona: PerMessageProfile | undefined;
+  roomId?: string;
+  suppressEditorRefocus?: () => void;
+  onTabChange?: (tab: PersonaPickerTab) => void;
+  latchedPersona?: PerMessageProfileMsc4461;
+  onPersonaSelect?: (persona: PerMessageProfileMsc4461 | undefined) => void | Promise<void>;
+  requestClose?: () => void;
+  showNoneOption?: boolean;
+  hideButton?: boolean;
+  hideTabs?: boolean;
+  anchor?: RectCords;
 };
 
-export function PersonaPicker({
-  tab = PersonaPickerTab.Global,
+export function TemporaryPersonaPicker(props: PersonaPickerProps) {
+  return (
+    <PersonaPickerMenu {...props} presentation={PersonaPickerPresentation.TemporarySelectorMenu} />
+  );
+}
+
+export function PersistentPersonaPicker(props: PersonaPickerProps) {
+  return <PersonaPickerMenu {...props} presentation={PersonaPickerPresentation.PersistentPicker} />;
+}
+
+function PersonaPickerMenu({
+  tab: tabProp = PersonaPickerTab.Global,
   mx,
   roomId,
   suppressEditorRefocus,
   onTabChange,
   latchedPersona,
-}: PersonaPickerProps) {
+  onPersonaSelect,
+  anchor,
+  requestClose,
+}: PersonaPickerProps & { presentation: PersonaPickerPresentation }) {
   const useAuthentication = useMediaAuthentication();
+  const [tab, setTab] = useState(tabProp);
   const activeTheme = useActiveTheme();
-  const [AddPersonaMenuAnchor, setAddPersonaMenuAnchor] = useState<RectCords>();
-  const [profiles, setProfiles] = useState<PerMessageProfile[] | undefined>(undefined);
-  const [selectedGlobalPersona, setSelectedGlobalPersona] = useState<PerMessageProfile | null>(
-    null
-  );
-  const [selectedRoomPersona, setSelectedRoomPersona] = useState<PerMessageProfile | null>(
+  const [AddPersonaMenuAnchor, setAddPersonaMenuAnchor] = useState<RectCords | undefined>(anchor);
+  const [profiles, setProfiles] = useState<PerMessageProfileMsc4461[] | undefined>(undefined);
+  const [selectedGlobalPersona, setSelectedGlobalPersona] =
+    useState<PerMessageProfileMsc4461 | null>(null);
+  const [selectedRoomPersona, setSelectedRoomPersona] = useState<PerMessageProfileMsc4461 | null>(
     latchedPersona ?? null
   );
-  const isPickerMenuItemSelected = (persona: PerMessageProfile) => {
+  const mountedRef = useRef(false);
+  const profileFetchGenerationRef = useRef(0);
+  // Bumped on each click so an in-flight sync cannot undo a fresher choice. Global and
+  // per-room selections are independent, so one must not invalidate the other's rollback.
+  const globalSelectionRef = useRef(0);
+  const roomSelectionRef = useRef(0);
+  const isPickerMenuItemSelected = (persona: PerMessageProfileMsc4461) => {
     const selectedPersona =
       tab === PersonaPickerTab.Global ? selectedGlobalPersona : selectedRoomPersona;
     return persona.id === selectedPersona?.id ? true : undefined;
   };
 
   const nameColor = useCallback(
-    (persona: PerMessageProfile) =>
-      activeTheme.kind === ThemeKind.Dark ? persona.colors?.on_dark : persona.colors?.on_light,
+    (persona: PerMessageProfileMsc4461) =>
+      activeTheme.kind === ThemeKind.Dark
+        ? persona['eu.she-a.color']?.on_dark
+        : persona['eu.she-a.color']?.on_light,
     [activeTheme]
   );
 
@@ -92,9 +131,17 @@ export function PersonaPicker({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [filteredProfiles, setFilteredProfiles] = useState<PerMessageProfile[] | undefined>(
+  const [filteredProfiles, setFilteredProfiles] = useState<PerMessageProfileMsc4461[] | undefined>(
     undefined
   );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      profileFetchGenerationRef.current += 1;
+    };
+  }, []);
 
   const clearFilterInput = () => {
     if (searchInputRef.current) {
@@ -104,25 +151,62 @@ export function PersonaPicker({
   };
 
   useEffect(() => {
-    const syncProfile = async () => {
-      const syncedRoomProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
-      if (!selectedRoomPersona) setSelectedRoomPersona(syncedRoomProfile ?? null);
+    let cancelled = false;
 
-      const syncedGlobalProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
-      setSelectedGlobalPersona(syncedGlobalProfile ?? null);
+    const syncProfile = async (
+      generationRef: MutableRefObject<number>,
+      load: () => Promise<PerMessageProfileMsc4461 | undefined>,
+      apply: (profile: PerMessageProfileMsc4461 | null) => void
+    ) => {
+      const generation = generationRef.current;
+      try {
+        const synced = await load();
+        if (!cancelled && generation === generationRef.current) apply(synced ?? null);
+      } catch {
+        // Profile synchronization is best effort; retain the current selection on failure.
+      }
     };
-    syncProfile();
-  }, [mx, roomId, profiles, latchedPersona, selectedRoomPersona]);
 
-  const fetchProfiles = async (mx_: MatrixClient) => {
-    const fetchedProfiles = await getAllPerMessageProfiles(mx_);
-    setProfiles(fetchedProfiles);
-    setFilteredProfiles(fetchedProfiles);
-  };
+    void syncProfile(
+      roomSelectionRef,
+      () =>
+        roomId ? getCurrentlyUsedPerMessageProfileForRoom(mx, roomId) : Promise.resolve(undefined),
+      // A latched persona already reflects the user's intent, so don't overwrite it.
+      (profile) => {
+        if (!selectedRoomPersona) setSelectedRoomPersona(profile);
+      }
+    );
+    void syncProfile(
+      globalSelectionRef,
+      () => getCurrentlyUsedPerMessageProfileForAccount(mx),
+      setSelectedGlobalPersona
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mx, roomId, latchedPersona, selectedRoomPersona]);
+
+  const fetchProfiles = useCallback(async (mx_: MatrixClient) => {
+    const fetchGeneration = ++profileFetchGenerationRef.current;
+    try {
+      const fetchedProfiles = await getAllPerMessageProfiles(mx_);
+      if (!mountedRef.current || fetchGeneration !== profileFetchGenerationRef.current) {
+        return;
+      }
+      setProfiles(fetchedProfiles);
+      setFilteredProfiles(fetchedProfiles);
+    } catch {
+      // Profile loading is best effort; keep the existing list when it fails.
+    }
+  }, []);
 
   useEffect(() => {
-    fetchProfiles(mx);
-  }, [mx]);
+    void fetchProfiles(mx);
+    return () => {
+      profileFetchGenerationRef.current += 1;
+    };
+  }, [fetchProfiles, mx]);
 
   const filter = useCallback(
     (e: FormEvent) => {
@@ -131,7 +215,7 @@ export function PersonaPicker({
       const filtered = term
         ? profiles?.filter((profile) =>
             searchInputRef.current
-              ? profile.name.toLocaleLowerCase().includes(searchInputRef.current?.value) ||
+              ? profile.displayname.toLocaleLowerCase().includes(searchInputRef.current?.value) ||
                 profile.id.toLocaleLowerCase().includes(searchInputRef.current?.value)
               : true
           )
@@ -143,9 +227,9 @@ export function PersonaPicker({
   );
 
   const avatarUrl = useCallback(
-    (profile: PerMessageProfile) => {
-      if (profile.avatarUrl !== undefined) {
-        return mxcUrlToHttp(mx, profile.avatarUrl, useAuthentication, 96, 96, 'crop') ?? undefined;
+    (profile: PerMessageProfileMsc4461) => {
+      if (profile.avatar_url !== undefined) {
+        return mxcUrlToHttp(mx, profile.avatar_url, useAuthentication, 96, 96, 'crop') ?? undefined;
       } else {
         return undefined;
       }
@@ -178,7 +262,10 @@ export function PersonaPicker({
                 variant="Secondary"
                 fill={tab == PersonaPickerTab.Global ? 'Solid' : 'None'}
                 size="500"
-                onClick={() => onTabChange(PersonaPickerTab.Global)}
+                onClick={() => {
+                  setTab(PersonaPickerTab.Global);
+                  onTabChange?.(PersonaPickerTab.Global);
+                }}
               >
                 <Text as="span" size="L400">
                   Global
@@ -190,7 +277,10 @@ export function PersonaPicker({
                 variant="Secondary"
                 fill={tab == PersonaPickerTab.PerRoom ? 'Solid' : 'None'}
                 size="500"
-                onClick={() => onTabChange(PersonaPickerTab.PerRoom)}
+                onClick={() => {
+                  setTab(PersonaPickerTab.PerRoom);
+                  onTabChange?.(PersonaPickerTab.PerRoom);
+                }}
               >
                 <Text as="span" size="L400">
                   Per-room
@@ -219,38 +309,44 @@ export function PersonaPicker({
                     className={css.PersonaPickerMenuItem}
                     aria-selected={isPickerMenuItemSelected(profile)}
                     onClick={async () => {
+                      if (onPersonaSelect) {
+                        await onPersonaSelect(profile);
+                        requestClose?.();
+                        return;
+                      }
                       const isGlobal = tab === PersonaPickerTab.Global;
-                      const selectedPersona = isGlobal
+                      const previousPersona = isGlobal
                         ? selectedGlobalPersona
                         : selectedRoomPersona;
-                      const disabling = profile.id === selectedPersona?.id;
+                      const disabling = profile.id === previousPersona?.id;
+                      const setPersona = isGlobal
+                        ? setSelectedGlobalPersona
+                        : setSelectedRoomPersona;
+                      const generationRef = isGlobal ? globalSelectionRef : roomSelectionRef;
+                      const selectionGeneration = ++generationRef.current;
 
-                      if (!disabling) {
+                      setPersona(disabling ? null : profile);
+
+                      try {
                         if (isGlobal) {
-                          setSelectedGlobalPersona(profile);
-                          await setCurrentlyUsedPerMessageProfileIdForAccount(mx, profile.id);
-                        } else {
-                          setSelectedRoomPersona(profile);
-                          await setCurrentlyUsedPerMessageProfileIdForRoom(mx, roomId, profile.id);
-                        }
-                      } else {
-                        if (isGlobal) {
-                          setSelectedGlobalPersona(null);
                           await setCurrentlyUsedPerMessageProfileIdForAccount(
                             mx,
+                            disabling ? undefined : profile.id,
                             undefined,
-                            undefined,
-                            true
+                            disabling
                           );
                         } else {
-                          setSelectedRoomPersona(null);
                           await setCurrentlyUsedPerMessageProfileIdForRoom(
                             mx,
-                            roomId,
+                            roomId!,
+                            disabling ? undefined : profile.id,
                             undefined,
-                            undefined,
-                            true
+                            disabling
                           );
+                        }
+                      } catch {
+                        if (mountedRef.current && selectionGeneration === generationRef.current) {
+                          setPersona(previousPersona);
                         }
                       }
                     }}
@@ -268,10 +364,10 @@ export function PersonaPicker({
                         <UserAvatar
                           userId={profile.id}
                           src={avatarUrl(profile)}
-                          fallbackColor={profile.colors?.on_light ?? undefined}
+                          fallbackColor={profile['eu.she-a.color']?.on_light ?? undefined}
                           renderFallback={() => (
                             <Text as="span" size="H4" aria-label="Avatar fallback">
-                              {nameInitials(profile.name)}
+                              {nameInitials(profile.displayname)}
                             </Text>
                           )}
                           alt={`Avatar for profile ${profile.id}`}
@@ -283,7 +379,7 @@ export function PersonaPicker({
                       truncate
                       style={{ color: nameColor(profile) ?? undefined, maxWidth: toRem(150) }}
                     >
-                      {profile.name}
+                      {profile.displayname}
                     </Text>
                   </MenuItem>
                 ))}
@@ -315,7 +411,7 @@ export function PersonaPicker({
         onClick={(evt) => {
           // getAllPerMessageProfiles can return an empty list during initial startup.
           if (profiles?.length === 0) {
-            fetchProfiles(mx);
+            void fetchProfiles(mx);
           }
           setAddPersonaMenuAnchor(evt.currentTarget.getBoundingClientRect());
         }}
@@ -343,7 +439,7 @@ export function PersonaPicker({
               src={avatarUrl(defactoPersona()!)}
               renderFallback={() => (
                 <Text as="span" size="H6" aria-label="Avatar fallback">
-                  {nameInitials(defactoPersona()!.name)}
+                  {nameInitials(defactoPersona()!.displayname)}
                 </Text>
               )}
               alt={`Avatar for profile ${defactoPersona()!.id}`}

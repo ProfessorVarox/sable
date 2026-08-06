@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { faker } from '@faker-js/faker';
 import type { Room } from '$types/matrix-sdk';
-import { Direction, RoomEvent } from '$types/matrix-sdk';
+import { Direction, MatrixEventEvent, RoomEvent } from '$types/matrix-sdk';
 import { countVisibleAmongNewest, useTimelineSync } from './useTimelineSync';
 import { getRoomUnreadInfo } from '$utils/timeline';
 import type * as TimelineUtils from '$utils/timeline';
@@ -132,6 +132,15 @@ function createPaginableRoom(roomId = '!room:test') {
   return { room, timelineSet, events };
 }
 
+const mxEmitter = new EventEmitter();
+const makeMx = (extra: Record<string, unknown> = {}) =>
+  ({
+    getUserId: () => '@alice:test',
+    on: mxEmitter.on.bind(mxEmitter),
+    removeListener: mxEmitter.removeListener.bind(mxEmitter),
+    ...extra,
+  }) as never;
+
 function makeEvent(sender: string, roomId: string) {
   return {
     threadRootId: undefined,
@@ -229,7 +238,7 @@ describe('useTimelineSync', () => {
     renderHook(() =>
       useTimelineSync({
         room: room as Room,
-        mx: { getUserId: () => '@alice:test' } as never,
+        mx: makeMx(),
         isAtBottom: false,
         isAtBottomRef: { current: false },
         scrollToBottom,
@@ -261,7 +270,7 @@ describe('useTimelineSync', () => {
     renderHook(() =>
       useTimelineSync({
         room: room as Room,
-        mx: { getUserId: () => '@alice:test' } as never,
+        mx: makeMx(),
         isAtBottom: true,
         isAtBottomRef: { current: true },
         scrollToBottom,
@@ -289,7 +298,7 @@ describe('useTimelineSync', () => {
       ({ room, eventId }) =>
         useTimelineSync({
           room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           eventId,
           isAtBottom: false,
           isAtBottomRef: { current: false },
@@ -326,7 +335,7 @@ describe('useTimelineSync', () => {
       ({ room, eventId }) =>
         useTimelineSync({
           room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           eventId,
           isAtBottom: false,
           isAtBottomRef: { current: false },
@@ -361,7 +370,7 @@ describe('useTimelineSync', () => {
       ({ room }) =>
         useTimelineSync({
           room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           eventId: undefined,
           isAtBottom: false,
           isAtBottomRef: { current: false },
@@ -395,7 +404,7 @@ describe('useTimelineSync', () => {
       renderHook(() =>
         useTimelineSync({
           room: room as Room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           isAtBottom: true,
           isAtBottomRef: { current: true },
           scrollToBottom,
@@ -422,7 +431,7 @@ describe('useTimelineSync', () => {
       renderHook(() =>
         useTimelineSync({
           room: room as Room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           isAtBottom: true,
           isAtBottomRef: { current: true },
           scrollToBottom,
@@ -452,7 +461,7 @@ describe('useTimelineSync', () => {
       renderHook(() =>
         useTimelineSync({
           room: room as Room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           isAtBottom: true,
           isAtBottomRef: { current: true },
           scrollToBottom,
@@ -480,7 +489,7 @@ describe('useTimelineSync', () => {
       renderHook(() =>
         useTimelineSync({
           room: room as Room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           isAtBottom: false,
           isAtBottomRef: { current: false },
           scrollToBottom,
@@ -506,7 +515,7 @@ describe('useTimelineSync', () => {
       renderHook(() =>
         useTimelineSync({
           room: room as Room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           isAtBottom: true,
           isAtBottomRef: { current: true },
           scrollToBottom,
@@ -536,7 +545,7 @@ describe('useTimelineSync', () => {
       renderHook(() =>
         useTimelineSync({
           room: room as Room,
-          mx: { getUserId: () => '@alice:test' } as never,
+          mx: makeMx(),
           isAtBottom: true,
           isAtBottomRef: { current: true },
           scrollToBottom,
@@ -572,7 +581,7 @@ const syncOpts = (
   isEventVisible?: () => boolean
 ) => ({
   room: room as Room,
-  mx: { getUserId: () => '@alice:test', paginateEventTimeline } as never,
+  mx: makeMx({ paginateEventTimeline }),
   isAtBottom: true,
   isAtBottomRef: { current: true },
   scrollToBottom: vi.fn<() => void>(),
@@ -786,7 +795,7 @@ const renderSyncHook = (
   const { result } = renderHook(() =>
     useTimelineSync({
       room: room as Room,
-      mx: (options.mx ?? { getUserId: () => '@alice:test' }) as never,
+      mx: (options.mx ?? makeMx()) as never,
       isAtBottom,
       isAtBottomRef: { current: isAtBottom },
       scrollToBottom,
@@ -947,7 +956,7 @@ describe('live-arrive edge cases', () => {
     renderHook(() =>
       useTimelineSync({
         room: room as Room,
-        mx: { getUserId: () => '@alice:test' } as never,
+        mx: makeMx(),
         isAtBottom: false,
         isAtBottomRef: { current: false },
         scrollToBottom,
@@ -969,6 +978,36 @@ describe('live-arrive edge cases', () => {
 
     expect(setUnreadInfo).toHaveBeenCalledWith(unread);
     expect(scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it('re-renders when an event finishes decrypting', async () => {
+    const { room } = createRoom();
+    const { result } = renderSyncHook(room);
+    const before = result.current.timeline;
+
+    await act(async () => {
+      mxEmitter.emit(MatrixEventEvent.Decrypted, { getRoomId: () => room.roomId });
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => resolve(undefined));
+      });
+    });
+
+    expect(result.current.timeline).not.toBe(before);
+  });
+
+  it('ignores decryption of an event in another room', async () => {
+    const { room } = createRoom();
+    const { result } = renderSyncHook(room);
+    const before = result.current.timeline;
+
+    await act(async () => {
+      mxEmitter.emit(MatrixEventEvent.Decrypted, { getRoomId: () => '!other:test' });
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => resolve(undefined));
+      });
+    });
+
+    expect(result.current.timeline).toBe(before);
   });
 
   it('re-renders when a late local echo updates (slow send acknowledgement)', async () => {
@@ -1016,12 +1055,11 @@ describe('event jump recovery', () => {
       targetTimeline,
       roomInitialSync,
       getLatestTimeline,
-      mx: {
-        getUserId: () => '@alice:test',
+      mx: makeMx({
         roomInitialSync,
         getLatestTimeline,
         getEventTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(targetTimeline)),
-      },
+      }),
     };
   };
 
@@ -1067,13 +1105,12 @@ describe('event jump recovery', () => {
     vi.useFakeTimers();
     try {
       const { room } = createRoom();
-      const mx = {
-        getUserId: () => '@alice:test',
+      const mx = makeMx({
         roomInitialSync: vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined)),
         getLatestTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined)),
         // The homeserver never answers /context: hit the 12 s timeout.
         getEventTimeline: () => new Promise(() => {}),
-      };
+      });
       const { result, scrollToBottom } = renderSyncHook(room, { isAtBottom: false, mx });
 
       await act(async () => {
@@ -1099,7 +1136,7 @@ describe('sliding sync chain relink', () => {
       undefined;
     const paginateEventTimeline = vi.fn<() => Promise<boolean>>(() => Promise.resolve(false));
     const { result } = renderSyncHook(room, {
-      mx: { getUserId: () => '@alice:test', paginateEventTimeline },
+      mx: makeMx({ paginateEventTimeline }),
     });
 
     expect(result.current.eventsLength).toBe(1);
@@ -1150,7 +1187,7 @@ describe('sync transport fuzz', () => {
         const { result, unmount } = renderHook(() =>
           useTimelineSync({
             room: room as Room,
-            mx: { getUserId: () => '@alice:test', paginateEventTimeline } as never,
+            mx: makeMx({ paginateEventTimeline }),
             isAtBottom: false,
             isAtBottomRef: { current: false },
             scrollToBottom,
@@ -1210,4 +1247,86 @@ describe('sync transport fuzz', () => {
       }
     }
   );
+});
+
+const flushFrame = async () => {
+  await act(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(undefined));
+    });
+  });
+};
+
+describe('decryption refresh coalescing', () => {
+  // Counts distinct timeline objects, not renders: unrelated re-renders reuse the object.
+  const renderTrackingHook = (room: FakeRoom) => {
+    const seen: unknown[] = [];
+    renderHook(() => {
+      const sync = useTimelineSync({
+        room: room as Room,
+        mx: makeMx(),
+        isAtBottom: true,
+        isAtBottomRef: { current: true },
+        scrollToBottom: vi.fn<() => void>(),
+        unreadInfo: undefined,
+        setUnreadInfo: vi.fn<() => void>(),
+        hideReadsRef: { current: false },
+        readUptoEventIdRef: { current: undefined },
+      });
+      if (!seen.includes(sync.timeline)) seen.push(sync.timeline);
+      return sync;
+    });
+    return seen;
+  };
+
+  // One act() per event mirrors decryptions landing in separate tasks.
+  const emitDecryptedAcrossTasks = async (room: FakeRoom, eventCount: number) => {
+    for (let i = 0; i < eventCount; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await act(async () => {
+        mxEmitter.emit(MatrixEventEvent.Decrypted, { getRoomId: () => room.roomId });
+      });
+    }
+  };
+
+  it('collapses a backlog decryption burst into a single timeline update', async () => {
+    const { room } = createRoom();
+    const seen = renderTrackingHook(room);
+    const initial = seen.length;
+
+    await emitDecryptedAcrossTasks(room, 25);
+    await flushFrame();
+
+    // Uncoalesced this is 25. A frame boundary may split the burst, so allow a small range.
+    expect(seen.length - initial).toBeGreaterThan(0);
+    expect(seen.length - initial).toBeLessThan(5);
+  });
+
+  it('re-arms for the next burst', async () => {
+    const { room } = createRoom();
+    const seen = renderTrackingHook(room);
+    const initial = seen.length;
+
+    await emitDecryptedAcrossTasks(room, 5);
+    await flushFrame();
+    const afterFirstBurst = seen.length;
+    await emitDecryptedAcrossTasks(room, 5);
+    await flushFrame();
+
+    expect(afterFirstBurst).toBeGreaterThan(initial);
+    expect(seen.length).toBeGreaterThan(afterFirstBurst);
+  });
+
+  it('ignores decryption bursts from another room', async () => {
+    const { room } = createRoom();
+    const seen = renderTrackingHook(room);
+    const initial = seen.length;
+
+    await act(async () => {
+      mxEmitter.emit(MatrixEventEvent.Decrypted, { getRoomId: () => '!other:test' });
+    });
+    await flushFrame();
+
+    expect(seen.length).toBe(initial);
+  });
 });

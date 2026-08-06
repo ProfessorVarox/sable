@@ -1,6 +1,6 @@
 import { splitWithSpace } from '$utils/common';
 import { sendFeedback } from '$utils/sendFeedbackToUser';
-import type { PerMessageProfile } from '../usePerMessageProfile';
+import type { PerMessageProfileMsc4461 } from '../usePerMessageProfile';
 import {
   addOrUpdatePerMessageProfile,
   deletePerMessageProfile,
@@ -26,19 +26,20 @@ export const createPmpCommands = (ctx: CommandContext): Partial<CommandRecord> =
           sendFeedback(`invalid payload`, room, mx.getSafeUserId());
           return;
         }
-        const avatarUrl: string | undefined = args[5];
+        const avatar_url: string | undefined = args[5];
         const name: string | undefined = args[3];
         const profileId = args[1];
 
-        if (!avatarUrl || !name || !profileId) {
+        if (!avatar_url || !name || !profileId) {
           sendFeedback(`invalid payload`, room, mx.getSafeUserId());
           return;
         }
 
-        const pmp: PerMessageProfile = {
+        const pmp: PerMessageProfileMsc4461 = {
           id: profileId,
-          name: name || '',
-          avatarUrl,
+          displayname: name || '',
+          avatar_url,
+          trigger: { prefix: [] },
         };
         await addOrUpdatePerMessageProfile(mx, pmp)
           .then(() => {

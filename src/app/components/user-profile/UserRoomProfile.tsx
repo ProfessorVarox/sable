@@ -106,6 +106,8 @@ function UserExtendedSection({
   const [miscDataIndex, setMiscDataIndex] = useState(-1);
 
   const [renderAnimals] = useSetting(settingsAtom, 'renderAnimals');
+  const [hour24Clock] = useSetting(settingsAtom, 'hour24Clock');
+
   const isCat = profile.isCat === true;
   const hasCats = profile.hasCats === true;
   const isAnimal = profile.isAnimal ?? (isCat && 'cat');
@@ -139,11 +141,12 @@ function UserExtendedSection({
         hour: 'numeric',
         minute: '2-digit',
         timeZone: profile.timezone.replaceAll(/^["']|["']$/g, ''),
+        hour12: !hour24Clock,
       }).format(new Date());
     } catch {
       return null;
     }
-  }, [profile.timezone]);
+  }, [profile.timezone, hour24Clock]);
 
   const bioContent = useMemo(() => {
     let rawBio =

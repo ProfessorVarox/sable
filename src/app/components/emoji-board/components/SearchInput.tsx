@@ -7,6 +7,7 @@ import { EmojiBoardTab } from '../types';
 
 type SearchInputProps = {
   query?: string;
+  defaultValue?: string;
   onChange: ChangeEventHandler<HTMLInputElement>;
   allowTextCustomEmoji?: boolean;
   onTextCustomEmojiSelect?: (text: string) => void;
@@ -14,6 +15,7 @@ type SearchInputProps = {
 };
 export function SearchInput({
   query,
+  defaultValue,
   onChange,
   allowTextCustomEmoji,
   onTextCustomEmojiSelect,
@@ -40,6 +42,7 @@ export function SearchInput({
             : 'Search'
       }
       maxLength={50}
+      defaultValue={defaultValue}
       after={
         allowTextCustomEmoji && query && tab !== EmojiBoardTab.Gif ? (
           <Chip

@@ -548,6 +548,25 @@ describe('unread read marker (sliding sync)', () => {
 });
 
 describe('scroll-edge pagination', () => {
+  it('marks the timeline as at the bottom when jumping to latest', async () => {
+    const { getByText, queryByText } = renderTimeline();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+
+    // Simulate a stale virtualizer measurement reporting the viewport above the
+    // bottom. A programmatic jump may not emit a follow-up scroll event.
+    act(() => lastOnScroll?.(0));
+    expect(getByText('Jump to Latest')).toBeTruthy();
+
+    act(() => {
+      getByText('Jump to Latest').click();
+    });
+
+    expect(queryByText('Jump to Latest')).toBeNull();
+  });
+
   it('paginates backwards near the top only while a pagination token exists', () => {
     const { rerender } = renderTimeline();
 

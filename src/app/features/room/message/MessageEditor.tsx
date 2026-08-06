@@ -81,6 +81,7 @@ import {
   readdAngleBracketsForHiddenPreviews,
   stripMarkdownEscapesForHiddenPreviews,
 } from './hiddenLinkPreviews';
+import { stripPerMessageProfileFormattedBody } from '$hooks/usePerMessageProfile';
 
 // Wraps the mobile emoji-board overlay so the Android back action closes it
 // instead of navigating away. Hooks can't run inside the UseStateProvider
@@ -126,6 +127,7 @@ export const MessageEditor = as<'div', MessageEditorProps>(
     const nicknames = useAtomValue(nicknamesAtom);
     const editor = useEditor();
     const [enterForNewline] = useSetting(settingsAtom, 'enterForNewline');
+    const [pmpNoFallback] = useSetting(settingsAtom, 'pmpNoFallback');
     const isComposing = useComposingCheck();
 
     const [autocompleteQuery, setAutocompleteQuery] =
@@ -164,10 +166,7 @@ export const MessageEditor = as<'div', MessageEditorProps>(
       }
 
       if (pmpDisplayname && typeof customHtml === 'string') {
-        customHtml = customHtml.replace(
-          /^<strong\s+data-mx-profile-fallback[^>]*>.*?<\/strong>/,
-          ''
-        );
+        customHtml = stripPerMessageProfileFormattedBody(customHtml);
       }
 
       const bundleContent =
@@ -292,11 +291,12 @@ export const MessageEditor = as<'div', MessageEditorProps>(
           eventId,
           mMentions,
           linkPreviews,
-          rawPmp
+          rawPmp,
+          pmpNoFallback
         );
 
         return mx.sendMessage(roomId, content as RoomMessageEventContent);
-      }, [mx, editor, roomId, mEvent, getPrevBodyAndFormattedBody, room])
+      }, [mx, editor, roomId, mEvent, getPrevBodyAndFormattedBody, room, pmpNoFallback])
     );
 
     const handleSave = useCallback(() => {

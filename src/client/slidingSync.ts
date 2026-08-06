@@ -170,8 +170,8 @@ const SPACE_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
   [EventType.RoomEncryption, ''],
   [EventType.RoomTombstone, ''],
   [CustomStateEvent.RoomBanner, ''],
-  ['m.space.child', MSC3575_WILDCARD],
-  ['m.space.parent', MSC3575_WILDCARD],
+  [EventType.SpaceChild, MSC3575_WILDCARD],
+  [EventType.SpaceParent, MSC3575_WILDCARD],
 ];
 
 const ACTIVE_ROOM_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
@@ -192,8 +192,8 @@ const ACTIVE_ROOM_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
   [EventType.RoomThirdPartyInvite, MSC3575_WILDCARD],
   [EventType.RoomMember, MSC3575_STATE_KEY_ME],
   [EventType.RoomMember, MSC3575_STATE_KEY_LAZY],
-  ['m.space.child', MSC3575_WILDCARD],
-  ['m.space.parent', MSC3575_WILDCARD],
+  [EventType.SpaceChild, MSC3575_WILDCARD],
+  [EventType.SpaceParent, MSC3575_WILDCARD],
   [EventType.GroupCallPrefix, ''],
   [EventType.GroupCallMemberPrefix, MSC3575_WILDCARD],
   ...Object.values(CustomStateEvent).map((type) => [type, MSC3575_WILDCARD] as [string, string]),
