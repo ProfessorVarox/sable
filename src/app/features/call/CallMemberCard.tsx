@@ -59,6 +59,7 @@ function CallMemberCard({ member }: CallMemberCardProps) {
           room.roomId,
           undefined,
           userId,
+          undefined,
           getMouseEventCords(evt.nativeEvent),
           'Right'
         )

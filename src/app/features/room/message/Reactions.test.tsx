@@ -1,5 +1,5 @@
-import type { TouchEventHandler } from 'react';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import type { ReactNode, TouchEventHandler } from 'react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MatrixEvent, Relations, Room } from '$types/matrix-sdk';
 
@@ -22,7 +22,18 @@ vi.mock('$components/emoji-board', () => ({
 }));
 
 vi.mock('$features/room/reaction-viewer', () => ({
-  ReactionViewer: () => null,
+  ReactionViewer: ({ initialKey }: { initialKey?: string }) => (
+    <button
+      type="button"
+      aria-label="Reaction viewer"
+      data-testid="reaction-viewer"
+      data-initial-key={initialKey}
+    />
+  ),
+}));
+
+vi.mock('focus-trap-react', () => ({
+  default: ({ children }: { children: ReactNode }) => children,
 }));
 
 import { Reactions } from './Reactions';
@@ -64,6 +75,10 @@ function renderReactions(onTouchStart: TouchEventHandler<HTMLDivElement>) {
 }
 
 describe('Reactions touch handling', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('does not let touchstart on a reaction chip reach the parent Message handler', () => {
     const onParentTouchStart = vi.fn<() => void>();
     const { container } = renderReactions(onParentTouchStart);
@@ -84,5 +99,19 @@ describe('Reactions touch handling', () => {
     fireEvent.touchStart(chip.parentElement);
 
     expect(onParentTouchStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the selected reaction viewer after a long press', () => {
+    vi.useFakeTimers();
+    const onParentTouchStart = vi.fn<() => void>();
+    const { container, getByTestId } = renderReactions(onParentTouchStart);
+
+    const chip = container.querySelector('[data-reaction-key]');
+    if (!chip) throw new Error('reaction chip not rendered');
+    fireEvent.touchStart(chip, { touches: [{ clientX: 20, clientY: 30 }] });
+    act(() => vi.advanceTimersByTime(500));
+
+    expect(getByTestId('reaction-viewer')).toHaveAttribute('data-initial-key', '👍');
+    expect(onParentTouchStart).not.toHaveBeenCalled();
   });
 });

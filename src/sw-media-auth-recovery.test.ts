@@ -82,6 +82,50 @@ describe('service worker media auth recovery', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('resolves a push without user_id against the only known account', async () => {
+    await swTestHooks.setSession(
+      'alice-window',
+      'alice-token',
+      'https://matrix.example.org',
+      '@alice:example.org'
+    );
+
+    await expect(swTestHooks.getSessionForPush(undefined)).resolves.toMatchObject({
+      accessToken: 'alice-token',
+    });
+  });
+
+  it('resolves a push without user_id from cache after an sw restart', async () => {
+    persistedSessions = JSON.stringify({
+      '@alice:example.org': {
+        accessToken: 'alice-token',
+        baseUrl: 'https://matrix.example.org',
+        userId: '@alice:example.org',
+      },
+    });
+
+    await expect(swTestHooks.getSessionForPush(undefined)).resolves.toMatchObject({
+      accessToken: 'alice-token',
+    });
+  });
+
+  it('refuses to guess an account for a push without user_id when several are signed in', async () => {
+    await swTestHooks.setSession(
+      'alice-window',
+      'alice-token',
+      'https://matrix.example.org',
+      '@alice:example.org'
+    );
+    await swTestHooks.setSession(
+      'bob-window',
+      'bob-token',
+      'https://matrix.example.org',
+      '@bob:example.org'
+    );
+
+    await expect(swTestHooks.getSessionForPush(undefined)).resolves.toBeUndefined();
+  });
+
   it('removes a stale persisted account when a client switches users', async () => {
     await swTestHooks.setSession(
       'client-a',

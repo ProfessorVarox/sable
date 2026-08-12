@@ -51,6 +51,7 @@ export function MemberGlance({ room, members, speakers, max = 6 }: MemberGlanceP
                 room.roomId,
                 undefined,
                 userId,
+                undefined,
                 getMouseEventCords(evt.nativeEvent),
                 'Top'
               )

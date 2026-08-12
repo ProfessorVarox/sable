@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react';
-import type { MatrixEvent, EventTimelineSet, EventTimeline } from '$types/matrix-sdk';
+import type { MatrixEvent, EventStatus, EventTimelineSet, EventTimeline } from '$types/matrix-sdk';
 import { EventType } from '$types/matrix-sdk';
 import {
   isMembershipChanged,
@@ -41,6 +41,7 @@ export interface ProcessedEvent {
   id: string;
   itemIndex: number;
   mEvent: MatrixEvent;
+  isRedacted: boolean;
   timelineSet: EventTimelineSet;
   eventSender: string | null;
   collapsed: boolean;
@@ -49,6 +50,8 @@ export interface ProcessedEvent {
   editId: string | undefined;
   reactionsKey: string;
   content: unknown;
+  // MatrixEvent status changes in place, so include it in row memoization.
+  sendStatus: EventStatus | null;
 }
 
 /** Raw timeline indices for skipped events (reactions, edits, …) have no row; walk backward to a visible one. */
@@ -105,15 +108,20 @@ type ProcessedEventDraft = Omit<
   | 'editId'
   | 'reactionsKey'
   | 'content'
+  | 'sendStatus'
 >;
 
 type TimelineEventEntry = {
   mEvent: MatrixEvent;
   timelineSet: EventTimelineSet;
+  isRedacted: boolean;
+  id: string | undefined;
+  ts: number;
   // Decryption rewrites a MatrixEvent in place, so identity alone does not prove a cached
   // row still matches it. Undefined for unencrypted events.
   clearType: string | undefined;
   clearContent: unknown;
+  sendStatus: EventStatus | null;
 };
 
 const flattenTimelineEvents = (linkedTimelines: EventTimeline[]): TimelineEventEntry[] => {
@@ -125,8 +133,12 @@ const flattenTimelineEvents = (linkedTimelines: EventTimeline[]): TimelineEventE
       entries.push({
         mEvent,
         timelineSet,
+        isRedacted: mEvent.isRedacted(),
+        id: mEvent.getId(),
+        ts: mEvent.getTs(),
         clearType: encrypted ? mEvent.getType() : undefined,
         clearContent: encrypted ? mEvent.getContent() : undefined,
+        sendStatus: mEvent.getAssociatedStatus(),
       });
     });
   });
@@ -138,8 +150,12 @@ const isCachedEntryCurrent = (
   current: TimelineEventEntry | undefined
 ): boolean =>
   cached.mEvent === current?.mEvent &&
+  cached.id === current.id &&
+  cached.ts === current.ts &&
+  cached.isRedacted === current.isRedacted &&
   cached.clearType === current.clearType &&
-  cached.clearContent === current.clearContent;
+  cached.clearContent === current.clearContent &&
+  cached.sendStatus === current.sendStatus;
 
 const computeCollapseAndDividers = (
   drafts: ProcessedEventDraft[],
@@ -153,12 +169,13 @@ const computeCollapseAndDividers = (
   let isPrevRendered = false;
   let newDivider = false;
   let dayDivider = false;
+  let dividerPlaced = false;
 
   return drafts.map((draft) => {
     const { mEvent, eventSender } = draft;
     const type = mEvent.getType();
 
-    if (!newDivider && readUptoEventId) {
+    if (!newDivider && !dividerPlaced && readUptoEventId) {
       const prevId = prevEvent ? prevEvent.getId() : undefined;
       newDivider = prevId === readUptoEventId || draft.id === carriedDividerId;
     }
@@ -194,7 +211,10 @@ const computeCollapseAndDividers = (
 
     prevEvent = mEvent;
     isPrevRendered = true;
-    if (willRenderNewDivider) newDivider = false;
+    if (willRenderNewDivider) {
+      newDivider = false;
+      dividerPlaced = true;
+    }
     if (willRenderDayDivider) dayDivider = false;
 
     const editId = getEditedEvent(draft.id, mEvent, draft.timelineSet)?.getId();
@@ -210,6 +230,7 @@ const computeCollapseAndDividers = (
       editId,
       reactionsKey,
       content,
+      sendStatus: mEvent.getAssociatedStatus(),
     };
   });
 };
@@ -227,37 +248,56 @@ const mergeDraftsAndExtras = (
     ({ collapsed: _c, willRenderNewDivider: _n, willRenderDayDivider: _d, ...draft }) => draft
   );
 
-  const extraDrafts = extras
-    .map(({ mEvent, timelineSet, parentId, itemIndex = -1 }) => ({
-      draft: {
-        id: mEvent.getId()!,
-        itemIndex,
-        mEvent,
-        timelineSet,
-        eventSender: mEvent.getSender() ?? null,
-      },
-      effectiveTs: mEvent.getTs(),
-      parentId,
-    }))
-    .toSorted((a, b) => a.effectiveTs - b.effectiveTs);
+  const extraDrafts = extras.map(({ mEvent, timelineSet, parentId, itemIndex = -1 }) => ({
+    draft: {
+      id: mEvent.getId()!,
+      itemIndex,
+      mEvent,
+      isRedacted: mEvent.isRedacted(),
+      timelineSet,
+      eventSender: mEvent.getSender() ?? null,
+    },
+    parentId,
+  }));
 
   const buckets: ProcessedEventDraft[][] = Array.from(
     { length: resultDrafts.length + 1 },
     () => []
   );
   const indexById = new Map(resultDrafts.map((draft, index) => [draft.id, index]));
+  let timelineOrderIndex: { itemIndex: number; bucket: number }[] | undefined;
 
-  for (const extra of extraDrafts) {
-    const extraTs = extra.effectiveTs;
-    const parentIdx = indexById.get(extra.parentId) ?? -1;
-    let low = parentIdx + 1;
-    let high = resultDrafts.length;
+  const bucketByTimelineOrder = (itemIndex: number): number => {
+    if (itemIndex < 0) return resultDrafts.length;
+    if (!timelineOrderIndex) {
+      timelineOrderIndex = resultDrafts
+        .flatMap((draft, index) =>
+          draft.itemIndex < 0 ? [] : [{ itemIndex: draft.itemIndex, bucket: index + 1 }]
+        )
+        .toSorted((a, b) => a.itemIndex - b.itemIndex);
+
+      let maxBucket = 0;
+      for (const entry of timelineOrderIndex) {
+        maxBucket = Math.max(maxBucket, entry.bucket);
+        entry.bucket = maxBucket;
+      }
+    }
+
+    let low = 0;
+    let high = timelineOrderIndex.length;
     while (low < high) {
       const mid = low + Math.floor((high - low) / 2);
-      if (resultDrafts[mid]!.mEvent.getTs() <= extraTs) low = mid + 1;
+      if (timelineOrderIndex[mid]!.itemIndex <= itemIndex) low = mid + 1;
       else high = mid;
     }
-    buckets[low]!.push(extra.draft);
+    return low === 0 ? 0 : timelineOrderIndex[low - 1]!.bucket;
+  };
+
+  for (const extra of extraDrafts) {
+    const parentIdx = indexById.get(extra.parentId);
+    buckets[
+      parentIdx === undefined ? bucketByTimelineOrder(extra.draft.itemIndex) : parentIdx + 1
+    ]!.push(extra.draft);
   }
 
   const mergedDrafts: ProcessedEventDraft[] = [...buckets[0]!];
@@ -433,7 +473,7 @@ const processTimelineItems = (
   for (const item of items) {
     const entry = timelineEvents[item];
     if (!entry) continue;
-    const { mEvent, timelineSet } = entry;
+    const { mEvent, timelineSet, isRedacted } = entry;
     const { threadRootId } = mEvent;
     const mEventId = mEvent.getId();
     if (!mEventId) continue;
@@ -461,7 +501,7 @@ const processTimelineItems = (
       }
     }
 
-    if (mEvent.isRedacted()) {
+    if (isRedacted) {
       const showMessageTombstone = showTombstoneEvents && isRedactableMessageType(type);
       const showReactionTombstone = hiddenEventReactionTombstone && isReaction;
       if (!showMessageTombstone && !showReactionTombstone) continue;
@@ -476,8 +516,8 @@ const processTimelineItems = (
 
     const allowSpecificHiddenEvent =
       (isEdit && hiddenEventEdits) ||
-      (isReaction && !mEvent.isRedacted() && hiddenEventReactions) ||
-      (isReaction && mEvent.isRedacted() && hiddenEventReactionTombstone) ||
+      (isReaction && !isRedacted && hiddenEventReactions) ||
+      (isReaction && isRedacted && hiddenEventReactionTombstone) ||
       (isRedactionEvt &&
         shouldShowRedactionTimelineEvent(
           mEvent,
@@ -504,7 +544,7 @@ const processTimelineItems = (
 
     if (isEdit && !hiddenEventEdits) continue;
     if (isReaction) {
-      if (mEvent.isRedacted()) {
+      if (isRedacted) {
         if (!hiddenEventReactionTombstone) continue;
       } else if (!hiddenEventReactions) {
         continue;
@@ -555,6 +595,7 @@ const processTimelineItems = (
       id: mEventId,
       itemIndex: item,
       mEvent,
+      isRedacted,
       timelineSet,
       eventSender,
       collapsed,
@@ -567,6 +608,7 @@ const processTimelineItems = (
           ?.map((r) => `${r[0]}:${r[1].size}`)
           .join(',') ?? '',
       content: mEvent.getContent(),
+      sendStatus: mEvent.getAssociatedStatus(),
     });
 
     state.prevEvent = mEvent;

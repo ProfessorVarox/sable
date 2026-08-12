@@ -451,10 +451,11 @@ export function MessagePreview({
         room.roomId,
         undefined,
         sender,
+        perMessageProfile,
         evt.currentTarget.getBoundingClientRect()
       );
     },
-    [openUserRoomProfile, room.roomId, sender]
+    [openUserRoomProfile, room.roomId, perMessageProfile, sender]
   );
 
   return (

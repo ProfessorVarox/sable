@@ -7,8 +7,10 @@ import type {
   MSC3575RoomSubscription,
   MSC3575SlidingSyncResponse,
   Room,
+  EventTimelineSet,
 } from '$types/matrix-sdk';
 import {
+  EventStatus,
   KnownMembership,
   MatrixEvent,
   MSC3575_WILDCARD,
@@ -22,6 +24,8 @@ import {
   EventTimeline,
   EventEmitterEvents,
   ClientEvent,
+  RoomEvent,
+  UNSTABLE_ELEMENT_FUNCTIONAL_USERS,
 } from '$types/matrix-sdk';
 import { createLogger } from '$utils/debug';
 import { createDebugLogger } from '$utils/debugLogger';
@@ -34,13 +38,16 @@ const debugLog = createDebugLogger('slidingSync');
 
 const LIST_JOINED = 'joined';
 const LIST_INVITES = 'invites';
-const LIST_UPDATES = 'updates';
 const LIST_TIMELINE_LIMIT = 1;
-const LIST_PAGE_SIZE = 30;
-const STEADY_STATE_DETAILED_ROOMS = 3;
-const DEFAULT_POLL_TIMEOUT_MS = 45000;
 
-const LIST_SORT_ORDER = ['by_recency', 'by_name'];
+// MSC4186 room_subscriptions maximum.
+const MAX_ROOM_SUBSCRIPTIONS = 100;
+
+const LIST_PAGE_SIZE = 30;
+const DEFAULT_POLL_TIMEOUT_MS = 45000;
+// Mirrors the js-sdk's own BUFFER_PERIOD_MS so our watchdog sits after its `clientTimeout`.
+const SDK_CLIENT_TIMEOUT_BUFFER_MS = 10_000;
+const POLL_DEADLINE_MARGIN_MS = 20_000;
 
 const ACTIVE_ROOM_SUBSCRIPTION_KEY = 'active_room';
 const SIDEBAR_ROOM_SUBSCRIPTION_KEY = 'sidebar_room';
@@ -48,6 +55,7 @@ const SPACE_SUBSCRIPTION_KEY = 'space';
 const IMAGE_PACK_SUBSCRIPTION_KEY = 'image_packs';
 const SPACE_IMAGE_PACK_SUBSCRIPTION_KEY = 'space_image_packs';
 const ACTIVE_ROOM_TIMELINE_LIMIT = 50;
+const ROUTE_ADOPTION_TIMEOUT_MS = 30_000;
 const OPTIMISTIC_JOIN_MAX_SYNC_CYCLES = 10;
 const OPTIMISTIC_JOIN_VERIFY_AFTER_CYCLES = 3;
 
@@ -59,7 +67,6 @@ type OptimisticJoin = {
 
 export type PartialSlidingSyncRequest = {
   filters?: MSC3575List['filters'];
-  sort?: string[];
   ranges?: [number, number][];
 };
 
@@ -148,7 +155,6 @@ const buildSelfJoinEvent = (
 };
 
 const buildListRequiredState = (): MSC3575RoomSubscription['required_state'] => [
-  // first sync limited solely to what's needed to render rooms
   [EventType.RoomAvatar, ''],
   [EventType.RoomTombstone, ''],
   [EventType.RoomEncryption, ''],
@@ -159,6 +165,8 @@ const buildListRequiredState = (): MSC3575RoomSubscription['required_state'] => 
   [EventType.RoomMember, MSC3575_STATE_KEY_ME],
   [EventType.GroupCallPrefix, ''],
   [EventType.GroupCallMemberPrefix, MSC3575_WILDCARD],
+  // Feeds functional-member filtering for bridged DM names/avatars.
+  [UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name, ''],
 ];
 
 const SPACE_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
@@ -196,6 +204,7 @@ const ACTIVE_ROOM_REQUIRED_STATE: MSC3575RoomSubscription['required_state'] = [
   [EventType.SpaceParent, MSC3575_WILDCARD],
   [EventType.GroupCallPrefix, ''],
   [EventType.GroupCallMemberPrefix, MSC3575_WILDCARD],
+  [UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name, ''],
   ...Object.values(CustomStateEvent).map((type) => [type, MSC3575_WILDCARD] as [string, string]),
 ];
 
@@ -242,7 +251,6 @@ const buildLists = (): Map<string, MSC3575List> => {
 
   lists.set(LIST_JOINED, {
     ranges: [[0, LIST_PAGE_SIZE - 1]],
-    sort: LIST_SORT_ORDER,
     timeline_limit: LIST_TIMELINE_LIMIT,
     required_state: listRequiredState,
     filters: { is_invite: false },
@@ -250,18 +258,9 @@ const buildLists = (): Map<string, MSC3575List> => {
 
   lists.set(LIST_INVITES, {
     ranges: [[0, LIST_PAGE_SIZE - 1]],
-    sort: LIST_SORT_ORDER,
     timeline_limit: LIST_TIMELINE_LIMIT,
     required_state: listRequiredState,
     filters: { is_invite: true },
-  });
-
-  lists.set(LIST_UPDATES, {
-    ranges: [[0, LIST_PAGE_SIZE - 1]],
-    sort: LIST_SORT_ORDER,
-    timeline_limit: LIST_TIMELINE_LIMIT,
-    required_state: [[EventType.RoomMember, MSC3575_STATE_KEY_ME]],
-    filters: { is_invite: false },
   });
 
   return lists;
@@ -278,21 +277,183 @@ type RoomScopedExtension = {
   rooms?: string[];
 };
 
-export const scopeEphemeralExtensions = (
+// Receipts stay unscoped on purpose: they drive unread state for every room in
+// the sidebar, and a room that never receives one reads as permanently unread.
+export const scopeTypingExtension = (
   extensions: object | undefined,
   roomIds: readonly string[]
 ): void => {
   if (!extensions) return;
-  const extensionMap = extensions as Record<string, unknown>;
 
-  ['typing', 'receipts'].forEach((name) => {
-    const extension = extensionMap[name];
-    if (!extension || typeof extension !== 'object') return;
+  const typing = (extensions as Record<string, unknown>).typing;
+  if (!typing || typeof typing !== 'object') return;
 
-    const scopedExtension = extension as RoomScopedExtension;
-    scopedExtension.lists = [];
-    scopedExtension.rooms = [...roomIds];
-  });
+  const scopedTyping = typing as RoomScopedExtension;
+  scopedTyping.lists = [];
+  scopedTyping.rooms = [...roomIds];
+};
+
+type SlidingSyncTimelineRoomData = MSC3575RoomData & {
+  expanded_timeline?: boolean;
+  unstable_expanded_timeline?: boolean;
+};
+
+type PreparedRoomSubscription = {
+  afterRequestId: number;
+  requiresSubscriptionResponse: boolean;
+  listener: () => void;
+};
+
+type TrackedSlidingSyncResponse = {
+  requestId: number;
+  subscriptionRoomIds: ReadonlySet<string>;
+};
+
+type TimelineResetCompletion = () => void;
+
+export const prepareSlidingSyncTimelines = (
+  resp: MSC3575SlidingSyncResponse | null,
+  mx?: MatrixClient,
+  subscribedRoomIds?: ReadonlySet<string>
+): TimelineResetCompletion | null => {
+  if (!resp?.rooms) return null;
+  let didResetTimeline = false;
+  const pendingEventsToRestore: Array<{
+    timelineSet: EventTimelineSet;
+    events: MatrixEvent[];
+  }> = [];
+
+  for (const [roomId, roomData] of Object.entries(resp.rooms)) {
+    const timelineData = roomData as SlidingSyncTimelineRoomData;
+    const serverReportedLimited = timelineData.limited === true;
+    const hasExpandedFlag =
+      timelineData.expanded_timeline === true || timelineData.unstable_expanded_timeline === true;
+    const numLive = timelineData.num_live;
+    const timeline = Array.isArray(timelineData.timeline) ? timelineData.timeline : [];
+    const timelineLength = timeline.length;
+    const room = mx?.getRoom(roomId);
+    const timelineSet = room?.getUnfilteredTimelineSet();
+    const liveTimeline = room?.getLiveTimeline();
+    const liveEvents = liveTimeline?.getEvents() ?? [];
+    if (serverReportedLimited && room) {
+      void room.clearLoadedMembersIfNeeded().catch((error: unknown) => {
+        debugLog.warn('sync', 'Failed to flush lazily loaded members after a gap', {
+          roomId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    const liveEventIds: string[] = [];
+    for (const event of liveEvents) {
+      const eventId = event.getId();
+      if (eventId) liveEventIds.push(eventId);
+    }
+    const knownEventIds = new Set(liveEventIds);
+    const hasHistoricalEvents =
+      timelineData.initial !== true &&
+      typeof numLive === 'number' &&
+      Number.isInteger(numLive) &&
+      numLive >= 0 &&
+      numLive < timelineLength;
+    let hasHistoricalOverlap = false;
+    if (!hasExpandedFlag && !hasHistoricalEvents && timelineData.initial !== true) {
+      let sawUnknownEvent = false;
+      hasHistoricalOverlap = timeline.some((event) => {
+        const eventId = event.event_id;
+        if (typeof eventId !== 'string') return false;
+        if (knownEventIds.has(eventId)) return sawUnknownEvent;
+        sawUnknownEvent = true;
+        return false;
+      });
+    }
+
+    const responseEventIds = timeline
+      .map((event) => event.event_id)
+      .filter((eventId): eventId is string => typeof eventId === 'string');
+    const firstKnownResponseIndex = responseEventIds.findIndex((eventId) =>
+      knownEventIds.has(eventId)
+    );
+    const firstKnownLiveIndex =
+      firstKnownResponseIndex < 0
+        ? -1
+        : liveEventIds.indexOf(responseEventIds[firstKnownResponseIndex]!);
+    const hasSparseOverlap = firstKnownResponseIndex > 0 && firstKnownLiveIndex > 0;
+
+    const isRequestedExpansion =
+      subscribedRoomIds?.has(roomId) === true &&
+      knownEventIds.size > 0 &&
+      firstKnownResponseIndex < 0;
+
+    const shouldMarkLimited =
+      timelineLength > 0 &&
+      (hasExpandedFlag || hasHistoricalEvents || hasHistoricalOverlap || isRequestedExpansion);
+
+    if (shouldMarkLimited) timelineData.limited = true;
+
+    const isGapped = firstKnownResponseIndex < 0 || hasSparseOverlap;
+    if (
+      knownEventIds.size > 0 &&
+      room &&
+      timelineSet &&
+      isGapped &&
+      responseEventIds.length > 0 &&
+      typeof timelineData.prev_batch === 'string' &&
+      (timelineData.initial === true || timelineData.limited === true)
+    ) {
+      const pendingEvents = liveEvents.filter((event) => event.isSending());
+      if (pendingEvents.length > 0) {
+        pendingEventsToRestore.push({ timelineSet, events: pendingEvents });
+      }
+      const previousOldState = room.oldState;
+      timelineSet.resetLiveTimeline(
+        typeof timelineData.prev_batch === 'string' ? timelineData.prev_batch : undefined
+      );
+      const newLiveTimeline = timelineSet.getLiveTimeline();
+      room.oldState = newLiveTimeline.getState(EventTimeline.BACKWARDS)!;
+      room.currentState = newLiveTimeline.getState(EventTimeline.FORWARDS)!;
+      if (room.oldState !== previousOldState) {
+        room.emit(RoomEvent.OldStateUpdated, room, previousOldState, room.oldState);
+      }
+      didResetTimeline = true;
+      continue;
+    }
+
+    if (!shouldMarkLimited) {
+      continue;
+    }
+
+    if (typeof timelineData.prev_batch !== 'string') {
+      const token = mx
+        ?.getRoom(roomId)
+        ?.getLiveTimeline()
+        .getPaginationToken(EventTimeline.BACKWARDS);
+      if (typeof token === 'string') timelineData.prev_batch = token;
+    }
+  }
+
+  if (didResetTimeline) mx?.resetNotifTimelineSet();
+  if (pendingEventsToRestore.length === 0) return null;
+
+  return () => {
+    for (const { timelineSet, events } of pendingEventsToRestore) {
+      const liveTimeline = timelineSet.getLiveTimeline();
+      for (const event of events) {
+        const eventId = event.getId();
+        if (
+          event.status === null ||
+          event.status === EventStatus.CANCELLED ||
+          !eventId ||
+          timelineSet.findEventById(eventId)
+        ) {
+          continue;
+        }
+        timelineSet.addEventToTimeline(event, liveTimeline, {
+          toStartOfTimeline: false,
+          addToState: false,
+        });
+      }
+    }
+  };
 };
 
 export class SlidingSyncManager {
@@ -379,6 +540,29 @@ export class SlidingSyncManager {
     (dirtyRoomIds: ReadonlySet<string>) => void
   >();
 
+  private readonly trackedResponses = new WeakMap<
+    MSC3575SlidingSyncResponse,
+    TrackedSlidingSyncResponse
+  >();
+
+  private readonly timelineResetCompletions = new WeakMap<
+    MSC3575SlidingSyncResponse,
+    TimelineResetCompletion
+  >();
+
+  private readonly preparedRoomSubscriptions = new Map<string, Set<PreparedRoomSubscription>>();
+
+  private readonly routeActiveRoomSubscriptions = new Set<string>();
+
+  private readonly temporaryRoomSubscriptions = new Set<string>();
+
+  private readonly pendingRouteReleaseTimers = new Map<
+    string,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
+
+  private requestId = 0;
+
   private previousListCounts: Map<string, number> = new Map();
 
   private readonly requestedListRangeEnds = new Map<string, number>();
@@ -417,6 +601,14 @@ export class SlidingSyncManager {
   /** Wall-clock time recorded in attach() — used to compute true initial-sync latency. */
   private attachTime: number | null = null;
 
+  private readonly pollDeadlineMs: number;
+
+  private pollWatchdogTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+  private paused = false;
+
+  private readonly resumeWaiters = new Set<() => void>();
+
   /** Span covering the period from attach() to the first successful complete cycle. */
   private initialSyncSpan: ReturnType<typeof Sentry.startInactiveSpan> | null = null;
 
@@ -428,6 +620,7 @@ export class SlidingSyncManager {
     options: SlidingSyncOptions = {}
   ) {
     const pollTimeoutMs = clampPositive(options.pollTimeoutMs, DEFAULT_POLL_TIMEOUT_MS);
+    this.pollDeadlineMs = pollTimeoutMs + SDK_CLIENT_TIMEOUT_BUFFER_MS + POLL_DEADLINE_MARGIN_MS;
 
     const roomTimelineLimit = clampPositive(options.timelineLimit, ACTIVE_ROOM_TIMELINE_LIMIT);
     this.roomTimelineLimit = roomTimelineLimit;
@@ -485,6 +678,8 @@ export class SlidingSyncManager {
         return;
       }
 
+      this.armPollWatchdog();
+
       if (state === SlidingSyncState.RequestFinished) {
         if (!err && resp) {
           this.responseProcessing = true;
@@ -495,6 +690,8 @@ export class SlidingSyncManager {
 
       if (err || !resp || state !== SlidingSyncState.Complete) return;
 
+      this.timelineResetCompletions.get(resp)?.();
+      this.timelineResetCompletions.delete(resp);
       this.recordServerMembershipRooms(resp);
       this.reassertOptimisticJoins();
 
@@ -531,7 +728,7 @@ export class SlidingSyncManager {
         const currentCount = listData?.joinedCount ?? 0;
         const previousCount = this.previousListCounts.get(key) ?? 0;
 
-        if (key !== LIST_UPDATES) totalRoomCount += currentCount;
+        totalRoomCount += currentCount;
 
         if (currentCount !== previousCount) {
           changes[key] = {
@@ -583,6 +780,7 @@ export class SlidingSyncManager {
       }
 
       this.expandListsByPage();
+      this.ensureListCoverage();
 
       Sentry.metrics.distribution('sable.sync.processing_ms', syncDuration, {
         attributes: { transport: 'sliding' },
@@ -606,6 +804,8 @@ export class SlidingSyncManager {
         });
       });
 
+      this.resolvePreparedRoomSubscriptions(resp);
+
       globalThis.queueMicrotask(() => {
         if (this.disposed) return;
         this.responseProcessing = false;
@@ -619,14 +819,7 @@ export class SlidingSyncManager {
       if (member.userId !== this.mx.getUserId()) return;
       if (member.membership !== KnownMembership.Leave && member.membership !== KnownMembership.Ban)
         return;
-      this.sidebarCache.removeRoom(member.roomId);
-      const removedSpaceSubscription = this.spaceSubscriptions.delete(member.roomId);
-      const removedSidebarSubscription = this.sidebarRoomSubscriptions.delete(member.roomId);
-      if (this.activeRoomSubscriptions.has(member.roomId)) {
-        this.unsubscribeFromRoom(member.roomId);
-      } else if (removedSpaceSubscription || removedSidebarSubscription) {
-        this.queueRoomSubscriptionSync();
-      }
+      this.handleRoomLeaveSubscriptions(member.roomId);
     };
 
     this.onCacheRoomData = (roomId, data) => {
@@ -677,7 +870,70 @@ export class SlidingSyncManager {
     this.mx.on(RoomMemberEvent.Membership, this.onMembershipLeave);
     this.mx.on(ClientEvent.AccountData, this.onCacheAccountData);
 
+    this.armPollWatchdog();
+
     debugLog.info('sync', 'Sliding sync listeners attached successfully');
+  }
+
+  /**
+   * Backstop for the SDK's own `clientTimeout`, which is a JS timer and so cannot fire
+   * while a mobile webview is frozen. Re-arms itself because the SDK's abort path
+   * `continue`s without emitting a lifecycle event.
+   */
+  private armPollWatchdog(): void {
+    if (this.disposed || this.paused) return;
+    globalThis.clearTimeout(this.pollWatchdogTimer);
+    this.pollWatchdogTimer = globalThis.setTimeout(() => {
+      this.pollWatchdogTimer = undefined;
+      if (this.disposed) return;
+      debugLog.warn('sync', 'Sliding sync poll exceeded client-side deadline; cycling transport', {
+        pollDeadlineMs: this.pollDeadlineMs,
+        syncNumber: this.syncCount,
+      });
+      this.slidingSync.resend();
+      this.armPollWatchdog();
+    }, this.pollDeadlineMs);
+  }
+
+  /**
+   * Stop issuing requests without tearing the transport down. `SlidingSync.stop()` is
+   * terminal and drops the `pos` token held in `start()`, so stop/start would force a
+   * full initial sync on every resume; the request patch parks on `waitForResume()`
+   * instead.
+   */
+  public pause(): void {
+    if (this.paused || this.disposed) return;
+    this.paused = true;
+    globalThis.clearTimeout(this.pollWatchdogTimer);
+    this.pollWatchdogTimer = undefined;
+    this.slidingSync.resend();
+    debugLog.info('sync', 'Sliding sync paused');
+  }
+
+  public resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.releaseResumeWaiters();
+    this.armPollWatchdog();
+    debugLog.info('sync', 'Sliding sync resumed');
+  }
+
+  public isPaused(): boolean {
+    return this.paused;
+  }
+
+  /** Resolves on the next resume(), or immediately when not paused. */
+  public waitForResume(): Promise<void> {
+    if (!this.paused) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.resumeWaiters.add(resolve);
+    });
+  }
+
+  private releaseResumeWaiters(): void {
+    const waiters = Array.from(this.resumeWaiters);
+    this.resumeWaiters.clear();
+    waiters.forEach((resolve) => resolve());
   }
 
   public dispose(): void {
@@ -693,6 +949,11 @@ export class SlidingSyncManager {
     this.optimisticallyJoinedRoomIds.clear();
     this.responseProcessing = false;
     this.responseSettledListeners.clear();
+    this.preparedRoomSubscriptions.clear();
+    this.pendingRouteReleaseTimers.forEach((timer) => globalThis.clearTimeout(timer));
+    this.pendingRouteReleaseTimers.clear();
+    this.routeActiveRoomSubscriptions.clear();
+    this.temporaryRoomSubscriptions.clear();
     this.dirtyRoomIds.clear();
     this.roomDataAwaitingSyncCompletion.clear();
     this.roomSubscriptionStatusListeners.forEach((listeners) =>
@@ -703,6 +964,10 @@ export class SlidingSyncManager {
     this.hydrationStatusListeners.clear();
 
     this.disposed = true;
+    this.paused = false;
+    this.releaseResumeWaiters();
+    globalThis.clearTimeout(this.pollWatchdogTimer);
+    this.pollWatchdogTimer = undefined;
     this.slidingSync.stop();
     this.slidingSync.removeListener(SlidingSyncEvent.Lifecycle, this.onLifecycle);
     this.slidingSync.removeListener(SlidingSyncEvent.RoomData, this.onCacheRoomData);
@@ -937,7 +1202,6 @@ export class SlidingSyncManager {
         this.hydrationStatusListeners.forEach((listener) => listener(false));
         this.reconcileSidebarCacheMembership();
         globalThis.setTimeout(() => this.flushDeferredSubscriptions(), 0);
-        this.applySteadyStateListRanges();
         log.log(`Sliding Sync all lists fully loaded for ${this.mx.getUserId()}`);
         const totalRooms =
           (this.slidingSync.getListData(LIST_JOINED)?.joinedCount ?? 0) +
@@ -979,31 +1243,22 @@ export class SlidingSyncManager {
     }
   }
 
-  private applySteadyStateListRanges(): void {
-    const joinedList = this.slidingSync.getListParams(LIST_JOINED);
-    const currentEnd = getListEndIndex(joinedList);
-    const steadyStateEnd = Math.min(currentEnd, STEADY_STATE_DETAILED_ROOMS - 1);
-    if (steadyStateEnd < 0 || steadyStateEnd === currentEnd) return;
+  // Paging stops once every list is covered, but the counts keep growing, and a state
+  // change does not bump a room back into the window.
+  private ensureListCoverage(): void {
+    if (!this.initialListHydrationCompleted) return;
 
-    const joinedCount = this.slidingSync.getListData(LIST_JOINED)?.joinedCount ?? 0;
-    const updatesCount = this.slidingSync.getListData(LIST_UPDATES)?.joinedCount ?? 0;
-    const updatesConfirmedEnd = this.confirmedListRangeEnds.get(LIST_UPDATES) ?? -1;
-    if (updatesCount !== joinedCount || updatesConfirmedEnd < joinedCount - 1) {
-      debugLog.warn('sync', 'Kept detailed joined list fully covered: updates list unavailable', {
-        joinedCount,
-        updatesCount,
-        updatesConfirmedEnd,
+    this.listKeys.forEach((key) => {
+      const knownCount = this.slidingSync.getListData(key)?.joinedCount ?? 0;
+      const desiredEnd = knownCount - 1;
+      if (desiredEnd <= getListEndIndex(this.slidingSync.getListParams(key))) return;
+
+      this.slidingSync.setListRanges(key, [[0, desiredEnd]]);
+      this.requestedListRangeEnds.set(key, desiredEnd);
+      debugLog.info('sync', `Extended list "${key}" to cover newly joined rooms`, {
+        list: key,
+        newEnd: desiredEnd,
       });
-      return;
-    }
-
-    this.slidingSync.setListRanges(LIST_JOINED, [[0, steadyStateEnd]]);
-    this.requestedListRangeEnds.set(LIST_JOINED, steadyStateEnd);
-    debugLog.info('sync', 'Reduced detailed joined list to steady-state window', {
-      previousEnd: currentEnd,
-      newEnd: steadyStateEnd,
-      retainedDetailedRooms: steadyStateEnd + 1,
-      updatesCoverageEnd: updatesConfirmedEnd,
     });
   }
 
@@ -1012,7 +1267,6 @@ export class SlidingSyncManager {
     if (!list) {
       list = {
         ranges: [[0, LIST_PAGE_SIZE - 1]],
-        sort: LIST_SORT_ORDER,
         timeline_limit: LIST_TIMELINE_LIMIT,
         required_state: buildListRequiredState(),
         ...updateArgs,
@@ -1085,6 +1339,94 @@ export class SlidingSyncManager {
   ): () => void {
     this.responseSettledListeners.add(listener);
     return () => this.responseSettledListeners.delete(listener);
+  }
+
+  public trackSubscriptionRequest(
+    roomIds: Iterable<string>
+  ): (response: MSC3575SlidingSyncResponse) => void {
+    const requestId = ++this.requestId;
+    const subscriptionRoomIds = new Set(roomIds);
+    return (response) => {
+      this.trackedResponses.set(response, { requestId, subscriptionRoomIds });
+    };
+  }
+
+  public trackTimelineResetCompletion(
+    response: MSC3575SlidingSyncResponse,
+    completion: TimelineResetCompletion
+  ): void {
+    this.timelineResetCompletions.set(response, completion);
+  }
+
+  public prepareRoomSubscription(roomId: string, listener: () => void): () => void {
+    this.cancelPendingRouteRelease(roomId);
+    const wasActive = this.isRoomActive(roomId);
+    const prepared: PreparedRoomSubscription = {
+      afterRequestId: this.requestId,
+      requiresSubscriptionResponse: !wasActive,
+      listener,
+    };
+    const listeners = this.preparedRoomSubscriptions.get(roomId) ?? new Set();
+    listeners.add(prepared);
+    this.preparedRoomSubscriptions.set(roomId, listeners);
+    if (!wasActive) this.subscribeToRoom(roomId);
+    else this.slidingSync.resend();
+    if (!wasActive && this.isRoomActive(roomId)) {
+      this.temporaryRoomSubscriptions.add(roomId);
+    }
+
+    return () => {
+      listeners.delete(prepared);
+      if (listeners.size === 0) this.preparedRoomSubscriptions.delete(roomId);
+    };
+  }
+
+  public releaseRoomSubscriptionUnlessRouted(roomId: string): void {
+    this.cancelPendingRouteRelease(roomId);
+    if (!this.temporaryRoomSubscriptions.has(roomId)) return;
+    if (this.routeActiveRoomSubscriptions.has(roomId)) {
+      this.temporaryRoomSubscriptions.delete(roomId);
+      return;
+    }
+
+    const timer = globalThis.setTimeout(() => {
+      this.pendingRouteReleaseTimers.delete(roomId);
+      if (
+        this.temporaryRoomSubscriptions.has(roomId) &&
+        !this.routeActiveRoomSubscriptions.has(roomId)
+      ) {
+        this.unsubscribeFromRoom(roomId);
+      }
+    }, ROUTE_ADOPTION_TIMEOUT_MS);
+    this.pendingRouteReleaseTimers.set(roomId, timer);
+  }
+
+  private cancelPendingRouteRelease(roomId: string): void {
+    const timer = this.pendingRouteReleaseTimers.get(roomId);
+    if (timer === undefined) return;
+    globalThis.clearTimeout(timer);
+    this.pendingRouteReleaseTimers.delete(roomId);
+  }
+
+  public isRoomSubscriptionTemporary(roomId: string): boolean {
+    return this.temporaryRoomSubscriptions.has(roomId);
+  }
+
+  private resolvePreparedRoomSubscriptions(response: MSC3575SlidingSyncResponse): void {
+    const tracked = this.trackedResponses.get(response);
+    if (!tracked) return;
+
+    this.preparedRoomSubscriptions.forEach((listeners, roomId) => {
+      [...listeners].forEach((prepared) => {
+        const ready =
+          tracked.requestId > prepared.afterRequestId &&
+          (!prepared.requiresSubscriptionResponse || tracked.subscriptionRoomIds.has(roomId));
+        if (!ready) return;
+        listeners.delete(prepared);
+        prepared.listener();
+      });
+      if (listeners.size === 0) this.preparedRoomSubscriptions.delete(roomId);
+    });
   }
 
   /**
@@ -1274,16 +1616,29 @@ export class SlidingSyncManager {
 
     if (membership === KnownMembership.Leave) {
       this.optimisticallyJoinedRoomIds.delete(roomId);
-      this.sidebarCache.removeRoom(roomId);
-      const removedSpaceSubscription = this.spaceSubscriptions.delete(roomId);
-      const removedSidebarSubscription = this.sidebarRoomSubscriptions.delete(roomId);
-      if (this.activeRoomSubscriptions.has(roomId)) {
-        this.unsubscribeFromRoom(roomId);
-      } else if (removedSpaceSubscription || removedSidebarSubscription) {
-        this.queueRoomSubscriptionSync();
-      }
+      this.handleRoomLeaveSubscriptions(roomId);
       this.mx.store.removeRoom(roomId);
     }
+  }
+
+  private handleRoomLeaveSubscriptions(roomId: string): void {
+    this.sidebarCache.removeRoom(roomId);
+    const removedPassiveSubscription = this.removePassiveSubscriptions(roomId);
+    if (this.activeRoomSubscriptions.has(roomId)) {
+      this.unsubscribeFromRoom(roomId);
+    } else if (removedPassiveSubscription) {
+      this.queueRoomSubscriptionSync();
+    }
+  }
+
+  // Includes the deferred sets so a later flush cannot resubscribe a room we left.
+  private removePassiveSubscriptions(roomId: string): boolean {
+    const removedSpace = this.spaceSubscriptions.delete(roomId);
+    const removedSidebar = this.sidebarRoomSubscriptions.delete(roomId);
+    const removedImagePack = this.imagePackRoomSubscriptions.delete(roomId);
+    this.deferredSpaceSubscriptions.delete(roomId);
+    this.deferredImagePackSubscriptions?.delete(roomId);
+    return removedSpace || removedSidebar || removedImagePack;
   }
 
   private flushDeferredSubscriptions(): void {
@@ -1308,12 +1663,30 @@ export class SlidingSyncManager {
   }
 
   private syncRoomSubscriptions(): void {
-    const desiredSubscriptions = new Set([
-      ...this.activeRoomSubscriptions,
-      ...this.sidebarRoomSubscriptions,
-      ...this.spaceSubscriptions,
-      ...this.imagePackRoomSubscriptions,
-    ]);
+    // MSC4186 rejects a request carrying more than MAX_ROOM_SUBSCRIPTIONS with
+    // M_INVALID_PARAM, so fill by priority and drop the rest.
+    const desiredSubscriptions = new Set<string>();
+    let dropped = 0;
+    [
+      this.activeRoomSubscriptions,
+      this.sidebarRoomSubscriptions,
+      this.spaceSubscriptions,
+      this.imagePackRoomSubscriptions,
+    ].forEach((group) =>
+      group.forEach((roomId) => {
+        if (desiredSubscriptions.has(roomId)) return;
+        if (desiredSubscriptions.size >= MAX_ROOM_SUBSCRIPTIONS) {
+          dropped += 1;
+          return;
+        }
+        desiredSubscriptions.add(roomId);
+      })
+    );
+    if (dropped > 0) {
+      log.warn(
+        `Sliding Sync dropped ${dropped} room subscriptions over the ${MAX_ROOM_SUBSCRIPTIONS} cap`
+      );
+    }
 
     desiredSubscriptions.forEach((roomId) => {
       if (this.activeRoomSubscriptions.has(roomId)) {
@@ -1465,6 +1838,8 @@ export class SlidingSyncManager {
 
   private removeActiveRoomSubscription(roomId: string): boolean {
     if (!this.activeRoomSubscriptions.has(roomId)) return false;
+    this.cancelPendingRouteRelease(roomId);
+    this.temporaryRoomSubscriptions.delete(roomId);
     const pendingListener = this.pendingRoomDataListeners.get(roomId);
     if (pendingListener) {
       this.slidingSync.removeListener(SlidingSyncEvent.RoomData, pendingListener);
@@ -1491,6 +1866,14 @@ export class SlidingSyncManager {
   public setActiveRoomSubscriptions(roomIds: Iterable<string>): void {
     if (this.disposed) return;
     const next = new Set(roomIds);
+    this.routeActiveRoomSubscriptions.clear();
+    next.forEach((roomId) => {
+      this.routeActiveRoomSubscriptions.add(roomId);
+      this.temporaryRoomSubscriptions.delete(roomId);
+    });
+    this.pendingRouteReleaseTimers.forEach((_timer, roomId) =>
+      this.cancelPendingRouteRelease(roomId)
+    );
     let changed = false;
 
     this.activeRoomSubscriptions.forEach((roomId) => {
@@ -1512,12 +1895,15 @@ export class SlidingSyncManager {
   }
 
   public subscribeToRoom(roomId: string): void {
+    this.cancelPendingRouteRelease(roomId);
+    this.temporaryRoomSubscriptions.delete(roomId);
     if (this.disposed || !this.addActiveRoomSubscription(roomId)) return;
     this.syncRoomSubscriptions();
     this.reportActiveSubscriptionCount();
   }
 
   public unsubscribeFromRoom(roomId: string): void {
+    this.cancelPendingRouteRelease(roomId);
     if (this.disposed || !this.removeActiveRoomSubscription(roomId)) return;
     this.syncRoomSubscriptions();
     this.reportActiveSubscriptionCount();

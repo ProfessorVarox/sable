@@ -131,3 +131,11 @@ export const UserHeroMenuItem = style({
     },
   },
 });
+
+export const LinkUnderline = style({
+  cursor: 'pointer',
+  textDecoration: 'underline',
+  ':hover': {
+    textDecoration: 'none',
+  },
+});

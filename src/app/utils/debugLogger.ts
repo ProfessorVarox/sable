@@ -35,6 +35,29 @@ type LogListener = (entry: LogEntry) => void;
 
 const BREADCRUMB_DISABLED_KEY = 'sable_sentry_breadcrumb_disabled';
 
+type ConsoleMethod = 'error' | 'warn' | 'info' | 'log' | 'debug';
+
+const CONSOLE_METHODS: ConsoleMethod[] = ['error', 'warn', 'info', 'log', 'debug'];
+
+const MAX_CONSOLE_MESSAGE_LENGTH = 1000;
+
+const formatConsoleArgs = (args: unknown[]): string => {
+  const text = args
+    .map((arg) => {
+      if (typeof arg === 'string') return arg;
+      if (arg instanceof Error) return arg.stack ?? arg.message;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    })
+    .join(' ');
+  return text.length > MAX_CONSOLE_MESSAGE_LENGTH
+    ? `${text.slice(0, MAX_CONSOLE_MESSAGE_LENGTH)}…`
+    : text;
+};
+
 class DebugLoggerService {
   private logs: LogEntry[] = [];
 
@@ -51,6 +74,12 @@ class DebugLoggerService {
   private disabledBreadcrumbCategories: Set<LogCategory>;
 
   private sentryStats = { errors: 0, warnings: 0 };
+
+  private originalConsole: Partial<Record<ConsoleMethod, (...args: unknown[]) => void>> = {};
+
+  private consoleIntercepted = false;
+
+  private writingToConsole = false;
 
   constructor() {
     // Check if debug logging is enabled from localStorage
@@ -91,6 +120,7 @@ class DebugLoggerService {
     this.clear();
     this.captureActive = true;
     this.captureSince = Date.now();
+    this.interceptConsole();
     this.log('info', 'general', 'diagnostics', 'Diagnostic capture started');
     return this.captureSince;
   }
@@ -99,7 +129,42 @@ class DebugLoggerService {
     if (!this.captureActive) return this.captureSince;
     this.log('info', 'general', 'diagnostics', 'Diagnostic capture stopped');
     this.captureActive = false;
+    this.restoreConsole();
     return this.captureSince;
+  }
+
+  /**
+   * Funnels console output (including matrix-js-sdk's logger, which writes to the
+   * console) into the capture buffer for the duration of a diagnostics session.
+   */
+  private interceptConsole(): void {
+    if (this.consoleIntercepted) return;
+    this.consoleIntercepted = true;
+    CONSOLE_METHODS.forEach((method) => {
+      const original = console[method] as (...args: unknown[]) => void;
+      this.originalConsole[method] = original;
+      console[method] = (...args: unknown[]) => {
+        original.apply(console, args);
+        if (this.writingToConsole) return;
+        const level: LogLevel = method === 'log' ? 'debug' : method;
+        this.log(
+          level,
+          level === 'error' ? 'error' : 'general',
+          'console',
+          formatConsoleArgs(args)
+        );
+      };
+    });
+  }
+
+  private restoreConsole(): void {
+    if (!this.consoleIntercepted) return;
+    this.consoleIntercepted = false;
+    CONSOLE_METHODS.forEach((method) => {
+      const original = this.originalConsole[method];
+      if (original) console[method] = original;
+    });
+    this.originalConsole = {};
   }
 
   public addListener(listener: LogListener): () => void {
@@ -175,7 +240,12 @@ class DebugLoggerService {
     // Also log to console for developer convenience
     const prefix = `[sable:${category}:${namespace}]`;
     const consoleLevel = level === 'debug' ? 'log' : level;
-    console[consoleLevel](prefix, message, data !== undefined ? data : '');
+    this.writingToConsole = true;
+    try {
+      console[consoleLevel](prefix, message, data !== undefined ? data : '');
+    } finally {
+      this.writingToConsole = false;
+    }
   }
 
   public getBreadcrumbCategoryEnabled(category: LogCategory): boolean {

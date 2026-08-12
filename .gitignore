@@ -1,5 +1,6 @@
 experiment
 dist
+.goreleaser-dist
 coverage
 node_modules
 devAssets

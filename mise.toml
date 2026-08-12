@@ -58,7 +58,7 @@ tools = { "cargo:knope" = "0.23.0", cargo-binstall = "1.20.1" }
 
 [tasks."knope:document-change"]
 description = "Document a change with knope"
-alias = ["doc", "doc"]
+alias = ["doc", "dc"]
 run = { task = "knope", args = ["document-change"] }
 
 [tasks."tauri:setup"]
@@ -93,7 +93,6 @@ run = [
   "winget install --id Microsoft.VisualStudio.BuildTools --source winget --force --override '--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.Windows11SDK.26100 --addProductLang En-us'",
   "winget install --id Microsoft.EdgeWebView2Runtime --source winget",
 ]
-
 
 [tasks."cargo:lint"]
 description = "Check Rust formatting and Clippy lints"

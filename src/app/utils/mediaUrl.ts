@@ -46,7 +46,7 @@ const TAURI_MEDIA_PROTOCOL = 'sable-media://';
 const TAURI_MEDIA_LOCALHOST = 'localhost';
 const TAURI_MEDIA_LOCALHOST_HOST = 'sable-media.localhost';
 
-const getTauriMediaInnerTarget = (mediaUrl: string): string | undefined => {
+export const getTauriMediaSourceUrl = (mediaUrl: string): string | undefined => {
   if (mediaUrl.startsWith(TAURI_MEDIA_PROTOCOL)) {
     const wrappedUrl = mediaUrl.slice(TAURI_MEDIA_PROTOCOL.length);
 
@@ -88,7 +88,7 @@ export const getTauriMediaRetryTarget = (
   revision: number
 ): string | undefined => {
   if (revision <= 0 || !isTauri()) return undefined;
-  const innerTarget = getTauriMediaInnerTarget(mediaUrl);
+  const innerTarget = getTauriMediaSourceUrl(mediaUrl);
   if (!innerTarget) return undefined;
   let parsedUrl: URL;
   try {

@@ -11,6 +11,8 @@ import { getMemberDisplayName } from '$utils/room/display';
 import { extractReplyDraftBody, resolveReplyDraftTarget } from '$utils/room/relations';
 import { createMentionElement, moveCursor } from '$components/editor';
 import * as prefix from '$unstable/prefixes';
+import type { Persona } from '$hooks/usePerMessageProfile';
+import { convertBeeperFormatToOurPerMessageProfile } from '$hooks/usePerMessageProfile';
 
 /**
  * The profile popup reads name, avatar and the identity fields off the room
@@ -55,6 +57,7 @@ export interface UseTimelineActionsOptions {
     roomId: string,
     spaceId: string | undefined,
     userId: string,
+    pmp: Persona | undefined,
     rect: DOMRect,
     undefinedArg?: undefined,
     options?: unknown
@@ -104,16 +107,28 @@ export function useTimelineActions({
       const userId = evt.currentTarget.getAttribute('data-user-id');
       if (!userId) return;
 
+      const messageId = evt.currentTarget.getAttribute('data-parent-message-id');
+      let perMessageProfile;
+      if (messageId) {
+        const pmp = room.findEventById(messageId)?.getContent()[
+          prefix.MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME
+        ];
+        if (pmp) {
+          perMessageProfile = convertBeeperFormatToOurPerMessageProfile(pmp);
+        }
+      }
+
       openUserRoomProfile(
         room.roomId,
         spaceId,
         userId,
+        perMessageProfile,
         evt.currentTarget.getBoundingClientRect(),
         undefined,
         buildCachedProfilePayload(getGlobalProfile(userId))
       );
     },
-    [room.roomId, spaceId, openUserRoomProfile, getGlobalProfile]
+    [room, spaceId, openUserRoomProfile, getGlobalProfile]
   );
 
   const handleUsernameClick: MouseEventHandler<HTMLButtonElement> = useCallback(

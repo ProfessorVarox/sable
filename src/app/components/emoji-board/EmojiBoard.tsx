@@ -443,7 +443,7 @@ const SEARCH_OPTIONS: UseAsyncSearchOptions = {
   },
 };
 
-const VIRTUAL_OVER_SCAN = 2;
+const VIRTUAL_OVER_SCAN = 10;
 
 type EmojiBoardProps = {
   tab?: EmojiBoardTab;

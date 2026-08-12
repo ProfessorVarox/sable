@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { SequenceCardStyle } from '$components/sequence-card';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+// oxlint-disable-next-line no-restricted-imports
 import type * as Folds from 'folds';
 import { ScreenSize, ScreenSizeProvider } from '$hooks/useScreenSize';
 import { Desktop } from './Desktop';
@@ -105,7 +106,7 @@ describe('Desktop', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'When enabled, closing the window keeps Sable running instead of exiting. If the tray icon is enabled and available, Sable stays in the system tray. Otherwise it continues running in the background.'
+        'When enabled, closing the window keeps Sable running in the system tray instead of exiting. This needs the tray icon below: without a tray to restore from, closing exits Sable.'
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Show system tray icon')).toBeInTheDocument();
@@ -130,7 +131,7 @@ describe('Desktop', () => {
 
     expect(
       screen.getByText(
-        'System tray is unavailable on this system. Sable can still keep running in the background without it.'
+        'System tray is unavailable on this system. Without it, closing the window exits Sable.'
       )
     ).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'show-system-tray-icon' })).toBeDisabled();
@@ -143,7 +144,7 @@ describe('Desktop', () => {
 
     expect(
       screen.queryByText(
-        'System tray is unavailable on this system. Sable can still keep running in the background without it.'
+        'System tray is unavailable on this system. Without it, closing the window exits Sable.'
       )
     ).not.toBeInTheDocument();
   });
@@ -157,7 +158,7 @@ describe('Desktop', () => {
 
     expect(
       screen.queryByText(
-        'System tray is unavailable on this system. Sable can still keep running in the background without it.'
+        'System tray is unavailable on this system. Without it, closing the window exits Sable.'
       )
     ).not.toBeInTheDocument();
   });

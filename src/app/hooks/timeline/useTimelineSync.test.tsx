@@ -2,11 +2,14 @@ import { EventEmitter } from 'events';
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { faker } from '@faker-js/faker';
-import type { Room } from '$types/matrix-sdk';
+import type { EventTimelineSet, MatrixEvent, Room } from '$types/matrix-sdk';
 import { Direction, MatrixEventEvent, RoomEvent } from '$types/matrix-sdk';
 import { countVisibleAmongNewest, useTimelineSync } from './useTimelineSync';
 import { getRoomUnreadInfo } from '$utils/timeline';
+import { markAsRead } from '$utils/notifications';
+import { isWindowFocused } from '$utils/dom';
 import type * as TimelineUtils from '$utils/timeline';
+import type * as DomUtils from '$utils/dom';
 
 vi.mock('@sentry/react', () => ({
   default: {},
@@ -32,16 +35,26 @@ vi.mock('$utils/notifications', () => ({
   markAsRead: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }));
 
+vi.mock('$utils/dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof DomUtils>();
+  return {
+    ...actual,
+    isWindowFocused: vi.fn<typeof DomUtils.isWindowFocused>(actual.isWindowFocused),
+  };
+});
+
 type FakeTimeline = {
   getEvents: () => unknown[];
   getNeighbouringTimeline: () => undefined;
-  getPaginationToken: () => undefined;
+  getPaginationToken: (direction?: Direction) => string | undefined;
   getRoomId: () => string;
+  getTimelineSet: () => FakeTimelineSet | undefined;
 };
 
 type FakeTimelineSet = EventEmitter & {
   getLiveTimeline: () => FakeTimeline;
-  getTimelineForEvent: () => undefined;
+  getTimelineForEvent: (eventId?: string) => FakeTimeline | undefined;
+  findEventById?: (eventId: string) => unknown;
 };
 
 type FakeRoom = Room &
@@ -49,12 +62,13 @@ type FakeRoom = Room &
     emit: EventEmitter['emit'];
   };
 
-function createTimeline(events: unknown[] = [{}]): FakeTimeline {
+function createTimeline(events: unknown[] = [{}], timelineSet?: FakeTimelineSet): FakeTimeline {
   return {
     getEvents: () => events,
     getNeighbouringTimeline: () => undefined,
     getPaginationToken: () => undefined,
     getRoomId: () => '!room:test',
+    getTimelineSet: () => timelineSet,
   };
 }
 
@@ -67,11 +81,12 @@ function createRoom(
   events: unknown[];
   timeline: FakeTimeline;
 } {
+  const timelineSet = new EventEmitter() as FakeTimelineSet;
   const timeline = {
     ...createTimeline(events),
     getRoomId: () => roomId,
+    getTimelineSet: () => timelineSet,
   };
-  const timelineSet = new EventEmitter() as FakeTimelineSet;
   timelineSet.getLiveTimeline = () => timeline;
   timelineSet.getTimelineForEvent = () => undefined;
 
@@ -138,6 +153,7 @@ const makeMx = (extra: Record<string, unknown> = {}) =>
     getUserId: () => '@alice:test',
     on: mxEmitter.on.bind(mxEmitter),
     removeListener: mxEmitter.removeListener.bind(mxEmitter),
+    paginateEventTimeline: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
     ...extra,
   }) as never;
 
@@ -148,6 +164,9 @@ function makeEvent(sender: string, roomId: string) {
     getRoomId: () => roomId,
     getTs: () => Date.now(),
     getRelation: () => undefined,
+    isSending: () => sender === '@alice:test',
+    isRelation: () => false,
+    isRedaction: () => false,
   };
 }
 
@@ -163,6 +182,8 @@ function emitLiveTimelineEvent(
     timeline,
   });
 }
+
+const flushRaf = () => new Promise((r) => requestAnimationFrame(() => r(undefined)));
 
 const makeTimeline = (ids: string[]) => {
   const timelineSet = { id: `set-${ids.join('')}` };
@@ -246,6 +267,7 @@ describe('useTimelineSync', () => {
         setUnreadInfo: vi.fn<() => void>(),
         hideReadsRef: { current: false },
         readUptoEventIdRef: { current: undefined },
+        isInactivePanelRef: { current: false },
       })
     );
 
@@ -278,6 +300,7 @@ describe('useTimelineSync', () => {
         setUnreadInfo: vi.fn<() => void>(),
         hideReadsRef: { current: false },
         readUptoEventIdRef: { current: undefined },
+        isInactivePanelRef: { current: false },
       })
     );
 
@@ -287,6 +310,45 @@ describe('useTimelineSync', () => {
     });
 
     expect(scrollToBottom).toHaveBeenCalledWith('instant');
+  });
+
+  it('leaves a loaded jump window alone when the unfiltered set resets', async () => {
+    const { room, timelineSet } = createRoom();
+    const targetEvent = { getId: () => '$target' };
+    const reloadedTimeline = createTimeline([targetEvent], timelineSet);
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+      reloadedTimeline.getTimelineSet = () => set as FakeTimelineSet;
+      return Promise.resolve(reloadedTimeline);
+    });
+    const { result } = renderHook(() =>
+      useTimelineSync({
+        room: room as Room,
+        mx: makeMx({ getEventTimeline }),
+        eventId: '$target',
+        isAtBottom: false,
+        isAtBottomRef: { current: false },
+        scrollToBottom: vi.fn<() => void>(),
+        unreadInfo: undefined,
+        setUnreadInfo: vi.fn<() => void>(),
+        hideReadsRef: { current: false },
+        readUptoEventIdRef: { current: undefined },
+        isInactivePanelRef: { current: false },
+      })
+    );
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target');
+    });
+    const loadsBeforeReset = getEventTimeline.mock.calls.length;
+    expect(loadsBeforeReset).toBe(1);
+
+    await act(async () => {
+      timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(getEventTimeline.mock.calls.length).toBe(loadsBeforeReset);
+    expect(result.current.timeline.linkedTimelines).toEqual([reloadedTimeline]);
   });
 
   it('resets timeline state when room.roomId changes and eventId is not set', async () => {
@@ -307,6 +369,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         }),
       {
         initialProps: {
@@ -326,7 +389,7 @@ describe('useTimelineSync', () => {
     expect(result.current.timeline.linkedTimelines[0]).toBe(roomTwo.timelineSet.getLiveTimeline());
   });
 
-  it('does not reset timeline when eventId is set during a room change', async () => {
+  it('restores the new room live timeline when eventId is set during a room change', async () => {
     const roomOne = createRoom('!room:one');
     const roomTwo = createRoom('!room:two');
     const scrollToBottom = vi.fn<() => void>();
@@ -344,6 +407,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         }),
       {
         initialProps: {
@@ -358,7 +422,7 @@ describe('useTimelineSync', () => {
       await Promise.resolve();
     });
 
-    expect(result.current.timeline.linkedTimelines[0]).toBe(roomOne.timelineSet.getLiveTimeline());
+    expect(result.current.timeline.linkedTimelines[0]).toBe(roomTwo.timelineSet.getLiveTimeline());
   });
 
   it('does not reset timeline when the roomId stays the same', async () => {
@@ -379,6 +443,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         }),
       {
         initialProps: {
@@ -393,6 +458,55 @@ describe('useTimelineSync', () => {
     });
 
     expect(result.current.timeline.linkedTimelines[0]).toBe(roomOne.timelineSet.getLiveTimeline());
+  });
+
+  it('ignores a pending result for the previous room even when the event id is unchanged', async () => {
+    const roomOne = createRoom('!room:one');
+    const roomTwo = createRoom('!room:two');
+    const targetId = '$same:test';
+    const oldTargetTimeline = {
+      ...createTimeline([{ getId: () => targetId }], roomOne.timelineSet),
+      getNeighbouringTimeline: () => undefined,
+    };
+    roomOne.timelineSet.getTimelineForEvent = () => oldTargetTimeline as never;
+    let resolveJump: ((timeline: unknown) => void) | undefined;
+    const mx = makeMx({
+      getEventTimeline: vi.fn<() => Promise<unknown>>(
+        () =>
+          new Promise((resolve) => {
+            resolveJump = resolve;
+          })
+      ),
+    });
+    const options = {
+      mx,
+      eventId: targetId,
+      isAtBottom: false,
+      isAtBottomRef: { current: false },
+      scrollToBottom: vi.fn<() => void>(),
+      unreadInfo: undefined,
+      setUnreadInfo: vi.fn<() => void>(),
+      hideReadsRef: { current: false },
+      readUptoEventIdRef: { current: undefined },
+      isInactivePanelRef: { current: false },
+    };
+    const { result, rerender } = renderHook(({ room }) => useTimelineSync({ ...options, room }), {
+      initialProps: { room: roomOne.room as Room },
+    });
+
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.loadEventTimeline(targetId);
+      await Promise.resolve();
+    });
+    rerender({ room: roomTwo.room as Room });
+    await act(async () => {
+      resolveJump?.(oldTargetTimeline);
+      await pending;
+    });
+
+    expect(result.current.timeline.linkedTimelines).not.toContain(oldTargetTimeline);
+    expect(result.current.focusItem).toBeUndefined();
   });
 
   describe('auto-follow on live message', () => {
@@ -412,6 +526,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         })
       );
 
@@ -439,6 +554,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         })
       );
 
@@ -469,6 +585,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo,
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         })
       );
 
@@ -497,6 +614,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         })
       );
 
@@ -523,6 +641,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         })
       );
 
@@ -553,6 +672,7 @@ describe('useTimelineSync', () => {
           setUnreadInfo: vi.fn<() => void>(),
           hideReadsRef: { current: false },
           readUptoEventIdRef: { current: undefined },
+          isInactivePanelRef: { current: false },
         })
       );
 
@@ -561,6 +681,7 @@ describe('useTimelineSync', () => {
         getSender: () => '@bob:test',
         getRoomId: () => room.roomId,
         getTs: () => Date.now(),
+        isRedaction: () => false,
       };
       await act(async () => {
         room.emit(RoomEvent.Timeline, mEvent, room, false, false, {
@@ -589,6 +710,7 @@ const syncOpts = (
   setUnreadInfo: vi.fn<() => void>(),
   hideReadsRef: { current: false },
   readUptoEventIdRef: { current: undefined },
+  isInactivePanelRef: { current: false },
   isEventVisible,
 });
 
@@ -779,6 +901,189 @@ describe('back-pagination', () => {
       expect(result.current.backwardStatus).toBe('idle');
       expect(paginateEventTimeline).toHaveBeenCalledTimes(1);
     });
+
+    it('releases the lock after a reset so a later request still runs', async () => {
+      const { room, timelineSet } = createPaginableRoom();
+      const resolvers: ((value: boolean) => void)[] = [];
+      const paginateEventTimeline = vi.fn<() => Promise<boolean>>(
+        () => new Promise<boolean>((resolve) => resolvers.push(resolve))
+      );
+      const { result } = renderHook(() =>
+        useTimelineSync(syncOpts(room, paginateEventTimeline, () => false))
+      );
+
+      let paginatePromise: Promise<void> | undefined;
+      await act(async () => {
+        paginatePromise = result.current.handleTimelinePagination(true);
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        timelineSet.emit(RoomEvent.TimelineReset);
+        resolvers[0]?.(true);
+        await paginatePromise;
+      });
+      expect(result.current.backwardStatus).toBe('idle');
+
+      await act(async () => {
+        const retry = result.current.handleTimelinePagination(true);
+        await Promise.resolve();
+        resolvers[1]?.(true);
+        await retry;
+      });
+
+      expect(paginateEventTimeline).toHaveBeenCalledTimes(2);
+      expect(result.current.backwardStatus).toBe('idle');
+    });
+  });
+});
+
+function createChainedRoom(roomId = '!room:test') {
+  const olderEvents: unknown[] = [{}];
+  const liveEvents: unknown[] = [{}];
+  const tokens = {
+    olderBackward: 'older-back' as string | undefined,
+    olderForward: 'older-forward-stale' as string | undefined,
+    liveBackward: undefined as string | undefined,
+    liveForward: 'live-forward' as string | undefined,
+  };
+
+  const timelineSet = new EventEmitter() as FakeTimelineSet;
+  const older = {
+    getEvents: () => olderEvents,
+    getPaginationToken: (d: Direction) =>
+      d === Direction.Backward ? tokens.olderBackward : tokens.olderForward,
+    getNeighbouringTimeline: (d: Direction) => (d === Direction.Forward ? live : undefined),
+    getRoomId: () => roomId,
+    getTimelineSet: () => timelineSet,
+  };
+  const live = {
+    getEvents: () => liveEvents,
+    getPaginationToken: (d: Direction) =>
+      d === Direction.Backward ? tokens.liveBackward : tokens.liveForward,
+    getNeighbouringTimeline: (d: Direction) => (d === Direction.Backward ? older : undefined),
+    getRoomId: () => roomId,
+    getTimelineSet: () => timelineSet,
+  };
+  timelineSet.getLiveTimeline = () => live as unknown as FakeTimeline;
+  timelineSet.getTimelineForEvent = () => undefined;
+
+  const roomEmitter = new EventEmitter();
+  const room = {
+    on: roomEmitter.on.bind(roomEmitter),
+    removeListener: roomEmitter.removeListener.bind(roomEmitter),
+    emit: roomEmitter.emit.bind(roomEmitter),
+    roomId,
+    getUnfilteredTimelineSet: () => timelineSet as never,
+    getEventReadUpTo: () => null,
+    getThread: () => null,
+    getLiveTimeline: () => live,
+    getUnreadNotificationCount: () => 0,
+    getMyMembership: () => 'join',
+    getMember: () => null,
+    hasEncryptionStateEvent: () => false,
+    client: { getUserId: () => '@alice:test' },
+  } as unknown as FakeRoom;
+
+  return { room, timelineSet, older, live, olderEvents, liveEvents, tokens };
+}
+
+describe('pagination continuation bounds', () => {
+  it('reads the newest timeline for the forward continuation token, not the oldest', async () => {
+    const chain = createChainedRoom();
+    const paginateEventTimeline = vi.fn<() => Promise<boolean>>(async () => {
+      chain.liveEvents.push({});
+      chain.tokens.liveForward = undefined;
+      return true;
+    });
+    const { result } = renderHook(() =>
+      useTimelineSync(syncOpts(chain.room, paginateEventTimeline, () => false))
+    );
+
+    await act(async () => {
+      await result.current.handleTimelinePagination(false);
+    });
+
+    expect(chain.older.getPaginationToken(Direction.Forward)).toBe('older-forward-stale');
+    expect(paginateEventTimeline).toHaveBeenCalledTimes(1);
+    expect(result.current.forwardStatus).toBe('idle');
+  });
+
+  it('settles to idle when the continuation token disappears between iterations', async () => {
+    const { room, events } = createPaginableRoom();
+    const timeline = room.getUnfilteredTimelineSet().getLiveTimeline() as unknown as {
+      getPaginationToken: () => string | undefined;
+    };
+    const paginateEventTimeline = vi.fn<() => Promise<boolean>>(async () => {
+      events.push({});
+      timeline.getPaginationToken = () => undefined;
+      return true;
+    });
+    const { result } = renderHook(() =>
+      useTimelineSync(syncOpts(room, paginateEventTimeline, () => false))
+    );
+
+    await act(async () => {
+      await result.current.handleTimelinePagination(true);
+    });
+
+    expect(paginateEventTimeline).toHaveBeenCalledTimes(1);
+    expect(result.current.backwardStatus).toBe('idle');
+  });
+
+  it('settles to idle when the timeline chain empties mid-flight', async () => {
+    const { room, timelineSet, events } = createPaginableRoom();
+    let resolvePaginate: ((value: boolean) => void) | undefined;
+    const paginateEventTimeline = vi.fn<() => Promise<boolean>>(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvePaginate = resolve;
+        })
+    );
+    const { result } = renderHook(() =>
+      useTimelineSync(syncOpts(room, paginateEventTimeline, () => false))
+    );
+
+    let paginatePromise: Promise<void> | undefined;
+    await act(async () => {
+      paginatePromise = result.current.handleTimelinePagination(true);
+      await Promise.resolve();
+    });
+    expect(result.current.backwardStatus).toBe('loading');
+
+    await act(async () => {
+      events.length = 0;
+      timelineSet.emit(RoomEvent.TimelineReset);
+      resolvePaginate?.(true);
+      await paginatePromise;
+    });
+
+    expect(paginateEventTimeline).toHaveBeenCalledTimes(1);
+    expect(result.current.backwardStatus).toBe('idle');
+  });
+
+  it('deduplicates concurrent requests per direction', async () => {
+    const chain = createChainedRoom();
+    const paginateEventTimeline = vi.fn<() => Promise<boolean>>(async () => {
+      chain.liveEvents.push({}, {}, {}, {}, {});
+      return true;
+    });
+    const { result } = renderHook(() =>
+      useTimelineSync(syncOpts(chain.room, paginateEventTimeline, () => true))
+    );
+
+    await act(async () => {
+      await Promise.all([
+        result.current.handleTimelinePagination(true),
+        result.current.handleTimelinePagination(true),
+        result.current.handleTimelinePagination(false),
+        result.current.handleTimelinePagination(false),
+      ]);
+    });
+
+    expect(paginateEventTimeline).toHaveBeenCalledTimes(2);
+    expect(result.current.backwardStatus).toBe('idle');
+    expect(result.current.forwardStatus).toBe('idle');
   });
 });
 
@@ -788,25 +1093,52 @@ const renderSyncHook = (
     isAtBottom?: boolean;
     mx?: Record<string, unknown>;
     readUptoEventId?: string;
+    isInactivePanel?: boolean;
+    eventId?: string;
+    isEventVisible?: (mEvent: MatrixEvent, timelineSet: EventTimelineSet) => boolean;
   } = {}
 ) => {
   const scrollToBottom = vi.fn<() => void>();
-  const isAtBottom = options.isAtBottom ?? true;
-  const { result } = renderHook(() =>
-    useTimelineSync({
-      room: room as Room,
-      mx: (options.mx ?? makeMx()) as never,
-      isAtBottom,
-      isAtBottomRef: { current: isAtBottom },
-      scrollToBottom,
-      unreadInfo: undefined,
-      setUnreadInfo: vi.fn<() => void>(),
-      hideReadsRef: { current: false },
-      readUptoEventIdRef: { current: options.readUptoEventId },
-    })
+  const setUnreadInfo = vi.fn<() => void>();
+  const onJumpError = vi.fn<() => void>();
+  const onReturnToLive = vi.fn<() => void>();
+  const initialIsAtBottom = options.isAtBottom ?? true;
+  const { result, rerender } = renderHook(
+    ({
+      eventId,
+      isAtBottom = initialIsAtBottom,
+    }: {
+      eventId: string | undefined;
+      isAtBottom?: boolean;
+    }) =>
+      useTimelineSync({
+        room: room as Room,
+        mx: (options.mx ?? makeMx()) as never,
+        eventId,
+        isAtBottom,
+        isAtBottomRef: { current: isAtBottom },
+        scrollToBottom,
+        unreadInfo: undefined,
+        setUnreadInfo,
+        hideReadsRef: { current: false },
+        readUptoEventIdRef: { current: options.readUptoEventId },
+        isInactivePanelRef: { current: options.isInactivePanel ?? false },
+        onJumpError,
+        onReturnToLive,
+        isEventVisible: options.isEventVisible,
+      }),
+    { initialProps: { eventId: options.eventId, isAtBottom: initialIsAtBottom } }
   );
-  return { result, scrollToBottom };
+  return { result, scrollToBottom, setUnreadInfo, onJumpError, onReturnToLive, rerender };
 };
+
+const redactionOf = (targetId: string) =>
+  ({
+    event: { redacts: targetId },
+    isRedaction: () => true,
+    getSender: () => '@bob:test',
+    getRelation: () => undefined,
+  }) as unknown as MatrixEvent;
 
 const makeLiveEvent = (roomId: string, ts: number) => ({
   threadRootId: undefined,
@@ -814,9 +1146,70 @@ const makeLiveEvent = (roomId: string, ts: number) => ({
   getRoomId: () => roomId,
   getTs: () => ts,
   getRelation: () => undefined,
+  isRedaction: () => false,
 });
 
 describe('live-arrive edge cases', () => {
+  it('returns to the live end when an own message is sent while scrolled up', async () => {
+    const { room, timeline, events } = createRoom();
+    const { onReturnToLive, scrollToBottom } = renderSyncHook(room, { isAtBottom: false });
+    const ownEvent = {
+      ...makeEvent('@alice:test', room.roomId),
+      isSending: () => true,
+    };
+
+    await act(async () => {
+      events.push(ownEvent);
+      room.emit(RoomEvent.Timeline, ownEvent, room, false, false, {
+        liveEvent: true,
+        timeline,
+      });
+      await Promise.resolve();
+    });
+
+    expect(onReturnToLive).toHaveBeenCalledOnce();
+    expect(scrollToBottom).toHaveBeenCalledWith('instant');
+  });
+
+  it('signals a prepend on the displayed timeline', async () => {
+    const { room, timeline } = createRoom();
+    const { result } = renderSyncHook(room, { isAtBottom: false });
+
+    expect(result.current.prependVersion).toBe(0);
+    await act(async () => {
+      room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, true, false, {
+        liveEvent: false,
+        timeline,
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.prependVersion).toBe(1);
+  });
+
+  it('signals a filtered prepend batched with a visible append', async () => {
+    const { room, timeline, events } = createRoom();
+    const prependedEvent = makeLiveEvent(room.roomId, 1) as unknown as MatrixEvent;
+    const appendedEvent = makeLiveEvent(room.roomId, 2) as unknown as MatrixEvent;
+    const isEventVisible = (mEvent: MatrixEvent) => mEvent === appendedEvent;
+    const { result } = renderSyncHook(room, { isAtBottom: false, isEventVisible });
+
+    await act(async () => {
+      room.emit(RoomEvent.Timeline, prependedEvent, room, true, false, {
+        liveEvent: false,
+        timeline,
+      });
+      events.push({});
+      room.emit(RoomEvent.Timeline, appendedEvent, room, false, false, {
+        liveEvent: true,
+        timeline,
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.prependVersion).toBe(1);
+  });
+
   it('ignores timeline events emitted for a different room', async () => {
     const { room, timeline, events } = createRoom();
     const otherRoom = createRoom('!other:test');
@@ -846,7 +1239,7 @@ describe('live-arrive edge cases', () => {
     const { scrollToBottom } = renderSyncHook(room);
 
     await act(async () => {
-      events.push({});
+      events.pop();
       room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, true, {
         liveEvent: false,
         timeline,
@@ -857,42 +1250,151 @@ describe('live-arrive edge cases', () => {
     expect(scrollToBottom).not.toHaveBeenCalled();
   });
 
-  it('treats only recent non-live events as part of the reconnect backfill window', async () => {
+  it('renders a stale non-live event appended to the live timeline', async () => {
     const { room, timeline, events } = createRoom();
-    const { scrollToBottom } = renderSyncHook(room);
+    const { result } = renderSyncHook(room);
+    const before = result.current.timeline;
+    vi.mocked(isWindowFocused).mockReturnValue(true);
+    await act(async () => {
+      await flushRaf();
+    });
+    vi.mocked(markAsRead).mockClear();
 
-    // A reconnect pages events onto the live timeline without liveEvent: true;
-    // anything older than the 60 s grace window is history, not an arrival.
     await act(async () => {
       events.push({});
       room.emit(
         RoomEvent.Timeline,
-        makeLiveEvent(room.roomId, Date.now() - 120_000),
+        makeLiveEvent(room.roomId, Date.now() - 29 * 60_000),
         room,
         false,
         false,
         { liveEvent: false, timeline }
       );
-      await Promise.resolve();
+      await flushRaf();
     });
-    expect(scrollToBottom).not.toHaveBeenCalled();
+
+    expect(result.current.timeline).not.toBe(before);
+    expect(markAsRead).not.toHaveBeenCalled();
+    vi.mocked(isWindowFocused).mockReturnValue(false);
+  });
+
+  it('renders a removal', async () => {
+    const { room, timeline, events } = createRoom();
+    const { result } = renderSyncHook(room);
+    const before = result.current.timeline;
 
     await act(async () => {
-      events.push({});
-      room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, false, {
+      events.pop();
+      room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, true, {
         liveEvent: false,
         timeline,
       });
       await Promise.resolve();
     });
+
+    expect(result.current.timeline).not.toBe(before);
+  });
+
+  it('ignores events emitted for a thread timeline set', async () => {
+    const { room, events } = createRoom();
+    const otherSet = new EventEmitter() as FakeTimelineSet;
+    const threadTimeline = { ...createTimeline(events), getTimelineSet: () => otherSet };
+    const { result, scrollToBottom } = renderSyncHook(room);
+    const before = result.current.timeline;
+
+    await act(async () => {
+      room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, false, {
+        liveEvent: true,
+        timeline: threadTimeline,
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.timeline).toBe(before);
+    expect(scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a threaded reply as an arrival when it lands on the main set', async () => {
+    const { room, timeline, events } = createRoom();
+    const { result } = renderSyncHook(room);
+    const before = result.current.timeline;
+    vi.mocked(isWindowFocused).mockReturnValue(true);
+    await act(async () => {
+      await flushRaf();
+    });
+    vi.mocked(markAsRead).mockClear();
+
+    await act(async () => {
+      events.push({});
+      room.emit(
+        RoomEvent.Timeline,
+        {
+          ...makeLiveEvent(room.roomId, Date.now()),
+          threadRootId: '$root:test',
+          getId: () => '$reply:test',
+          getContent: () => ({ 'm.relates_to': { rel_type: 'm.thread', event_id: '$root:test' } }),
+          getRelation: () => ({ rel_type: 'm.thread', event_id: '$root:test' }),
+        },
+        room,
+        false,
+        false,
+        { liveEvent: true, timeline }
+      );
+      await flushRaf();
+    });
+
+    expect(result.current.timeline).not.toBe(before);
+    expect(markAsRead).not.toHaveBeenCalled();
+    vi.mocked(isWindowFocused).mockReturnValue(false);
+  });
+
+  it('scrolls for a genuinely live event on the main timeline', async () => {
+    const { room, timeline, events } = createRoom();
+    const { scrollToBottom } = renderSyncHook(room);
+
+    await act(async () => {
+      events.push({});
+      room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, false, {
+        liveEvent: true,
+        timeline,
+      });
+      await Promise.resolve();
+    });
+
     expect(scrollToBottom).toHaveBeenCalledWith('instant');
+  });
+
+  it('does not mark a room read while it sits behind the room list', async () => {
+    vi.mocked(isWindowFocused).mockReturnValue(true);
+    const emitLive = async (room: FakeRoom, timeline: FakeTimeline, events: unknown[]) => {
+      await act(async () => {
+        events.push({});
+        room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, false, {
+          liveEvent: true,
+          timeline,
+        });
+        await flushRaf();
+      });
+    };
+
+    const active = createRoom();
+    renderSyncHook(active.room);
+    await emitLive(active.room, active.timeline, active.events);
+    expect(markAsRead).toHaveBeenCalled();
+
+    vi.mocked(markAsRead).mockClear();
+
+    const inactive = createRoom('!behind:test');
+    renderSyncHook(inactive.room, { isInactivePanel: true });
+    await emitLive(inactive.room, inactive.timeline, inactive.events);
+    expect(markAsRead).not.toHaveBeenCalled();
+
+    vi.mocked(isWindowFocused).mockRestore();
   });
 
   it('ignores events emitted on a non-live timeline of the same room', async () => {
     const { room, events } = createRoom();
     const { scrollToBottom } = renderSyncHook(room);
-    // A detached window (permalink jump / search result) backfilling in the
-    // background must not pull the view to the bottom of the live timeline.
     const detached = createTimeline([{}]);
 
     await act(async () => {
@@ -907,16 +1409,14 @@ describe('live-arrive edge cases', () => {
     expect(scrollToBottom).not.toHaveBeenCalled();
   });
 
-  it('re-anchors after a sliding sync reset and ignores events on the detached timeline', async () => {
+  it('re-anchors after a sliding sync reset without treating the old timeline as an arrival', async () => {
     const { room, timelineSet } = createRoom();
     const { scrollToBottom } = renderSyncHook(room);
     const oldTimeline = timelineSet.getLiveTimeline();
     const freshEvents: unknown[] = [];
-    const freshTimeline = createTimeline(freshEvents);
+    const freshTimeline = createTimeline(freshEvents, timelineSet);
     timelineSet.getLiveTimeline = () => freshTimeline;
 
-    // An event arriving on the OLD timeline is dropped even though the live
-    // timeline did grow — pushing to `events` instead would pass either way.
     await act(async () => {
       freshEvents.push({});
       room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, false, false, {
@@ -964,6 +1464,7 @@ describe('live-arrive edge cases', () => {
         setUnreadInfo,
         hideReadsRef: { current: false },
         readUptoEventIdRef: { current: undefined },
+        isInactivePanelRef: { current: false },
       })
     );
 
@@ -1036,6 +1537,7 @@ describe('event jump recovery', () => {
       getEvents: () => olderEvents,
       getPaginationToken: () => undefined,
       getRoomId: () => room.roomId,
+      getTimelineSet: () => timelineSet,
       getNeighbouringTimeline: (direction: Direction) =>
         direction === Direction.Forward ? targetTimeline : undefined,
     };
@@ -1043,22 +1545,25 @@ describe('event jump recovery', () => {
       getEvents: () => [{ getId: () => targetId }],
       getPaginationToken: () => undefined,
       getRoomId: () => room.roomId,
+      getTimelineSet: () => timelineSet,
       getNeighbouringTimeline: (direction: Direction) =>
         direction === Direction.Backward ? olderTimeline : undefined,
     };
 
-    const roomInitialSync = vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined));
     const getLatestTimeline = vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined));
     return {
       room,
+      timelineSet,
       olderTimeline,
       targetTimeline,
-      roomInitialSync,
       getLatestTimeline,
       mx: makeMx({
-        roomInitialSync,
         getLatestTimeline,
-        getEventTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(targetTimeline)),
+        getEventTimeline: vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+          targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+          olderTimeline.getTimelineSet = () => set as FakeTimelineSet;
+          return Promise.resolve(targetTimeline);
+        }),
       }),
     };
   };
@@ -1066,6 +1571,7 @@ describe('event jump recovery', () => {
   it('backfills and jumps to a permalink target that is not in the loaded history', async () => {
     const fixture = setupUnloadedTarget('$target:test');
     const { result, scrollToBottom } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
       isAtBottom: false,
       mx: fixture.mx,
     });
@@ -1074,21 +1580,580 @@ describe('event jump recovery', () => {
       await result.current.loadEventTimeline('$target:test');
     });
 
-    expect(fixture.roomInitialSync).toHaveBeenCalled();
-    expect(fixture.getLatestTimeline).toHaveBeenCalled();
+    expect(fixture.getLatestTimeline).not.toHaveBeenCalled();
+    expect(fixture.targetTimeline.getTimelineSet()).not.toBe(
+      fixture.room.getUnfilteredTimelineSet()
+    );
     // The whole linked chain is adopted, not just the timeline holding the event.
     expect(result.current.timeline.linkedTimelines).toEqual([
       fixture.olderTimeline,
       fixture.targetTimeline,
     ]);
-    // Absolute index across the chain: 2 older events precede the target.
-    expect(result.current.focusItem).toEqual({ index: 2, scrollTo: true, highlight: true });
+    expect(result.current.focusItem).toEqual({
+      eventId: '$target:test',
+      scrollTo: true,
+      highlight: true,
+    });
+    expect(scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it('backfills a non-route jump target that is not in the loaded history', async () => {
+    const fixture = setupUnloadedTarget('$reply:test');
+    const { result } = renderSyncHook(fixture.room, {
+      isAtBottom: false,
+      mx: fixture.mx,
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$reply:test');
+    });
+
+    expect(result.current.timeline.linkedTimelines).toEqual([
+      fixture.olderTimeline,
+      fixture.targetTimeline,
+    ]);
+    expect(result.current.focusItem).toEqual({
+      eventId: '$reply:test',
+      scrollTo: true,
+      highlight: true,
+    });
+  });
+
+  it('keeps the newest result when the same target is loaded twice', async () => {
+    const targetId = '$target:test';
+    const fixture = setupUnloadedTarget(targetId);
+    const newerTimeline = {
+      ...createTimeline([{ getId: () => targetId }], fixture.timelineSet),
+      getNeighbouringTimeline: () => undefined,
+    };
+    const resolvers: Array<(timeline: unknown) => void> = [];
+    const jumpSets: unknown[] = [];
+    const mx = makeMx({
+      getEventTimeline: vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+        jumpSets.push(set);
+        return new Promise((resolve) => resolvers.push(resolve));
+      }),
+      getLatestTimeline: fixture.getLatestTimeline,
+    });
+    const { result } = renderSyncHook(fixture.room, { isAtBottom: false, mx });
+
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    await act(async () => {
+      first = result.current.loadEventTimeline(targetId);
+      second = result.current.loadEventTimeline(targetId);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      newerTimeline.getTimelineSet = () => jumpSets[1] as FakeTimelineSet;
+      resolvers[1]?.(newerTimeline);
+      await second;
+    });
+    expect(result.current.timeline.linkedTimelines).toEqual([newerTimeline]);
+
+    await act(async () => {
+      fixture.targetTimeline.getTimelineSet = () => jumpSets[0] as FakeTimelineSet;
+      resolvers[0]?.(fixture.targetTimeline);
+      await first;
+    });
+    expect(result.current.timeline.linkedTimelines).toEqual([newerTimeline]);
+  });
+
+  it('fills context on both sides of the jump target before focusing it', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const paginateEventTimeline = vi.fn<() => Promise<boolean>>(() => Promise.resolve(true));
+    const mx = makeMx({
+      getLatestTimeline: fixture.getLatestTimeline,
+      paginateEventTimeline,
+      getEventTimeline: vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+        fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+        return Promise.resolve(fixture.targetTimeline);
+      }),
+    });
+    const { result } = renderSyncHook(fixture.room, { isAtBottom: false, mx });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+
+    const directions = paginateEventTimeline.mock.calls.map(
+      (call) => (call as unknown as [unknown, { backwards: boolean }])[1].backwards
+    );
+    expect(directions).toContain(true);
+    expect(directions).toContain(false);
+  });
+
+  it('fails a jump rather than rendering a target without newer context', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const paginateEventTimeline = vi.fn<
+      (timeline: unknown, options: { backwards: boolean }) => Promise<boolean>
+    >((_timeline, { backwards }) =>
+      backwards ? Promise.resolve(true) : Promise.reject(new Error('forward context failed'))
+    );
+    const { result, onJumpError } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx: makeMx({
+        getEventTimeline: vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+          fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+          return Promise.resolve(fixture.targetTimeline);
+        }),
+        paginateEventTimeline,
+      }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+
+    expect(result.current.focusItem).toBeUndefined();
+    expect(result.current.jumpFailed).toBe(true);
+    expect(onJumpError).toHaveBeenCalledOnce();
+  });
+
+  it('stays on the live chain only for the newest live event', async () => {
+    const { room, timelineSet, timeline, events } = createRoom();
+    events.length = 0;
+    events.push({ getId: () => '$newest' });
+    timelineSet.getTimelineForEvent = (eventId?: string) =>
+      eventId === '$newest' ? timeline : undefined;
+    const getEventTimeline = vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined));
+    const { result } = renderSyncHook(room, {
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$newest');
+    });
+
+    expect(getEventTimeline).not.toHaveBeenCalled();
+    expect(result.current.timeline.linkedTimelines).toEqual([timeline]);
+    expect(result.current.focusItem).toMatchObject({ eventId: '$newest', scrollTo: true });
+  });
+
+  it('loads isolated context for a target that is not on the live chain', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+      fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+      return Promise.resolve(fixture.targetTimeline);
+    });
+    const { result } = renderSyncHook(fixture.room, {
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+
+    expect(getEventTimeline).toHaveBeenCalledOnce();
+    expect(getEventTimeline.mock.calls[0]?.[0]).not.toBe(fixture.room.getUnfilteredTimelineSet());
+  });
+
+  it('keeps a non-route jump window across a live timeline reset', async () => {
+    const fixture = setupUnloadedTarget('$reply:test');
+    const { result } = renderSyncHook(fixture.room, { isAtBottom: false, mx: fixture.mx });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$reply:test');
+    });
+    await act(async () => {
+      fixture.timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(result.current.timeline.linkedTimelines).toEqual([
+      fixture.olderTimeline,
+      fixture.targetTimeline,
+    ]);
+  });
+
+  it('returns to the refreshed live snapshot when focused forward pagination is exhausted', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const replacementLive = createTimeline([{ getId: () => '$latest:test' }], fixture.timelineSet);
+    const focusedTimeline = fixture.targetTimeline as unknown as {
+      getPaginationToken: (direction: Direction) => string | undefined;
+    };
+    focusedTimeline.getPaginationToken = (direction: Direction) =>
+      direction === Direction.Forward ? 'forward-token' : undefined;
+    fixture.timelineSet.getLiveTimeline = () => replacementLive;
+    const paginateEventTimeline = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    const { result } = renderSyncHook(fixture.room, {
+      isAtBottom: false,
+      mx: {
+        ...(fixture.mx as unknown as Record<string, unknown>),
+        paginateEventTimeline,
+      },
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+    await act(async () => {
+      await result.current.handleTimelinePagination(false);
+    });
+
+    expect(result.current.timeline.linkedTimelines).toEqual([replacementLive]);
+    expect(result.current.liveTimelineLinked).toBe(true);
+  });
+
+  it('focus live invalidates a pending focused load', async () => {
+    const { room, timeline } = createRoom();
+    const focused = createTimeline([{ getId: () => '$target:test' }]);
+    let resolveLoad: ((value: unknown) => void) | undefined;
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>(
+      (set) =>
+        new Promise((resolve) => {
+          focused.getTimelineSet = () => set as FakeTimelineSet;
+          resolveLoad = resolve;
+        })
+    );
+    const { result } = renderSyncHook(room, {
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.loadEventTimeline('$target:test');
+      await Promise.resolve();
+      result.current.focusLiveTimeline();
+      resolveLoad?.(focused);
+      await pending;
+    });
+
+    expect(result.current.timeline.linkedTimelines).toEqual([timeline]);
+    expect(result.current.focusItem).toBeUndefined();
+  });
+
+  it('does not restart an in-flight route focus when the live timeline resets', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    let resolveLoad: ((timeline: unknown) => void) | undefined;
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>(
+      (set) =>
+        new Promise((resolve) => {
+          fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+          resolveLoad = resolve;
+        })
+    );
+    const { result } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.loadEventTimeline('$target:test');
+      await Promise.resolve();
+      fixture.timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(getEventTimeline).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveLoad?.(fixture.targetTimeline);
+      await pending;
+    });
+
+    expect(result.current.focusItem).toMatchObject({ eventId: '$target:test', scrollTo: true });
+  });
+
+  it('retries a route jump that failed once the timeline resets', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const getEventTimeline = vi
+      .fn<(set: unknown) => Promise<unknown>>()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementation((set) => {
+        fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+        return Promise.resolve(fixture.targetTimeline);
+      });
+    const { result } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+    expect(result.current.jumpFailed).toBe(true);
+
+    await act(async () => {
+      fixture.timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(getEventTimeline).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a route jump window when a reset lands before the render commits', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+      fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+      fixture.olderTimeline.getTimelineSet = () => set as FakeTimelineSet;
+      return Promise.resolve(fixture.targetTimeline);
+    });
+    const { result } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+      fixture.timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(getEventTimeline).toHaveBeenCalledOnce();
+    expect(result.current.timeline.linkedTimelines).toEqual([
+      fixture.olderTimeline,
+      fixture.targetTimeline,
+    ]);
+  });
+
+  it('re-resolves a route jump after a reset even when the old chain still maps it', async () => {
+    const { room, timelineSet, timeline, events } = createRoom();
+    events.length = 0;
+    events.push({ getId: () => '$target' });
+    timelineSet.getTimelineForEvent = (eventId?: string) =>
+      eventId === '$target' ? timeline : undefined;
+    const getEventTimeline = vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined));
+    const { result } = renderSyncHook(room, {
+      eventId: '$target',
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target');
+    });
+    expect(result.current.timeline.linkedTimelines).toEqual([timeline]);
+
+    const replacement = createTimeline([{ getId: () => '$target' }], timelineSet);
+    timelineSet.getLiveTimeline = () => replacement;
+    await act(async () => {
+      timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(result.current.timeline.linkedTimelines).toEqual([replacement]);
+  });
+
+  it('applies a live redaction to the event inside a displayed window', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const windowEvent = {
+      getId: () => '$redacted:test',
+      isRedacted: () => false,
+      makeRedacted: vi.fn<() => void>(),
+    };
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+      const focusedSet = set as FakeTimelineSet;
+      focusedSet.findEventById = (eventId: string) =>
+        eventId === '$redacted:test' ? windowEvent : undefined;
+      fixture.targetTimeline.getTimelineSet = () => focusedSet;
+      fixture.olderTimeline.getTimelineSet = () => focusedSet;
+      return Promise.resolve(fixture.targetTimeline);
+    });
+    const { result } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+    await act(async () => {
+      fixture.room.emit(RoomEvent.Redaction, redactionOf('$redacted:test'), fixture.room);
+      await Promise.resolve();
+    });
+
+    expect(windowEvent.makeRedacted).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the room to redact its own set', async () => {
+    const { room, timelineSet } = createRoom();
+    const roomEvent = { isRedacted: () => false, makeRedacted: vi.fn<() => void>() };
+    timelineSet.findEventById = () => roomEvent;
+    const { result } = renderSyncHook(room);
+
+    await act(async () => {
+      room.emit(RoomEvent.Redaction, redactionOf('$redacted:test'), room);
+      await Promise.resolve();
+    });
+
+    expect(result.current.liveTimelineLinked).toBe(true);
+    expect(roomEvent.makeRedacted).not.toHaveBeenCalled();
+  });
+
+  it('keeps a displayed route jump window when the timeline resets', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const getEventTimeline = vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+      fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+      return Promise.resolve(fixture.targetTimeline);
+    });
+    const { result } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx: makeMx({ getEventTimeline }),
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+    await act(async () => {
+      fixture.timelineSet.emit(RoomEvent.TimelineReset);
+      await Promise.resolve();
+    });
+
+    expect(getEventTimeline).toHaveBeenCalledOnce();
+    expect(result.current.timeline.linkedTimelines).toEqual([
+      fixture.olderTimeline,
+      fixture.targetTimeline,
+    ]);
+  });
+
+  it('ignores a pending result after local navigation cancels it', async () => {
+    const targetId = '$target:test';
+    const fixture = setupUnloadedTarget(targetId);
+    let resolveJump: ((timeline: unknown) => void) | undefined;
+    const mx = makeMx({
+      getLatestTimeline: fixture.getLatestTimeline,
+      getEventTimeline: vi.fn<() => Promise<unknown>>(
+        () => new Promise((resolve) => (resolveJump = resolve))
+      ),
+    });
+    const { result } = renderSyncHook(fixture.room, { isAtBottom: false, mx });
+
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.loadEventTimeline(targetId);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => result.current.cancelEventTimelineLoad());
+    await act(async () => {
+      resolveJump?.(fixture.targetTimeline);
+      await pending;
+    });
+
+    expect(result.current.timeline.linkedTimelines).not.toContain(fixture.targetTimeline);
+    expect(result.current.focusItem).toBeUndefined();
+  });
+
+  it('rejects a thread timeline instead of installing it as the room timeline', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const otherSet = new EventEmitter() as FakeTimelineSet;
+    const threadTimeline = {
+      ...createTimeline([{ getId: () => '$target:test' }], otherSet),
+      getNeighbouringTimeline: () => undefined,
+    };
+    const mx = makeMx({
+      getLatestTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined)),
+      getEventTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(threadTimeline)),
+    });
+    const { result, scrollToBottom } = renderSyncHook(fixture.room, {
+      eventId: '$target:test',
+      isAtBottom: false,
+      mx,
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+
+    expect(result.current.timeline.linkedTimelines).not.toContain(threadTimeline);
+    expect(result.current.focusItem).toBeUndefined();
+    expect(result.current.jumpFailed).toBe(true);
+    expect(scrollToBottom).toHaveBeenCalledWith('instant');
+  });
+
+  it('reports a failed jump so the timeline can still be revealed', async () => {
+    const { room } = createRoom();
+    const mx = makeMx({
+      getLatestTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined)),
+      getEventTimeline: vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error('nope'))),
+    });
+    const { result, onJumpError } = renderSyncHook(room, {
+      eventId: '$gone:test',
+      isAtBottom: false,
+      mx,
+    });
+
+    expect(result.current.jumpFailed).toBe(false);
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$gone:test');
+    });
+
+    expect(result.current.jumpFailed).toBe(true);
+    expect(onJumpError).toHaveBeenCalled();
+  });
+
+  it('does not report a stale failure for a different jump target', async () => {
+    const { room } = createRoom();
+    const mx = makeMx({
+      getLatestTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined)),
+      getEventTimeline: vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error('nope'))),
+    });
+    const { result, rerender } = renderSyncHook(room, {
+      eventId: '$gone:test',
+      isAtBottom: false,
+      mx,
+    });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$gone:test');
+    });
+    expect(result.current.jumpFailed).toBe(true);
+
+    rerender({ eventId: '$other:test', isAtBottom: false });
+    expect(result.current.jumpFailed).toBe(false);
+  });
+
+  it('ignores a jump failure for a target that is no longer current', async () => {
+    const { room } = createRoom();
+    let rejectJump: ((error: Error) => void) | undefined;
+    const mx = makeMx({
+      getLatestTimeline: vi.fn<() => Promise<unknown>>(() => Promise.resolve(undefined)),
+      getEventTimeline: vi.fn<() => Promise<unknown>>(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectJump = reject;
+          })
+      ),
+    });
+    const { result, rerender, scrollToBottom } = renderSyncHook(room, {
+      eventId: '$a:test',
+      isAtBottom: false,
+      mx,
+    });
+
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.loadEventTimeline('$a:test');
+      await Promise.resolve();
+    });
+
+    rerender({ eventId: '$b:test', isAtBottom: false });
+    await act(async () => {
+      rejectJump?.(new Error('nope'));
+      await pending;
+    });
+
+    expect(result.current.jumpFailed).toBe(false);
     expect(scrollToBottom).not.toHaveBeenCalled();
   });
 
   it('jumps without highlighting when the target is the read marker itself', async () => {
     const fixture = setupUnloadedTarget('$read:test');
     const { result } = renderSyncHook(fixture.room, {
+      eventId: '$read:test',
       isAtBottom: false,
       mx: fixture.mx,
       readUptoEventId: '$read:test',
@@ -1098,7 +2163,11 @@ describe('event jump recovery', () => {
       await result.current.loadEventTimeline('$read:test');
     });
 
-    expect(result.current.focusItem).toEqual({ index: 2, scrollTo: true, highlight: false });
+    expect(result.current.focusItem).toEqual({
+      eventId: '$read:test',
+      scrollTo: true,
+      highlight: false,
+    });
   });
 
   it('falls back to the initial timeline when a jump load times out', async () => {
@@ -1111,7 +2180,11 @@ describe('event jump recovery', () => {
         // The homeserver never answers /context: hit the 12 s timeout.
         getEventTimeline: () => new Promise(() => {}),
       });
-      const { result, scrollToBottom } = renderSyncHook(room, { isAtBottom: false, mx });
+      const { result, scrollToBottom } = renderSyncHook(room, {
+        eventId: '$missing:test',
+        isAtBottom: false,
+        mx,
+      });
 
       await act(async () => {
         const pending = result.current.loadEventTimeline('$missing:test');
@@ -1121,6 +2194,39 @@ describe('event jump recovery', () => {
 
       expect(scrollToBottom).toHaveBeenCalledWith('instant');
       expect(result.current.timeline.linkedTimelines).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out when jump context pagination never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = setupUnloadedTarget('$target:test');
+      const paginateEventTimeline = vi.fn<() => Promise<boolean>>(() => new Promise(() => {}));
+      const { result, onJumpError, scrollToBottom } = renderSyncHook(fixture.room, {
+        eventId: '$target:test',
+        isAtBottom: false,
+        mx: makeMx({
+          getEventTimeline: vi.fn<(set: unknown) => Promise<unknown>>((set) => {
+            fixture.targetTimeline.getTimelineSet = () => set as FakeTimelineSet;
+            return Promise.resolve(fixture.targetTimeline);
+          }),
+          paginateEventTimeline,
+        }),
+      });
+
+      act(() => {
+        void result.current.loadEventTimeline('$target:test');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(13_000);
+      });
+
+      expect(paginateEventTimeline).toHaveBeenCalledTimes(2);
+      expect(onJumpError).toHaveBeenCalledOnce();
+      expect(scrollToBottom).toHaveBeenCalledWith('instant');
+      expect(result.current.jumpFailed).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -1147,6 +2253,7 @@ describe('sliding sync chain relink', () => {
       getEvents: () => [{}],
       getPaginationToken: () => undefined as string | undefined,
       getRoomId: () => room.roomId,
+      getTimelineSet: () => timelineSet,
       getNeighbouringTimeline: (direction: Direction) =>
         direction === Direction.Backward ? first : undefined,
     };
@@ -1195,6 +2302,7 @@ describe('sync transport fuzz', () => {
             setUnreadInfo: vi.fn<() => void>(),
             hideReadsRef: { current: false },
             readUptoEventIdRef: { current: undefined },
+            isInactivePanelRef: { current: false },
             isEventVisible: (ev) => !(ev as unknown as { hidden?: boolean }).hidden,
           })
         );
@@ -1272,6 +2380,7 @@ describe('decryption refresh coalescing', () => {
         setUnreadInfo: vi.fn<() => void>(),
         hideReadsRef: { current: false },
         readUptoEventIdRef: { current: undefined },
+        isInactivePanelRef: { current: false },
       });
       if (!seen.includes(sync.timeline)) seen.push(sync.timeline);
       return sync;

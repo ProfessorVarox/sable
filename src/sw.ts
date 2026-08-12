@@ -382,9 +382,17 @@ function mxcToNotificationUrl(mxcUrl: string, baseUrl: string): string | undefin
   return `${baseUrl}/_matrix/media/v3/thumbnail/${encodeURIComponent(server)}/${encodeURIComponent(mediaId)}?width=96&height=96&method=crop`;
 }
 
-async function getSessionForPush(userId: string): Promise<SessionInfo | undefined> {
-  const liveSession = [...sessions.values()].find((session) => session.userId === userId);
-  return liveSession ?? loadPersistedSession(userId);
+async function getSessionForPush(userId?: string): Promise<SessionInfo | undefined> {
+  if (userId) {
+    const liveSession = [...sessions.values()].find((session) => session.userId === userId);
+    return liveSession ?? loadPersistedSession(userId);
+  }
+
+  const liveAccounts = new Set([...sessions.values()].map((session) => session.userId));
+  if (liveAccounts.size === 1) return sessions.values().next().value;
+
+  const persisted = Object.values(await loadPersistedSessions());
+  return persisted.length === 1 ? persisted[0] : undefined;
 }
 
 /**
@@ -450,7 +458,7 @@ async function handleMinimalPushPayload(
   userId: string | undefined,
   windowClients: readonly Client[]
 ): Promise<void> {
-  const session = userId ? await getSessionForPush(userId) : undefined;
+  const session = await getSessionForPush(userId);
 
   if (!session) {
     // No session anywhere — app was never opened since install, or the user logged out.
@@ -859,6 +867,7 @@ function unavailableAuthenticatedMediaResponse(): Response {
 }
 
 export const swTestHooks = {
+  getSessionForPush,
   requestSessionWithTimeout,
   respondWithMediaAuthRecovery,
   setSession,

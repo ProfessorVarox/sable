@@ -39,7 +39,13 @@ function DecoratedUser({ roomId, userId, userName }: DecoratedUserProps) {
     (evt) => {
       evt.preventDefault();
       evt.stopPropagation();
-      openUserRoomProfile(roomId, undefined, userId, evt.currentTarget.getBoundingClientRect());
+      openUserRoomProfile(
+        roomId,
+        undefined,
+        userId,
+        undefined,
+        evt.currentTarget.getBoundingClientRect()
+      );
     },
     [roomId, userId, openUserRoomProfile]
   );

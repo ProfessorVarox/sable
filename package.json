@@ -35,6 +35,8 @@
     "postinstall": "node scripts/install-knope.js",
     "setup:knope": "node scripts/install-knope.js",
     "setup:tauri-icons": "node scripts/icons/symlink.js",
+    "generate:app-icons:android": "node node_modules/tauri-plugin-app-icon-api/scripts/generate-android.mjs --config src-tauri/app-icons.json && pnpm setup:tauri-icons --write --force",
+    "generate:app-icons:ios": "node node_modules/tauri-plugin-app-icon-api/scripts/generate-ios.mjs --config src-tauri/app-icons.json",
     "lint:normalize-imports": "node scripts/normalize-imports.js"
   },
   "dependencies": {
@@ -47,6 +49,7 @@
     "@fontsource-variable/nunito": "5.2.7",
     "@fontsource/space-mono": "5.2.9",
     "@lottiefiles/dotlottie-react": "^0.12.0",
+    "@lottiefiles/dotlottie-web": "0.40.1",
     "@noble/hashes": "^2.2.0",
     "@phosphor-icons/react": "^2.1.10",
     "@sableclient/twemoji-font": "^1.0.4",
@@ -83,7 +86,7 @@
     "eventemitter3": "^5.0.4",
     "file-saver": "^2.0.5",
     "focus-trap-react": "^12.0.3",
-    "folds": "^2.6.2",
+    "folds": "^2.7.1",
     "html-dom-parser": "^8.0.0",
     "html-react-parser": "^6.1.3",
     "i18next": "^25.10.10",
@@ -121,6 +124,7 @@
     "workbox-precaching": "^7.4.1"
   },
   "devDependencies": {
+    "tauri-plugin-app-icon-api": "github:SableClient/tauri-plugin-app-icon#6da508ab93ee8c791aa28112c8e171e42257cc3c",
     "@cloudflare/vite-plugin": "^1.42.4",
     "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
     "@faker-js/faker": "^10.5.0",

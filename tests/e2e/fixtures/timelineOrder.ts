@@ -1,0 +1,59 @@
+import { expect, type Page } from '@playwright/test';
+import { getRoomMessages } from './continuwuity';
+
+/** Event IDs for `tag`, in the server's canonical order. */
+export async function canonicalEventIds(
+  baseUrl: string,
+  token: string,
+  roomId: string,
+  tag: string
+): Promise<string[]> {
+  const messages = await getRoomMessages(baseUrl, token, roomId);
+  return messages
+    .filter((message) => message.body.startsWith(`${tag}-`))
+    .map((message) => message.eventId);
+}
+
+/** Canonical message IDs currently rendered, top to bottom. */
+export async function renderedEventIds(page: Page, canonicalIds: string[]): Promise<string[]> {
+  const renderedIds = await page.locator('[data-message-id]').evaluateAll((elements) =>
+    elements.flatMap((element) => {
+      const eventId = (element as HTMLElement).dataset.messageId;
+      return eventId ? [eventId] : [];
+    })
+  );
+  const canonical = new Set(canonicalIds);
+  return renderedIds.filter((eventId) => canonical.has(eventId));
+}
+
+/**
+ * Rendered rows must be a contiguous run of the canonical order. Fails both on
+ * out-of-order events and on a gap presented as adjacent.
+ */
+export function expectContiguousRun(rendered: string[], canonical: string[]): void {
+  expect(rendered.length, 'nothing rendered').toBeGreaterThan(0);
+  const start = canonical.indexOf(rendered[0]!);
+  expect(
+    start,
+    `first rendered row "${rendered[0]}" is not in the canonical order`
+  ).toBeGreaterThan(-1);
+  expect(
+    canonical.slice(start, start + rendered.length),
+    'rendered rows are not a contiguous, in-order run of the canonical timeline'
+  ).toEqual(rendered);
+}
+
+/** A reconciliation that re-adds events to a second timeline shows up as dupes. */
+export function expectNoDuplicateRows(rendered: string[]): void {
+  const seen = new Set(rendered);
+  expect([...seen], 'a message is rendered more than once').toEqual(rendered);
+}
+
+/** Scrolls the timeline up until `text` back-paginates into view. */
+export async function wheelToTopUntilVisible(page: Page, text: string): Promise<void> {
+  await expect(async () => {
+    await page.mouse.move(640, 400);
+    await page.mouse.wheel(0, -2400);
+    expect(await page.getByText(text, { exact: true }).count()).toBeGreaterThan(0);
+  }).toPass({ timeout: 120_000, intervals: [500] });
+}

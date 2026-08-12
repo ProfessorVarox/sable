@@ -26,6 +26,7 @@ import { useUserPresence } from '$hooks/useUserPresence';
 import { useCloseUserRoomProfile } from '$state/hooks/userRoomProfile';
 import { useIgnoredUsers } from '$hooks/useIgnoredUsers';
 import { useMembership } from '$hooks/useMembership';
+import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
 
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
@@ -62,6 +63,8 @@ import { KnownMembership } from '$types/matrix-sdk';
 import { useRoomMemberHydration } from '$hooks/useRoomMemberHydration';
 import * as css from './styles.css';
 import * as prefix from '$unstable/prefixes';
+import type { Persona } from '$app/persona';
+import { usePersonaCosmetics } from '$hooks/usePerMessageProfile';
 
 const KNOWN_KEYS = new Set([
   prefix.MATRIX_SABLE_UNSTABLE_PROFILE_BIOGRAPHY_PROPERTY_NAME,
@@ -80,6 +83,7 @@ const KNOWN_KEYS = new Set([
 
 type UserExtendedSectionProps = {
   profile: UserProfile;
+  pmp?: Persona;
   htmlReactParserOptions: HTMLReactParserOptions;
   linkifyOpts: LinkifyOpts;
   innerColor?: string;
@@ -96,6 +100,7 @@ const renderValue = (val: unknown) => {
 
 function UserExtendedSection({
   profile,
+  pmp,
   htmlReactParserOptions,
   linkifyOpts,
   innerColor,
@@ -104,6 +109,7 @@ function UserExtendedSection({
 }: Readonly<UserExtendedSectionProps>) {
   const [showMisc, setShowMisc] = useState(false);
   const [miscDataIndex, setMiscDataIndex] = useState(-1);
+  const screenSize = useScreenSizeContext();
 
   const [renderAnimals] = useSetting(settingsAtom, 'renderAnimals');
   const [hour24Clock] = useSetting(settingsAtom, 'hour24Clock');
@@ -127,7 +133,7 @@ function UserExtendedSection({
   const languagesToFilterFor = getSettings().filterPronounsLanguages ?? ['en'];
 
   const pronouns = filterPronounsByLanguage(
-    profile.pronouns,
+    pmp?.['io.fsky.nyx.pronouns'] ?? profile.pronouns,
     languageFilterEnabled,
     languagesToFilterFor
   )
@@ -197,7 +203,10 @@ function UserExtendedSection({
         style={{
           position: 'absolute',
           zIndex: '100',
-          transform: `translateY(${toRem(32)})`,
+          transform:
+            screenSize === ScreenSize.Mobile && unknownFields.length > 1
+              ? `translateY(calc(-100% - ${toRem(32)}))`
+              : `translateY(${toRem(32)})`,
           backgroundColor: innerColor,
         }}
       >
@@ -230,7 +239,7 @@ function UserExtendedSection({
         ))}
       </Menu>
     );
-  }, [cardColor, innerColor, miscDataIndex, showMisc, textColor, unknownFields]);
+  }, [cardColor, innerColor, miscDataIndex, screenSize, showMisc, textColor, unknownFields]);
   const miscHeader = useMemo(
     () => (
       <Box justifyContent="Center" grow="Yes">
@@ -403,11 +412,13 @@ function UserExtendedSection({
 
 type UserRoomProfileProps = {
   userId: string;
+  pmp?: Persona;
   initialProfile?: Partial<UserProfile>;
   onSurfaceColorChange?: (color: string) => void;
 };
 export function UserRoomProfile({
   userId,
+  pmp: initialPmp,
   initialProfile,
   onSurfaceColorChange,
 }: Readonly<UserRoomProfileProps>) {
@@ -456,8 +467,17 @@ export function UserRoomProfile({
 
   useRoomMemberHydration(room, userId);
 
+  const [pmp, setPmp] = useState(initialPmp);
+  const { avatarUrl: getPmpAvatarUrl } = usePersonaCosmetics(mx, false);
+  const pmpAvatarUrl = pmp?.avatar_url ? getPmpAvatarUrl?.(pmp) : null;
+
+  const handleClearPmp = () => {
+    setPmp(undefined);
+  };
+
   const avatarMxc = getMemberAvatarMxc(room, userId) ?? extendedProfile.avatarUrl;
-  const avatarUrl = (avatarMxc && mxcUrlToHttp(mx, avatarMxc, useAuthentication)) ?? undefined;
+  const avatarUrl =
+    pmpAvatarUrl ?? (avatarMxc && mxcUrlToHttp(mx, avatarMxc, useAuthentication)) ?? undefined;
 
   const parsedBanner =
     typeof extendedProfile.bannerUrl === 'string'
@@ -570,7 +590,16 @@ export function UserRoomProfile({
       };
 
   return (
-    <Box direction="Column" style={{ color: textColor }}>
+    <Box
+      direction="Column"
+      style={{
+        color: textColor,
+        maxHeight: 'calc(85vh - 2rem)',
+        overflowY: 'auto',
+        overscrollBehavior: 'contain',
+        touchAction: 'pan-y',
+      }}
+    >
       <UserHero
         userId={userId}
         avatarUrl={avatarUrl}
@@ -598,10 +627,12 @@ export function UserRoomProfile({
         >
           <Box gap="200" alignItems="Center" wrap="Wrap" style={{ color: textColor }}>
             <UserHeroName
-              displayName={displayName}
+              displayName={pmp?.displayname ?? displayName}
               userId={userId}
               customHeroCards={showCustomHeroCard}
               server={server}
+              pmp={pmp}
+              clearPmp={handleClearPmp}
             />
             {userId !== myUserId && (
               <Button
@@ -624,6 +655,7 @@ export function UserRoomProfile({
           </Box>
           <UserExtendedSection
             profile={extendedProfile}
+            pmp={pmp}
             htmlReactParserOptions={htmlReactParserOptions}
             linkifyOpts={linkifyOpts}
             innerColor={innerColor}

@@ -37,7 +37,13 @@ export function RoomNavUser({ room, callMembership, hideText }: RoomNavUserProps
   const isCallParticipant = isActiveCall && userId !== mx.getUserId();
 
   const handleNavUserClick: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    openProfile(room.roomId, space?.roomId, userId, evt.currentTarget.getBoundingClientRect());
+    openProfile(
+      room.roomId,
+      space?.roomId,
+      userId,
+      undefined,
+      evt.currentTarget.getBoundingClientRect()
+    );
   };
 
   const ariaLabel = isCallParticipant ? `Call Participant: ${name}` : name;

@@ -253,6 +253,7 @@ export const EventHistory = as<'div', EventHistoryProps>(
                 room.roomId,
                 space?.roomId,
                 readerId,
+                undefined,
                 getMouseEventCords(event.nativeEvent),
                 'Bottom'
               );

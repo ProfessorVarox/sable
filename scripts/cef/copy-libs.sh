@@ -12,6 +12,16 @@ PROFILE="${1:-debug}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEST="${2:-$ROOT/src-tauri/target/$PROFILE}"
 
+# --target moves build-script output under target/<triple>/.
+CEF_DIR="$(
+  find "$ROOT/src-tauri/target" -type d -name cef_linux_x86_64 \
+    -path "*/$PROFILE/build/*" -print -quit 2>/dev/null || true
+)"
+if [ -z "$CEF_DIR" ]; then
+  echo "❌ CEF dist not found under target/**/$PROFILE/build — build with --features cef first." >&2
+  exit 1
+fi
+
 CEF_VERSION="$(awk '
   /^\[\[package\]\]$/ { in_cef=0 }
   /^name = "cef"$/ { in_cef=1 }
@@ -26,18 +36,6 @@ if [ -z "$CEF_VERSION" ]; then
   exit 1
 fi
 CEF_MAJOR="${CEF_VERSION%%.*}"
-
-CEF_DIR=""
-while IFS= read -r candidate; do
-  if grep -q "^#define CEF_VERSION_MAJOR $CEF_MAJOR$" "$candidate/include/cef_version.h" 2>/dev/null; then
-    CEF_DIR="$candidate"
-    break
-  fi
-done < <(find "$ROOT/src-tauri/target/$PROFILE/build" -type d -name cef_linux_x86_64 2>/dev/null)
-if [ -z "$CEF_DIR" ]; then
-  echo "❌ CEF $CEF_MAJOR dist not found under target/$PROFILE/build — build with --features cef first." >&2
-  exit 1
-fi
 
 CEF_LIB="$CEF_DIR/libcef.so"
 if [ ! -f "$CEF_LIB" ]; then
@@ -75,10 +73,5 @@ done
 mkdir -p "$DEST/locales"
 cp -f "$CEF_DIR"/locales/en-US.pak "$DEST/locales/" 2>/dev/null || true
 
-# The setuid sandbox helper only works when installed as root (deb/rpm). In a
-# nosuid context such as an AppImage, drop chrome-sandbox and let Chromium use
-# the user-namespace sandbox instead.
-if cp -f "$CEF_DIR"/chrome-sandbox "$DEST/" 2>/dev/null; then
-  chmod 4755 "$DEST/chrome-sandbox" 2>/dev/null || true
-fi
+# chrome-sandbox is not shipped: AppImages and snaps mount nosuid.
 echo "✅ done."

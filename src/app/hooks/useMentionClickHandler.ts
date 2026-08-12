@@ -38,7 +38,7 @@ export const useMentionClickHandler = (roomId: string): ReactEventHandler<HTMLEl
       if (typeof mentionId !== 'string') return;
 
       if (isUserId(mentionId)) {
-        openProfile(roomId, space?.roomId, mentionId, target.getBoundingClientRect());
+        openProfile(roomId, space?.roomId, mentionId, undefined, target.getBoundingClientRect());
         return;
       }
 

@@ -1,5 +1,5 @@
 # Tauri-specific dev tools and system dependencies.
-# Loaded via `MISE_ENV=tauri` (set by `mise run setup:tauri` or CI).
+# Loaded via `MISE_ENV=tauri` (set by the `tauri:setup` task's env, or CI).
 
 [env]
 ANDROID_NDK_VERSION = "29.0.14206865"
@@ -12,6 +12,7 @@ experimental = true
 # Android
 java = "temurin-21"
 android-sdk = "22.0"
+goreleaser = "2.17.0"
 
 [bootstrap.packages]
 # Debian/Ubuntu

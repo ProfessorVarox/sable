@@ -46,6 +46,7 @@ import { RoomViewFollowing, RoomViewFollowingPlaceholder } from './RoomViewFollo
 import * as css from './ThreadDrawer.css';
 import { SidebarResizer } from '$pages/client/sidebar/SidebarResizer';
 import { isMobileOrTablet } from '$utils/platform';
+import type { Persona } from '$app/persona';
 
 type ThreadDrawerProps = {
   room: Room;
@@ -150,6 +151,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
       roomId: string,
       spaceId: string | undefined,
       userId: string,
+      pmp: Persona | undefined,
       rect: DOMRect,
       undefinedArg?: undefined,
       options?: unknown
@@ -231,6 +233,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
       id: ev.getId() ?? `thread-reply-${idx}`,
       itemIndex: idx,
       mEvent: ev,
+      isRedacted: ev.isRedacted(),
       timelineSet,
       eventSender: ev.getSender() ?? null,
       collapsed: false,
@@ -243,6 +246,7 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
           ?.map((r) => `${r[0]}:${r[1].size}`)
           .join(',') ?? '',
       content: ev.getContent(),
+      sendStatus: ev.getAssociatedStatus(),
     }));
     // forceUpdateCounter makes this recompute whenever events arrive
   }, [room, threadRootId, thread, processedEvents, forceUpdateCounter]);
@@ -533,16 +537,9 @@ export function ThreadDrawer({ room, threadRootId, onClose, overlay }: ThreadDra
     }
   }, [mx, threadRootId, handleEdit]);
 
-  // Map jumpToEventId to a focusItem index for useTimelineEventRenderer highlighting
-  const jumpIndex = jumpToEventId ? processedEvents.findIndex((e) => e.id === jumpToEventId) : -1;
-  const focusItem =
-    jumpIndex >= 0 && processedEvents[jumpIndex]
-      ? {
-          index: processedEvents[jumpIndex].itemIndex,
-          highlight: true,
-          scrollTo: false as const,
-        }
-      : undefined;
+  const focusItem = jumpToEventId
+    ? { eventId: jumpToEventId, highlight: true, scrollTo: false as const }
+    : undefined;
 
   const renderMatrixEvent = useTimelineEventRenderer({
     room,

@@ -13,7 +13,7 @@ import {
 import type { Editor } from 'slate';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import type { Room, MatrixEvent, EventTimelineSet } from '$types/matrix-sdk';
-import { Direction, EventTimeline, EventType, RoomEvent } from '$types/matrix-sdk';
+import { Direction, EventTimeline, EventType, MsgType, RoomEvent } from '$types/matrix-sdk';
 import classNames from 'classnames';
 import type { VListHandle } from 'virtua';
 import { VList } from 'virtua';
@@ -24,6 +24,7 @@ import { MessageBase, CompactPlaceholder, DefaultPlaceholder } from '$components
 import { RoomIntro } from '$components/room-intro';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useMatrixEvent } from '$hooks/useMatrixEvent';
+import { ScreenSize, useScreenSizeOptionally } from '$hooks/useScreenSize';
 import { useAlive } from '$hooks/useAlive';
 import { useMessageEdit } from '$hooks/useMessageEdit';
 import { useDocumentFocusChange } from '$hooks/useDocumentFocusChange';
@@ -41,6 +42,7 @@ import {
   getRedactionTargetEvent,
   shouldShowRedactionTimelineEvent,
 } from '$utils/room/relations';
+import { getMemberDisplayName } from '$utils/room/display';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { useSlidingSyncRoomLoading } from '$hooks/useSlidingSyncActiveRoom';
 import { useOpenUserRoomProfile } from '$state/hooks/userRoomProfile';
@@ -57,9 +59,10 @@ import { roomIdToOpenThreadAtomFamily } from '$state/room/roomToOpenThread';
 import {
   getRoomUnreadInfo,
   getEventTimeline,
+  getDisplayedEventTimeline,
   getFirstLinkedTimeline,
-  getInitialTimeline,
   getEventIdAbsoluteIndex,
+  isNewestLiveEvent,
 } from '$utils/timeline';
 import { useTimelineSync } from '$hooks/timeline/useTimelineSync';
 import { useTimelineActions } from '$hooks/timeline/useTimelineActions';
@@ -70,11 +73,18 @@ import {
   type ProcessedEvent,
 } from '$hooks/timeline/useProcessedTimeline';
 import { useTimelineEventRenderer } from '$hooks/timeline/useTimelineEventRenderer';
+import { RoomMediaViewer } from '$components/image-viewer/RoomMediaViewer';
+import type { RoomMediaItem } from '$components/image-viewer/RoomMediaViewer';
+import type { IImageContent } from '$types/matrix/common';
 import { useTimelineRendererContext } from '$hooks/timeline/useTimelineRendererContext';
 import { TimelineScrollingProvider, useScrollActivity } from '$hooks/useTimelineScrollActivity';
 import * as css from './RoomTimeline.css';
+import type { Persona } from '$app/persona';
 
 const MAX_VIEWPORT_FILL_PAGINATIONS = 5;
+const VIRTUA_SCROLL_SETTLE_MS = 200;
+
+const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ']);
 
 const TimelineFloat = as<'div', css.TimelineFloatVariants>(
   ({ position, className, ...props }, ref) => (
@@ -107,9 +117,8 @@ const getDayDividerText = (ts: number) => {
 
 const focusItemAffectsEvent = (focusItem: unknown, eventData: ProcessedEvent | undefined) => {
   if (!focusItem || typeof focusItem !== 'object' || !eventData) return false;
-  const index = 'index' in focusItem ? focusItem.index : undefined;
-  // itemIndex -1 marks a merged relation row, which is never a focus target.
-  return typeof index === 'number' && index >= 0 && index === eventData.itemIndex;
+  const focusEventId = 'eventId' in focusItem ? focusItem.eventId : undefined;
+  return typeof focusEventId === 'string' && focusEventId === eventData.id;
 };
 
 const eventIdAffectsEvent = (eventId: string | null | undefined, eventData?: ProcessedEvent) =>
@@ -291,6 +300,7 @@ const MemoizedTimelineItem = memo(
       prev.eventData.id === next.eventData.id &&
       // A filtered mid-timeline insert shifts this without changing `index`.
       prev.eventData.itemIndex === next.eventData.itemIndex &&
+      prev.eventData.isRedacted === next.eventData.isRedacted &&
       prev.eventData.collapsed === next.eventData.collapsed &&
       prev.eventData.willRenderNewDivider === next.eventData.willRenderNewDivider &&
       prev.eventData.willRenderDayDivider === next.eventData.willRenderDayDivider &&
@@ -298,7 +308,8 @@ const MemoizedTimelineItem = memo(
       prev.eventData.eventSender === next.eventData.eventSender &&
       prev.eventData.editId === next.eventData.editId &&
       prev.eventData.reactionsKey === next.eventData.reactionsKey &&
-      prev.eventData.content === next.eventData.content
+      prev.eventData.content === next.eventData.content &&
+      prev.eventData.sendStatus === next.eventData.sendStatus
     );
   }
 );
@@ -312,6 +323,35 @@ export type RoomTimelineProps = {
   onEditId?: (editId?: string) => void;
 };
 
+const getRoomMediaItem = (
+  mEvent: MatrixEvent,
+  room: Room,
+  nicknames?: Record<string, string>
+): RoomMediaItem | undefined => {
+  if (mEvent.isRedacted()) return undefined;
+
+  const content = mEvent.getContent() as IImageContent;
+  const isImage = content.msgtype === MsgType.Image || mEvent.getType() === 'm.sticker';
+  const url = content.file?.url ?? content.url;
+  const eventId = mEvent.getId();
+
+  if (!isImage || typeof url !== 'string' || !eventId) return undefined;
+
+  const senderId = mEvent.getSender();
+
+  return {
+    eventId,
+    body: content.body ?? content.filename ?? 'Image',
+    filename: content.filename,
+    url,
+    info: content.info,
+    mimeType: content.info?.mimetype,
+    encInfo: content.file,
+    sender: senderId ? (getMemberDisplayName(room, senderId, nicknames) ?? senderId) : undefined,
+    timestamp: mEvent.getTs(),
+  };
+};
+
 export function RoomTimeline({
   room,
   eventId,
@@ -322,6 +362,7 @@ export function RoomTimeline({
   onEditId: propsOnEditId,
 }: Readonly<RoomTimelineProps>) {
   const mx = useMatrixClient();
+  const isMobile = useScreenSizeOptionally() === ScreenSize.Mobile;
   const alive = useAlive();
   const roomSyncLoading = useSlidingSyncRoomLoading(room.roomId);
 
@@ -330,6 +371,8 @@ export function RoomTimeline({
   const handleEdit = propsOnEditId ?? internalEdit.handleEdit;
   const { navigateRoom } = useRoomNavigate();
   const isInactivePanel = useIsInactivePanel();
+  const isInactivePanelRef = useRef(isInactivePanel);
+  isInactivePanelRef.current = isInactivePanel;
 
   // Shared renderer context — replaces 17+ inline useSetting calls, linkifyOpts,
   // htmlReactParserOptions, and the permissions block that were duplicated with
@@ -381,7 +424,7 @@ export function RoomTimeline({
   const hideReadsRef = useRef(hideReads);
   hideReadsRef.current = hideReads;
 
-  const prevViewportHeightRef = useRef(0);
+  const scrollAnchorRef = useRef<string | undefined>(undefined);
   const messageListRef = useRef<HTMLDivElement>(null);
 
   const openUserRoomProfile = useOpenUserRoomProfile();
@@ -408,15 +451,12 @@ export function RoomTimeline({
     atBottomRef.current = val;
   }, []);
 
-  // Resizes move the bottom without emitting a scroll event.
   const syncAtBottom = useCallback(
     (offset?: number) => {
       const v = vListRef.current;
       if (!v) return;
       const scrollTop = offset ?? v.scrollOffset;
       let isNowAtBottom = v.scrollSize - scrollTop - v.viewportSize < 100;
-      // Don't arm atBottom while a focus jump is pending: the swapped-in
-      // context window transiently clamps to its bottom edge.
       if (isNowAtBottom && !atBottomRef.current && timelineSyncRef.current.focusItem) {
         isNowAtBottom = false;
       }
@@ -425,19 +465,12 @@ export function RoomTimeline({
     [setAtBottom]
   );
 
-  const [shift, setShift] = useState(false);
   const [topSpacerHeight, setTopSpacerHeight] = useState(0);
 
   const topSpacerHeightRef = useRef(0);
   const mountScrollWindowRef = useRef<number>(Date.now() + 3000);
   const hasInitialScrolledRef = useRef(false);
-  // Stored in a ref so eventsLength fluctuations (e.g. onLifecycle timeline reset
-  // firing within the window) cannot cancel it via useLayoutEffect cleanup.
   const initialScrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Set to true when the 80 ms timer fires but processedEvents is still empty
-  // (e.g. the onLifecycle reset cleared the timeline before events refilled it).
-  // A recovery useLayoutEffect watches for processedEvents becoming non-empty
-  // and performs the final scroll + setIsReady when this flag is set.
   const pendingReadyRef = useRef(false);
   const currentRoomIdRef = useRef(room.roomId);
 
@@ -458,7 +491,6 @@ export function RoomTimeline({
   const processedEventsRef = useRef<ProcessedEvent[]>([]);
   const timelineSyncRef = useRef<typeof timelineSync>(null as unknown as typeof timelineSync);
 
-  // VList owns the scroll container and renders it as the wrapper's only child.
   const scrollElRef = useRef<HTMLElement | null>(null);
 
   const scrollToBottom = useCallback(
@@ -467,9 +499,6 @@ export function RoomTimeline({
       const lastIndex = processedEventsRef.current.length - 1;
       if (!v || lastIndex < 0) return;
 
-      // virtua aims at the last row's end from its cached item sizes, which
-      // under-report while a just-grown row is still being measured, landing above
-      // the real bottom. Overshoot by the shortfall; the browser clamps it.
       const scrollEl = scrollElRef.current;
       let offset = 0;
       if (scrollEl) {
@@ -497,18 +526,22 @@ export function RoomTimeline({
     }
   }, []);
 
-  // A jump target is by definition not the bottom. Clear the flag synchronously,
-  // before the async load resolves: the growth-follow is a useLayoutEffect, so it
-  // runs before any passive effect on the render that first paints the new rows.
-  // setAtBottom writes the ref (disarms growth-follow, ResizeObserver repin,
-  // post-pagination repin) and the state (disarms tryAutoMarkAsRead).
   const jumpToEvent = useCallback(
     (id: string) => {
       setAtBottom(false);
+      scrollAnchorRef.current = id;
       void timelineSyncRef.current.loadEventTimeline(id);
     },
     [setAtBottom]
   );
+  const handleJumpError = useCallback(() => {
+    scrollAnchorRef.current = undefined;
+    setAtBottom(true);
+  }, [setAtBottom]);
+  const handleReturnToLive = useCallback(() => {
+    if (eventId) navigateRoom(room.roomId, undefined, { replace: true });
+    setAtBottom(true);
+  }, [eventId, navigateRoom, room.roomId, setAtBottom]);
 
   const timelineSync = useTimelineSync({
     room,
@@ -521,8 +554,14 @@ export function RoomTimeline({
     setUnreadInfo,
     hideReadsRef,
     readUptoEventIdRef,
+    isInactivePanelRef,
+    onJumpError: handleJumpError,
+    onReturnToLive: handleReturnToLive,
     isEventVisible: useCallback(
       (mEvent: MatrixEvent, timelineSet: EventTimelineSet) => {
+        const sender = mEvent.getSender();
+        if (sender && ignoredUsersSet.has(sender)) return false;
+
         const type = mEvent.getType();
         const isEdit = isEditEvent(mEvent);
         const isReaction = isReactionEvent(mEvent);
@@ -603,11 +642,24 @@ export function RoomTimeline({
 
         return true;
       },
-      [hiddenEvents, hideMemberInReadOnly, isReadOnly, hideMembershipEvents, hideNickAvatarEvents]
+      [
+        hiddenEvents,
+        hideMemberInReadOnly,
+        isReadOnly,
+        hideMembershipEvents,
+        hideNickAvatarEvents,
+        ignoredUsersSet,
+      ]
     ),
   });
 
   timelineSyncRef.current = timelineSync;
+
+  const previousPrependVersionRef = useRef(timelineSync.prependVersion);
+  const shiftForPrepend = previousPrependVersionRef.current !== timelineSync.prependVersion;
+  useLayoutEffect(() => {
+    previousPrependVersionRef.current = timelineSync.prependVersion;
+  }, [timelineSync.prependVersion]);
 
   const eventsLengthRef = useRef(timelineSync.eventsLength);
   eventsLengthRef.current = timelineSync.eventsLength;
@@ -625,57 +677,90 @@ export function RoomTimeline({
   const forwardStatusRef = useRef(timelineSync.forwardStatus);
   forwardStatusRef.current = timelineSync.forwardStatus;
 
-  const getRawIndexToProcessedIndex = useCallback((rawIndex: number): number | undefined => {
+  const canPaginateForwardRef = useRef(timelineSync.canPaginateForward);
+  canPaginateForwardRef.current = timelineSync.canPaginateForward;
+
+  const scrollOwner: 'live' | 'event' =
+    eventId !== undefined ||
+    timelineSync.focusItem !== undefined ||
+    !timelineSync.liveTimelineLinked
+      ? 'event'
+      : 'live';
+  const scrollOwnerRef = useRef(scrollOwner);
+  scrollOwnerRef.current = scrollOwner;
+
+  const resolveFocusRowIndex = useCallback((focusEventId: string): number | undefined => {
     const events = processedEventsRef.current;
-    const match = events.find((e) => e.itemIndex === rawIndex);
-    if (!match) return undefined;
-    return events.indexOf(match);
+    const rowIndex = events.findIndex((e) => e.id === focusEventId);
+    if (rowIndex >= 0) return rowIndex;
+
+    const linkedTimelines = timelineSyncRef.current.timeline.linkedTimelines;
+    const evtTimeline = getDisplayedEventTimeline(linkedTimelines, focusEventId);
+    if (!evtTimeline) return undefined;
+    const rawIndex = getEventIdAbsoluteIndex(linkedTimelines, evtTimeline, focusEventId);
+    if (rawIndex === undefined) return undefined;
+    return getProcessedRowIndexForRawTimelineIndex(events, rawIndex)?.rowIndex;
   }, []);
+
+  const restoreScrollAnchor = useCallback(() => {
+    const anchorId = scrollAnchorRef.current;
+    if (!anchorId) return;
+    const index = resolveFocusRowIndex(anchorId);
+    if (index !== undefined) vListRef.current?.scrollToIndex(index, { align: 'center' });
+  }, [resolveFocusRowIndex]);
+
+  const restoreScrollPosition = useCallback(() => {
+    if (scrollAnchorRef.current !== undefined) {
+      restoreScrollAnchor();
+      return;
+    }
+    if (atBottomRef.current && processedEventsRef.current.length > 0) scrollToBottom();
+  }, [restoreScrollAnchor, scrollToBottom]);
+
+  useLayoutEffect(() => {
+    if (!eventId) return;
+    if (initialScrollTimerRef.current !== undefined) {
+      clearTimeout(initialScrollTimerRef.current);
+      initialScrollTimerRef.current = undefined;
+    }
+    pendingReadyRef.current = false;
+  }, [eventId]);
 
   useLayoutEffect(() => {
     if (
-      !eventId &&
+      scrollOwner === 'live' &&
       !hasInitialScrolledRef.current &&
       timelineSync.eventsLength > 0 &&
-      // Guard: only scroll once the timeline reflects the current room's live
-      // timeline. Without this, a render with stale data from the previous room
-      // (before the room-change reset propagates) fires the scroll at the wrong
-      // position and marks hasInitialScrolledRef = true, preventing the correct
-      // scroll when the right data arrives.
       timelineSync.liveTimelineLinked &&
       vListRef.current
     ) {
       scrollToBottom();
-      // Store in a ref rather than a local so subsequent eventsLength changes
-      // (e.g. the onLifecycle timeline reset firing within 80 ms) do NOT
-      // cancel this timer through the useLayoutEffect cleanup.
       initialScrollTimerRef.current = setTimeout(() => {
         initialScrollTimerRef.current = undefined;
         if (processedEventsRef.current.length > 0) {
           scrollToBottom();
-          // Only mark ready once we've successfully scrolled.  If processedEvents
-          // was empty when the timer fired (e.g. the onLifecycle reset cleared the
-          // timeline within the 80 ms window), defer setIsReady until the recovery
-          // effect below fires once events repopulate.
-          setIsReady(true);
+          requestAnimationFrame(() => {
+            if (processedEventsRef.current.length > 0) {
+              scrollToBottom();
+              setIsReady(true);
+            } else {
+              pendingReadyRef.current = true;
+            }
+          });
         } else {
           pendingReadyRef.current = true;
         }
       }, 80);
       hasInitialScrolledRef.current = true;
     }
-    // No cleanup return — the timer must survive eventsLength fluctuations.
-    // It is cancelled on unmount by the dedicated effect below.
   }, [
     timelineSync.eventsLength,
     timelineSync.liveTimelineLinked,
-    eventId,
+    scrollOwner,
     room.roomId,
     scrollToBottom,
   ]);
 
-  // Cancel the initial-scroll timer on unmount (the useLayoutEffect above
-  // intentionally does not cancel it when deps change).
   useEffect(
     () => () => {
       if (initialScrollTimerRef.current !== undefined) clearTimeout(initialScrollTimerRef.current);
@@ -683,10 +768,6 @@ export function RoomTimeline({
     []
   );
 
-  // If the timeline was blanked while content was already visible — e.g. a
-  // TimelineReset fired by mx.retryImmediately() when the app comes back from
-  // background — hide the timeline (opacity 0) and re-arm the initial-scroll so
-  // it runs again once events refill the live timeline.
   useLayoutEffect(() => {
     if (!isReady) return;
     if (timelineSync.eventsLength > 0) return;
@@ -704,15 +785,19 @@ export function RoomTimeline({
       topSpacerHeightRef.current = newH;
       setTopSpacerHeight(newH);
       if (prev > 0 && newH === 0 && processedEventsRef.current.length > 0) {
-        requestAnimationFrame(() => scrollToBottom());
+        requestAnimationFrame(restoreScrollPosition);
       }
     }
-  }, [scrollToBottom]);
+  }, [restoreScrollPosition]);
 
   useLayoutEffect(() => {
     const id = requestAnimationFrame(recalcTopSpacer);
     return () => cancelAnimationFrame(id);
   }, [recalcTopSpacer, timelineSync.eventsLength]);
+
+  useLayoutEffect(() => {
+    restoreScrollPosition();
+  });
 
   const prevBackwardStatusRef = useRef(timelineSync.backwardStatus);
   const wasAtBottomBeforePaginationRef = useRef(false);
@@ -722,67 +807,81 @@ export function RoomTimeline({
     prevBackwardStatusRef.current = timelineSync.backwardStatus;
     if (timelineSync.backwardStatus === 'loading') {
       wasAtBottomBeforePaginationRef.current = atBottomRef.current;
-      if (!atBottomRef.current) setShift(true);
     } else if (prev === 'loading' && timelineSync.backwardStatus === 'idle') {
-      setShift(false);
-      if (wasAtBottomBeforePaginationRef.current) {
-        scrollToBottom();
-      }
+      if (scrollAnchorRef.current !== undefined) restoreScrollAnchor();
+      else if (wasAtBottomBeforePaginationRef.current) scrollToBottom();
     }
-  }, [timelineSync.backwardStatus, scrollToBottom]);
+  }, [timelineSync.backwardStatus, restoreScrollAnchor, scrollToBottom]);
 
   useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    if (timelineSync.focusItem) {
-      if (timelineSync.focusItem.scrollTo && vListRef.current) {
-        let processedIndex = getRawIndexToProcessedIndex(timelineSync.focusItem.index);
-        let focusRawIndex = timelineSync.focusItem.index;
-        if (processedIndex === undefined) {
-          // Jump targets with no rendered row (thread replies, hidden
-          // membership/name events): land on the nearest visible row.
-          const nearest = getProcessedRowIndexForRawTimelineIndex(
-            processedEventsRef.current,
-            timelineSync.focusItem.index
-          );
-          if (nearest) {
-            processedIndex = nearest.rowIndex;
-            focusRawIndex = nearest.focusRawIndex;
-          }
-        }
-        if (processedIndex !== undefined) {
-          vListRef.current.scrollToIndex(processedIndex, { align: 'center' });
-          timelineSync.setFocusItem((prev) =>
-            prev ? { ...prev, index: focusRawIndex, scrollTo: false } : undefined
-          );
-        }
+    if (!timelineSync.focusItem?.scrollTo || !vListRef.current) return;
+    const processedIndex = resolveFocusRowIndex(timelineSync.focusItem.eventId);
+    if (processedIndex === undefined) return;
+
+    const landedId = processedEventsRef.current[processedIndex]?.id;
+    const isLiveEnd =
+      landedId === timelineSync.focusItem.eventId &&
+      isNewestLiveEvent(room, timelineSync.focusItem.eventId) &&
+      getEventTimeline(room, timelineSync.focusItem.eventId) === room.getLiveTimeline() &&
+      timelineSync.liveTimelineLinked &&
+      processedIndex === processedEventsRef.current.length - 1;
+    if (isLiveEnd) {
+      scrollAnchorRef.current = undefined;
+      setAtBottom(true);
+      scrollToBottom();
+      if (eventId === timelineSync.focusItem.eventId) {
+        navigateRoom(room.roomId, undefined, { replace: true });
       }
-      timeoutId = setTimeout(() => {
-        timelineSync.setFocusItem(undefined);
-      }, 2000);
+      timelineSyncRef.current.setFocusItem(undefined);
+      return;
     }
-    return () => {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-  }, [timelineSync.focusItem, timelineSync, reducedMotion, getRawIndexToProcessedIndex]);
+
+    scrollAnchorRef.current = landedId ?? timelineSync.focusItem.eventId;
+    if (landedId && landedId !== timelineSync.focusItem.eventId) {
+      timelineSyncRef.current.setFocusItem((prev) =>
+        prev ? { ...prev, eventId: landedId, scrollTo: true } : undefined
+      );
+    }
+    vListRef.current.scrollToIndex(processedIndex, { align: 'center' });
+    const replayId = setTimeout(() => {
+      if (timelineSyncRef.current.focusItem?.scrollTo) restoreScrollAnchor();
+    }, VIRTUA_SCROLL_SETTLE_MS);
+    return () => clearTimeout(replayId);
+  }, [
+    timelineSync.focusItem,
+    timelineSync.eventsLength,
+    timelineSync.liveTimelineLinked,
+    eventId,
+    navigateRoom,
+    resolveFocusRowIndex,
+    room,
+    restoreScrollAnchor,
+    scrollToBottom,
+    setAtBottom,
+  ]);
 
   useEffect(() => {
-    if (timelineSync.focusItem) {
-      setIsReady(true);
-    }
+    if (!timelineSync.focusItem) return undefined;
+    const timeoutId = setTimeout(() => {
+      timelineSyncRef.current.setFocusItem(undefined);
+    }, 2000);
+    return () => clearTimeout(timeoutId);
   }, [timelineSync.focusItem]);
 
   useEffect(() => {
+    if (timelineSync.focusItem || timelineSync.jumpFailed) {
+      setIsReady(true);
+    }
+  }, [timelineSync.focusItem, timelineSync.jumpFailed]);
+
+  useEffect(() => {
     if (!eventId) return;
-    setIsReady(false);
+    if (!timelineSyncRef.current.jumpFailed) setIsReady(false);
     jumpToEvent(eventId);
-  }, [eventId, room.roomId, jumpToEvent]);
+  }, [eventId, room, jumpToEvent]);
 
   useEffect(() => {
     if (eventId) return;
-    // Guard: once the timeline is visible to the user, do not override their
-    // scroll position. Without this, a later timeline refresh (e.g. the
-    // onLifecycle reset delivering a new linkedTimelines reference) can fire
-    // this effect after isReady and snap the view back to the read marker.
     if (isReady) return;
     const { readUptoEventId, inLiveTimeline, scrollTo } = unreadInfo ?? {};
     if (readUptoEventId && inLiveTimeline && scrollTo) {
@@ -796,58 +895,36 @@ export function RoomTimeline({
         : undefined;
 
       if (absoluteIndex !== undefined) {
-        const processedIndex = getRawIndexToProcessedIndex(absoluteIndex);
+        const rows = processedEventsRef.current;
+        const exactRow = rows.findIndex((e) => e.id === readUptoEventId);
+        const processedIndex =
+          exactRow >= 0
+            ? exactRow
+            : getProcessedRowIndexForRawTimelineIndex(rows, absoluteIndex)?.rowIndex;
         if (processedIndex !== undefined && vListRef.current) {
           vListRef.current.scrollToIndex(processedIndex, { align: 'start' });
         }
-        // Always consume the scroll intent once the event is located in the
-        // linked timelines, even if its processedIndex is undefined (filtered
-        // event). Without this, each linkedTimelines reference change retries
-        // the scroll indefinitely.
         setUnreadInfo((prev) => (prev ? { ...prev, scrollTo: false } : prev));
       }
     }
-  }, [
-    room,
-    unreadInfo,
-    timelineSync.timeline.linkedTimelines,
-    eventId,
-    isReady,
-    getRawIndexToProcessedIndex,
-  ]);
+  }, [room, unreadInfo, timelineSync.timeline.linkedTimelines, eventId, isReady]);
 
   useEffect(() => {
     const el = messageListRef.current;
     if (!el) return () => {};
 
-    // Async content (e.g. link previews) grows the VList content element
-    // without re-render, so observe it alongside the viewport wrapper.
     const contentEl = scrollElRef.current?.firstElementChild;
     let contentObserver: ResizeObserver | undefined;
     if (contentEl) {
       contentObserver = new ResizeObserver(() => {
-        if (atBottomRef.current && liveTimelineLinkedRef.current) {
-          if (processedEventsRef.current.length > 0) scrollToBottom();
-        } else {
-          syncAtBottom();
-        }
+        restoreScrollPosition();
+        syncAtBottom();
       });
       contentObserver.observe(contentEl);
     }
 
-    const observer = new ResizeObserver((entries) => {
-      const newHeight = entries[0]!.contentRect.height;
-      const prev = prevViewportHeightRef.current;
-      const atBottom = atBottomRef.current;
-      const shrank = newHeight < prev;
-
-      prevViewportHeightRef.current = newHeight;
-
-      if (shrank && atBottom && processedEventsRef.current.length > 0) {
-        // Geometry is still pre-scroll here; the repin's own scroll event resyncs.
-        scrollToBottom();
-        return;
-      }
+    const observer = new ResizeObserver(() => {
+      restoreScrollPosition();
       syncAtBottom();
     });
 
@@ -856,22 +933,7 @@ export function RoomTimeline({
       observer.disconnect();
       contentObserver?.disconnect();
     };
-  }, [syncAtBottom, scrollToBottom]);
-
-  // Decrypting rows and late-loading images grow without changing eventsLength,
-  // so useTimelineSync's auto-scroll never re-fires for them.
-  const lastScrollSizeRef = useRef(0);
-  useLayoutEffect(() => {
-    const v = vListRef.current;
-    if (!v) return;
-
-    const grew = v.scrollSize > lastScrollSizeRef.current;
-    lastScrollSizeRef.current = v.scrollSize;
-
-    if (!grew || !atBottomRef.current || !liveTimelineLinkedRef.current) return;
-
-    scrollToBottom();
-  });
+  }, [syncAtBottom, restoreScrollPosition]);
 
   const actions = useTimelineActions({
     room,
@@ -884,6 +946,7 @@ export function RoomTimeline({
       roomId: string,
       spaceId: string | undefined,
       userId: string,
+      pmp: Persona | undefined,
       rect: DOMRect,
       undefinedArg?: undefined,
       options?: unknown
@@ -895,37 +958,21 @@ export function RoomTimeline({
     handleEdit,
     handleOpenEvent: (id) => {
       const anchorId = unwrapRelationJumpTarget(room, id);
-      let evtTimeline = getEventTimeline(room, anchorId);
-      let resolvedForIndex = anchorId;
-      if (!evtTimeline && anchorId !== id) {
-        evtTimeline = getEventTimeline(room, id);
-        resolvedForIndex = id;
+      let resolvedId = anchorId;
+      let processedIndex = resolveFocusRowIndex(anchorId);
+      if (processedIndex === undefined && anchorId !== id) {
+        resolvedId = id;
+        processedIndex = resolveFocusRowIndex(id);
       }
-      const absoluteIndex = evtTimeline
-        ? getEventIdAbsoluteIndex(
-            timelineSync.timeline.linkedTimelines,
-            evtTimeline,
-            resolvedForIndex
-          )
-        : undefined;
 
-      if (typeof absoluteIndex === 'number') {
-        let processedIndex = getRawIndexToProcessedIndex(absoluteIndex);
-        let focusRawIndex = absoluteIndex;
-        if (processedIndex === undefined) {
-          const nearest = getProcessedRowIndexForRawTimelineIndex(
-            processedEventsRef.current,
-            absoluteIndex
-          );
-          if (nearest) {
-            processedIndex = nearest.rowIndex;
-            focusRawIndex = nearest.focusRawIndex;
-          }
-        }
-        if (vListRef.current && processedIndex !== undefined) {
+      if (processedIndex !== undefined) {
+        timelineSync.cancelEventTimelineLoad();
+        if (vListRef.current) {
           vListRef.current.scrollToIndex(processedIndex, { align: 'center' });
         }
-        timelineSync.setFocusItem({ index: focusRawIndex, scrollTo: false, highlight: true });
+        const landedId = processedEventsRef.current[processedIndex]?.id ?? resolvedId;
+        scrollAnchorRef.current = landedId;
+        timelineSync.setFocusItem({ eventId: landedId, scrollTo: false, highlight: true });
       } else {
         jumpToEvent(anchorId);
       }
@@ -935,6 +982,26 @@ export function RoomTimeline({
   // renderMatrixEvent keeps a stable identity and reads these through a ref, so
   // the row memo has to compare them itself to notice a power-level change.
   const rowPermissions = { canRedact, canDeleteOwn, canSendReaction, canPinEvent };
+
+  const [selectedMediaEventId, setSelectedMediaEventId] = useState<string>();
+  const [roomMedia, setRoomMedia] = useState<RoomMediaItem[]>([]);
+  const openRoomMedia = useCallback(
+    (mEvent: MatrixEvent) => {
+      const mediaEventId = mEvent.getId();
+      if (!isMobile || !mediaEventId || !getRoomMediaItem(mEvent, room, nicknames)) return false;
+      setRoomMedia(
+        timelineSyncRef.current.timeline.linkedTimelines.flatMap((timeline) =>
+          timeline.getEvents().flatMap((timelineEvent) => {
+            const item = getRoomMediaItem(timelineEvent, room, nicknames);
+            return item ? [item] : [];
+          })
+        )
+      );
+      setSelectedMediaEventId(mediaEventId);
+      return true;
+    },
+    [isMobile, room, nicknames]
+  );
 
   const renderMatrixEvent = useTimelineEventRenderer({
     room,
@@ -956,6 +1023,7 @@ export function RoomTimeline({
       onDeleteFailedSend: actions.handleDeleteFailedSend,
       setOpenThread: actions.setOpenThread,
       handleOpenReply: actions.handleOpenReply,
+      onOpenMedia: openRoomMedia,
     },
     utils: { htmlReactParserOptions, linkifyOpts, getMemberPowerTag, parseMemberEvent },
   });
@@ -977,7 +1045,7 @@ export function RoomTimeline({
     useCallback(
       (inFocus) => {
         if (inFocus) {
-          if (atBottomState) tryAutoMarkAsRead();
+          if (atBottomState && timelineSync.liveTimelineLinked) tryAutoMarkAsRead();
           return;
         }
         // Re-anchor the divider at the last read when tabbing out while caught up.
@@ -1021,6 +1089,27 @@ export function RoomTimeline({
     timelineSync.eventsLength,
   ]);
 
+  useEffect(() => {
+    const scrollEl = scrollElRef.current;
+    if (!scrollEl) return () => {};
+    const release = () => {
+      scrollAnchorRef.current = undefined;
+    };
+    const releaseOnScrollKey = (evt: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(evt.key)) release();
+    };
+    scrollEl.addEventListener('wheel', release, { passive: true });
+    scrollEl.addEventListener('touchstart', release, { passive: true });
+    scrollEl.addEventListener('pointerdown', release, { passive: true });
+    scrollEl.addEventListener('keydown', releaseOnScrollKey);
+    return () => {
+      scrollEl.removeEventListener('wheel', release);
+      scrollEl.removeEventListener('touchstart', release);
+      scrollEl.removeEventListener('pointerdown', release);
+      scrollEl.removeEventListener('keydown', releaseOnScrollKey);
+    };
+  }, []);
+
   const handleVListScroll = useCallback(
     (offset: number) => {
       notifyScroll();
@@ -1030,12 +1119,14 @@ export function RoomTimeline({
       const distanceFromBottom = v.scrollSize - offset - v.viewportSize;
       syncAtBottom(offset);
 
+      if (scrollAnchorRef.current !== undefined) return;
+
       if (offset < 500 && canPaginateBackRef.current && backwardStatusRef.current === 'idle') {
         void timelineSyncRef.current.handleTimelinePagination(true);
       }
       if (
         distanceFromBottom < 500 &&
-        !liveTimelineLinkedRef.current &&
+        canPaginateForwardRef.current &&
         forwardStatusRef.current === 'idle'
       ) {
         void timelineSyncRef.current.handleTimelinePagination(false);
@@ -1043,6 +1134,13 @@ export function RoomTimeline({
     },
     [notifyScroll, syncAtBottom]
   );
+  const handleVListScrollEnd = useCallback(() => {
+    if (!timelineSyncRef.current.focusItem?.scrollTo) return;
+    restoreScrollAnchor();
+    timelineSyncRef.current.setFocusItem((prev) =>
+      prev ? { ...prev, scrollTo: false } : undefined
+    );
+  }, [restoreScrollAnchor]);
 
   // A failed backfill keeps its pagination token, so the placeholder condition
   // would otherwise hold forever and never reach the error and its Retry.
@@ -1146,18 +1244,16 @@ export function RoomTimeline({
   });
 
   processedEventsRef.current = processedEvents;
+  // Virtua shift only supports prepends.
+  const shouldShift = shiftForPrepend;
 
-  // Recovery: if the 80 ms initial-scroll timer fired while processedEvents was
-  // empty (timeline was mid-reset), scroll to bottom and reveal the timeline once
-  // events repopulate.  Fires on every processedEvents.length change but is
-  // guarded by pendingReadyRef so it only acts once per initial-scroll attempt.
   useLayoutEffect(() => {
     if (!pendingReadyRef.current) return;
     if (processedEvents.length === 0) return;
     pendingReadyRef.current = false;
-    scrollToBottom();
+    restoreScrollPosition();
     setIsReady(true);
-  }, [processedEvents.length, scrollToBottom]);
+  }, [processedEvents.length, restoreScrollPosition]);
 
   useEffect(() => {
     if (!onEditLastMessageRef) return;
@@ -1178,7 +1274,6 @@ export function RoomTimeline({
 
   useEffect(() => {
     viewportFillCountRef.current = 0;
-    lastScrollSizeRef.current = 0;
   }, [room.roomId]);
 
   // Re-enters on every length change, so an unfillable viewport pages to the start of the
@@ -1267,7 +1362,7 @@ export function RoomTimeline({
           <VList<ProcessedEvent>
             ref={vListRef}
             data={processedEvents}
-            shift={shift}
+            shift={shouldShift}
             className={css.messageList}
             style={{
               flex: 1,
@@ -1278,10 +1373,15 @@ export function RoomTimeline({
               paddingBottom: config.space.S600,
             }}
             onScroll={handleVListScroll}
+            onScrollEnd={handleVListScrollEnd}
           >
             {(eventData, index) => (
               <MemoizedTimelineItem
-                key={eventData ? eventData.id : `placeholder-${index}`}
+                key={
+                  eventData
+                    ? `${eventData.id}:${eventData.isRedacted ? 'redacted' : 'message'}`
+                    : `placeholder-${index}`
+                }
                 eventData={eventData}
                 index={index}
                 showLoadingPlaceholders={showLoadingPlaceholders}
@@ -1302,6 +1402,14 @@ export function RoomTimeline({
           </VList>
         </TimelineScrollingProvider>
       </div>
+      {selectedMediaEventId && (
+        <RoomMediaViewer
+          items={roomMedia}
+          selectedEventId={selectedMediaEventId}
+          selectEvent={setSelectedMediaEventId}
+          requestClose={() => setSelectedMediaEventId(undefined)}
+        />
+      )}
 
       {showBackPaginationSpinner && (
         <TimelineFloat position="Top" style={timelineTopFloatLift}>
@@ -1321,7 +1429,7 @@ export function RoomTimeline({
         </TimelineFloat>
       )}
 
-      {!atBottomState && isReady && (
+      {(!atBottomState || !timelineSync.liveTimelineLinked) && isReady && (
         <TimelineFloat position="Bottom">
           <Chip
             variant="SurfaceVariant"
@@ -1329,8 +1437,9 @@ export function RoomTimeline({
             outlined
             before={chipIcon(ArrowDown)}
             onClick={() => {
+              scrollAnchorRef.current = undefined;
               if (eventId) navigateRoom(room.roomId, undefined, { replace: true });
-              timelineSync.setTimeline(getInitialTimeline(room));
+              timelineSync.focusLiveTimeline();
               setAtBottom(true);
               scrollToBottom();
             }}

@@ -4,9 +4,7 @@ import { Command, SHRUG } from '$hooks/useCommands';
 import type { MatrixClient, Room } from '$types/matrix-sdk';
 import { SerializableMap } from '$types/wrapper/SerializableMap';
 import type { MSC4459ImagePackReference } from '$types/matrix/common';
-import type { PKitProxyMessageHandler } from '$plugins/pluralkit-handler/PKitProxyMessageHandler';
-import type * as PerMessageProfileModule from '$hooks/usePerMessageProfile';
-import type { PerMessageProfileMsc4461 } from '$hooks/usePerMessageProfile';
+import type { PerMessageProfileMsc4461 } from '$app/persona';
 
 const { profiles } = vi.hoisted(() => ({
   profiles: {
@@ -15,13 +13,17 @@ const { profiles } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('$hooks/usePerMessageProfile', async (importOriginal) => ({
-  ...(await importOriginal<typeof PerMessageProfileModule>()),
-  getCurrentlyUsedPerMessageProfileForAccount: () => Promise.resolve(profiles.account),
-  getCurrentlyUsedPerMessageProfileForRoom: () => Promise.resolve(profiles.room),
+vi.mock('$app/persona/catalog', () => ({
+  ProfileCatalog: class {
+    list = () => Promise.resolve([profiles.account, profiles.room].filter(Boolean));
+    getSelection = (scope: 'account' | { roomId: string }) => {
+      const persona = scope === 'account' ? profiles.account : profiles.room;
+      return Promise.resolve(persona ? { persona } : undefined);
+    };
+  },
 }));
 
-const { buildOutgoingMessage } = await import('./composerMessage');
+const { buildEditReplacement, buildOutgoingMessage } = await import('./composerMessage');
 
 const ROOM_ID = '!room:example.org';
 
@@ -35,11 +37,6 @@ const mx = {
   getSafeUserId: () => '@me:example.org',
   getRoom: () => room,
 } as unknown as MatrixClient;
-
-const noProxyHandler = {
-  getPmpBasedOnMessage: () => Promise.resolve(undefined),
-  stripProxyFromMessage: () => undefined,
-} as unknown as PKitProxyMessageHandler;
 
 const profile = (id: string, displayname: string): PerMessageProfileMsc4461 => ({
   id,
@@ -79,7 +76,6 @@ const build = (
     pmpNoFallback: false,
     latchedPersona: undefined,
     isPKCommand: () => false,
-    pluralkitProxyMessageHandler: noProxyHandler,
     imagePacksUsed: new SerializableMap<string, MSC4459ImagePackReference>(),
     ...overrides,
   });
@@ -184,16 +180,11 @@ describe('buildOutgoingMessage', () => {
   });
 
   it('strips a pluralkit proxy wrapper and lets its profile win', async () => {
-    const proxied = profile('proxy', 'Proxied');
-    const handler = {
-      getPmpBasedOnMessage: () => Promise.resolve(proxied),
-      stripProxyFromMessage: (text: string) => text.replace(/^A:\s*/, ''),
-    } as unknown as PKitProxyMessageHandler;
-    profiles.account = profile('global', 'Global');
+    const proxied = { ...profile('proxy', 'Proxied'), trigger: { prefix: ['A: '] } };
+    profiles.account = proxied;
 
     const result = await build('A: hello there', {
       pmpProxyingEnable: true,
-      pluralkitProxyMessageHandler: handler,
     });
     if (result.kind !== 'message') throw new Error('expected a message');
     // The wrapper must never reach the wire, and the proxy's profile wins.
@@ -207,5 +198,25 @@ describe('buildOutgoingMessage', () => {
       | { matched_url: string }[]
       | undefined;
     expect(previews?.map((preview) => preview.matched_url)).toContain('https://example.com/page');
+  });
+
+  it('preserves the original per-message profile when editing', () => {
+    const originalProfile = { id: 'original', displayname: 'Original' };
+    const edited = buildEditReplacement(plainToEditorInput('updated'), {
+      mx,
+      room,
+      roomId: ROOM_ID,
+      editingEvent: {
+        getId: () => '$event',
+        getContent: () => ({ msgtype: 'm.text', body: 'Original: before' }),
+      } as never,
+      currentContent: { 'com.beeper.per_message_profile': originalProfile },
+      pmpNoFallback: false,
+    });
+
+    expect(edited?.['m.new_content']).toMatchObject({
+      body: 'Original: updated',
+      'com.beeper.per_message_profile': originalProfile,
+    });
   });
 });

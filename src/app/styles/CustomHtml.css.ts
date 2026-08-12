@@ -300,3 +300,41 @@ export const HorizontalRule = style([
     userSelect: 'none',
   },
 ]);
+
+export const TableContainer = style([
+  DefaultReset,
+  MarginSpaced,
+  {
+    overflowX: 'auto',
+    maxWidth: '100%',
+  },
+]);
+
+export const Table = style([
+  DefaultReset,
+  {
+    borderCollapse: 'collapse',
+  },
+]);
+
+export const Th = style([
+  DefaultReset,
+  {
+    padding: `${config.space.S100} ${config.space.S200}`,
+    border: `${config.borderWidth.B300} solid ${color.SurfaceVariant.ContainerLine}`,
+    backgroundColor: color.SurfaceVariant.Container,
+    color: color.SurfaceVariant.OnContainer,
+    minWidth: toRem(100),
+  },
+]);
+
+export const Td = style([
+  DefaultReset,
+  {
+    padding: `${config.space.S100} ${config.space.S200}`,
+    border: `${config.borderWidth.B300} solid ${color.Surface.ContainerLine}`,
+    backgroundColor: color.Surface.Container,
+    color: color.Surface.OnContainer,
+    minWidth: toRem(100),
+  },
+]);

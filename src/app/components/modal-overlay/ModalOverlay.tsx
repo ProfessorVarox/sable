@@ -1,7 +1,8 @@
 import { useRef } from 'react';
 import type { ComponentProps, MutableRefObject, ReactNode } from 'react';
 import FocusTrap from 'focus-trap-react';
-import { Box, Modal, Overlay, OverlayBackdrop, OverlayCenter } from 'folds';
+import { Box, Modal, OverlayBackdrop, OverlayCenter } from 'folds';
+import { Overlay } from '$components/overlay-stack';
 import { ScreenSize, useScreenSizeOptionally } from '$hooks/useScreenSize';
 import { stopPropagation } from '$utils/keyboard';
 import { useDismissOnBack } from '$utils/androidBack';
@@ -10,6 +11,13 @@ import * as messageCss from '$features/room/message/styles.css';
 
 type FocusTrapOptions = ComponentProps<typeof FocusTrap>['focusTrapOptions'];
 type ModalSize = '300' | '400' | '500';
+
+const safeArea = {
+  top: 'var(--safe-area-inset-top, env(safe-area-inset-top, 0px))',
+  bottom: 'var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))',
+  left: 'var(--safe-area-inset-left, env(safe-area-inset-left, 0px))',
+  right: 'var(--safe-area-inset-right, env(safe-area-inset-right, 0px))',
+};
 
 type ModalOverlayProps = {
   open?: boolean;
@@ -27,6 +35,10 @@ type ModalOverlayProps = {
   contentRef?: MutableRefObject<HTMLDivElement | null>;
   /** Set false for flows that Escape must not abort, such as device verification. */
   escapeDeactivates?: FocusTrapOptions['escapeDeactivates'];
+  /** Fills the mobile fullscreen wrapper, for content that does not paint its own. */
+  background?: string;
+  /** Set false for full-bleed viewers that inset their own controls. */
+  respectSafeArea?: boolean;
   children: ReactNode;
 };
 
@@ -38,6 +50,8 @@ export function ModalOverlay({
   size,
   contentRef,
   escapeDeactivates = stopPropagation,
+  background,
+  respectSafeArea = true,
   children,
 }: ModalOverlayProps) {
   // Null outside a provider, where desktop is the safe assumption.
@@ -57,6 +71,7 @@ export function ModalOverlay({
         <FocusTrap
           focusTrapOptions={{
             initialFocus: false,
+            fallbackFocus: () => contentRef?.current ?? document.body,
             escapeDeactivates,
             onDeactivate: requestClose,
           }}
@@ -64,7 +79,17 @@ export function ModalOverlay({
           <div
             ref={contentRef}
             tabIndex={-1}
-            style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              background,
+              paddingTop: respectSafeArea ? safeArea.top : undefined,
+              paddingBottom: respectSafeArea ? safeArea.bottom : undefined,
+              paddingLeft: respectSafeArea ? safeArea.left : undefined,
+              paddingRight: respectSafeArea ? safeArea.right : undefined,
+            }}
           >
             {children}
           </div>

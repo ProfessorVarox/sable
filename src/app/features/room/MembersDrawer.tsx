@@ -13,10 +13,10 @@ import {
   Spinner,
   Text,
   Tooltip,
-  TooltipProvider,
   config,
   toRem,
 } from 'folds';
+import { TooltipProvider } from '$components/overlay-stack';
 import type { MatrixClient, Room, RoomMember } from '$types/matrix-sdk';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import classNames from 'classnames';
@@ -311,7 +311,7 @@ export function MembersDrawer({ room, members }: MembersDrawerProps) {
     // BODGE, dependent on menuItem height staying at toRem(40)
     cords.y = Math.min(cords.y, window.innerHeight - 42);
 
-    openUserRoomProfile(room.roomId, space?.roomId, userId, cords, 'Left');
+    openUserRoomProfile(room.roomId, space?.roomId, userId, undefined, cords, 'Left');
   };
 
   const [memberSidebarWidth, setMemberSidebarWidth] = useSetting(

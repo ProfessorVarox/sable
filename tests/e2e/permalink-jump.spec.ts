@@ -111,6 +111,11 @@ test.describe('permalink jumps', () => {
 
     await expect(targetRow).toBeVisible({ timeout: 60_000 });
     await expect(app.messageByEventId(latestId)).toHaveCount(0);
+
+    const sentBody = `${tag}-after-jump`;
+    await app.sendTextMessage(sentBody);
+    await expect(page.getByText(sentBody, { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(app.messageByEventId(latestId)).toBeVisible({ timeout: 60_000 });
   });
 
   test('opens the thread when the permalink target is a thread reply', async ({

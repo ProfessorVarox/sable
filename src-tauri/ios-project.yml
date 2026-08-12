@@ -69,6 +69,7 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      - path: ../../icons/ios/AppIcons.xcassets
       - path: Externals
         buildPhase: none
       - path: {{app.name}}_iOS
@@ -136,6 +137,7 @@ targets:
       {{/each}}{{~/if}}
     settings:
       base:
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         ENABLE_BITCODE: false
         ARCHS: [{{join ios-valid-archs}}]
         VALID_ARCHS: {{~#each ios-valid-archs}} {{this}} {{/each}}

@@ -79,6 +79,61 @@ describe('debug logger diagnostic capture', () => {
     expect(logger.getLogs().some((entry) => entry.message === 'before capture')).toBe(false);
   });
 
+  it('captures console output while a capture session is active and restores console after', () => {
+    const originalError = console.error;
+    const since = logger.startCapture();
+
+    console.error('sdk sync failed', { url: 'https://matrix.example/sync' });
+    console.warn('sdk retrying');
+    logger.stopCapture();
+
+    expect(console.error).toBe(originalError);
+    expect(logger.getFilteredLogs({ since })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 'error',
+          namespace: 'console',
+          message: expect.stringContaining('sdk sync failed'),
+        }),
+        expect.objectContaining({
+          level: 'warn',
+          namespace: 'console',
+          message: 'sdk retrying',
+        }),
+      ])
+    );
+  });
+
+  it('scrubs sensitive data from console-captured entries', () => {
+    logger.startCapture();
+
+    console.error(
+      'sync failed https://matrix.example/_matrix/client/v3/sync?access_token=syt_secret for @alice:example.org in !room:example.org'
+    );
+    logger.stopCapture();
+
+    const stored = JSON.stringify(logger.getLogs());
+    expect(stored).not.toContain('matrix.example');
+    expect(stored).not.toContain('syt_secret');
+    expect(stored).not.toContain('alice');
+    expect(stored).not.toContain('!room:example.org');
+    expect(stored).toContain('[REDACTED_URL]');
+  });
+
+  it('does not recurse when debug logging is enabled during capture', () => {
+    logger.setEnabled(true);
+    logger.startCapture();
+
+    expect(() => console.error('from app')).not.toThrow();
+
+    logger.stopCapture();
+    logger.setEnabled(false);
+    const consoleEntries = logger
+      .getLogs()
+      .filter((entry) => entry.namespace === 'console' && entry.message.includes('from app'));
+    expect(consoleEntries).toHaveLength(1);
+  });
+
   it('sanitizes entries before storing them in memory', () => {
     logger.log('error', 'network', 'test', 'request https://matrix.example/@alice:example.org', {
       access_token: 'secret',

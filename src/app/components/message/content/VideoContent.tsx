@@ -10,13 +10,13 @@ import {
   Spinner,
   Text,
   Tooltip,
-  TooltipProvider,
   as,
   config,
 } from 'folds';
+import { TooltipProvider } from '$components/overlay-stack';
 import { Eye, EyeSlash, menuIcon, sizedIcon, Play, Warning } from '$components/icons/phosphor';
 import classNames from 'classnames';
-import { isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { BlurhashCanvas } from 'react-blurhash';
 import type { EncryptedAttachmentInfo } from 'browser-encrypt-attachment';
 import type { IThumbnailContent, IVideoInfo } from '$types/matrix/common';
@@ -38,6 +38,7 @@ import { validBlurHash } from '$utils/blurHash';
 import * as css from './style.css';
 import { MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME } from '../../../../unstable/prefixes';
 import { probeSWMediaAuthSupport } from '$utils/swMediaAuth';
+import { isAndroidTauri } from '$utils/platform';
 
 type RenderVideoProps = {
   title: string;
@@ -104,9 +105,14 @@ export const VideoContent = as<'div', VideoContentProps>(
 
         const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
         if (!mediaUrl) throw new Error('Invalid media URL');
+        const prepareAndroidLoopback = (source: string) =>
+          isAndroidTauri()
+            ? invoke<string>('prepare_loopback_video', { url: source })
+            : Promise.resolve(source);
         if (!encInfo) {
           if (isTauri()) {
-            return addTauriMediaRetryRevision(mediaUrl, retryRevisionRef.current);
+            const attemptedTarget = addTauriMediaRetryRevision(mediaUrl, retryRevisionRef.current);
+            return prepareAndroidLoopback(attemptedTarget);
           }
           // Stream through the service worker only after it proved media-auth
           // support; a stale SW build would otherwise serve the bare URL to
@@ -118,7 +124,8 @@ export const VideoContent = as<'div', VideoContentProps>(
           const attemptedTarget =
             getTauriMediaRetryTarget(mediaUrl, retryRevisionRef.current) ?? mediaUrl;
           await setMediaEncryption(attemptedTarget, encInfo, mimeType);
-          return rewriteAuthenticatedMediaUrl(attemptedTarget)!;
+          const source = rewriteAuthenticatedMediaUrl(attemptedTarget)!;
+          return prepareAndroidLoopback(source);
         }
         return createObjectURL(
           downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))

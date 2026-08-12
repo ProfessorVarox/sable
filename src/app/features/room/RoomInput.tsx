@@ -1,4 +1,10 @@
-import type { KeyboardEventHandler, MouseEvent, ReactElement, RefObject } from 'react';
+import type {
+  KeyboardEventHandler,
+  MouseEvent,
+  PointerEvent,
+  ReactElement,
+  RefObject,
+} from 'react';
 import {
   forwardRef,
   Fragment,
@@ -36,15 +42,14 @@ import {
   IconButton,
   Menu,
   MenuItem,
-  Overlay,
   OverlayBackdrop,
   OverlayCenter,
-  PopOut,
   Scroll,
   Spinner,
   Text,
   toRem,
 } from 'folds';
+import { Overlay, PopOut } from '$components/overlay-stack';
 
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import type { AutocompleteQuery } from '$components/editor';
@@ -110,7 +115,7 @@ import { matchesShortcut } from '../../keyboard/shortcuts';
 import { getEditedEvent, getThreadReplyEvents } from '$utils/room/relations';
 import { htmlToMarkdown } from '$plugins/markdown';
 import { Command, useCommands } from '$hooks/useCommands';
-import { isMobileOrTablet } from '$utils/platform';
+import { isMobileOrTablet, isMobileTauri } from '$utils/platform';
 import { Reply, ThreadIndicator } from '$components/message';
 import { roomToParentsAtom } from '$state/room/roomToParents';
 import { nicknamesAtom } from '$state/nicknames';
@@ -143,13 +148,11 @@ import { usePowerLevelsContext } from '$hooks/usePowerLevels';
 import { useRoomCreators } from '$hooks/useRoomCreators';
 import { useRoomPermissions } from '$hooks/useRoomPermissions';
 import { AutocompleteNotice } from '$components/editor/autocomplete/AutocompleteNotice';
-import {
-  convertPerMessageProfileToBeeperFormat,
-  getCurrentlyUsedPerMessageProfileForAccount,
-  getCurrentlyUsedPerMessageProfileForRoom,
-  type PerMessageProfileMsc4461,
-  setCurrentlyUsedPerMessageProfileIdForRoom,
-} from '$hooks/usePerMessageProfile';
+import { setCurrentlyUsedPerMessageProfileIdForRoom } from '$hooks/usePerMessageProfile';
+import type { PerMessageProfileMsc4461 } from '$app/persona';
+import { ProfileCatalog } from '$app/persona/catalog';
+import { projectPersona } from '$app/persona/projection';
+import { resolvePersona } from '$app/persona/selection';
 import {
   Bell,
   BellSlash,
@@ -160,7 +163,6 @@ import {
   dropzoneIcon,
   File as FileIcon,
   Gif,
-  Image as ImageIcon,
   ListBullets,
   MapPinPlusIcon,
   menuIcon,
@@ -177,7 +179,6 @@ import {
 import { getSupportedAudioExtension } from '$plugins/voice-recorder-kit/supportedCodec';
 import { ErrorCode } from '../../cs-errorcode';
 import { PKitCommandMessageHandler } from '$plugins/pluralkit-handler/PKitCommandMessageHandler';
-import { PKitProxyMessageHandler } from '$plugins/pluralkit-handler/PKitProxyMessageHandler';
 import type { IGenericMSC4459, MSC4459ImagePackReference } from '$types/matrix/common';
 import {
   getImagePackReferencesForMxc,
@@ -211,9 +212,10 @@ import { AudioMessageRecorder } from './AudioMessageRecorder';
 import * as prefix from '$unstable/prefixes';
 import { PollDialog } from './poll-modals';
 import { useClientConfig } from '$hooks/useClientConfig';
-import { PersistentPersonaPicker, type PersonaPickerTab } from './persona-picker/PersonaPicker.tsx';
+import { PersonaPicker, type PersonaPickerTab } from './persona-picker/PersonaPicker.tsx';
 import { createComposerController, type ComposerController } from './composerController';
 import { buildEditReplacement, buildOutgoingMessage } from './composerMessage';
+import { pickNativeFile } from './nativeFilePicker';
 
 const LocationDialog = lazy(() =>
   import('./location-modal').then((module) => ({ default: module.LocationDialog }))
@@ -352,10 +354,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       () => new PKitCommandMessageHandler(mx, room),
       [mx, room]
     );
-    const pluralkitProxyMessageHandler = useMemo(() => new PKitProxyMessageHandler(mx), [mx]);
-    useEffect(() => {
-      pluralkitProxyMessageHandler.init();
-    }, [pluralkitProxyMessageHandler]);
 
     const [pkCompatEnable] = useSetting(settingsAtom, 'pkCompat');
     const [pmpProxyingEnable] = useSetting(settingsAtom, 'pmpProxying');
@@ -415,6 +413,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const uploadBoardHandlers = useRef<UploadBoardImperativeHandlers>();
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isLongPress = useRef(false);
+    const sentOnPointerUpRef = useRef(false);
     const suppressBlurRefocusRef = useRef(false);
     const editorRafIdsRef = useRef(new Set<number>());
     const scheduleEditorRaf = useCallback((callback: () => void) => {
@@ -508,7 +507,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     }, []);
 
     const handleFiles = useCallback(
-      async (files: File[], audioMeta?: { waveform: number[]; audioDuration: number }) => {
+      async (
+        files: File[],
+        audioMeta?: { waveform: number[]; audioDuration: number },
+        options?: { alreadyInMemory?: boolean }
+      ) => {
         const epoch = draftEpochRef.current;
         fileIngestionCountRef.current += 1;
         setIngestingFiles(true);
@@ -518,18 +521,22 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           if (epoch !== draftEpochRef.current || !mountedRef.current) return;
 
           // Eager-read to avoid Android content URI expiry after SAF picker
-          const blobbedFiles = isMobileOrTablet()
-            ? await Promise.all(
-                safeFiles.map(async (f) => {
-                  try {
-                    const buf = await f.arrayBuffer();
-                    return new File([buf], f.name, { type: f.type, lastModified: f.lastModified });
-                  } catch {
-                    return f;
-                  }
-                })
-              )
-            : safeFiles;
+          const blobbedFiles =
+            isMobileOrTablet() && !options?.alreadyInMemory
+              ? await Promise.all(
+                  safeFiles.map(async (f) => {
+                    try {
+                      const buf = await f.arrayBuffer();
+                      return new File([buf], f.name, {
+                        type: f.type,
+                        lastModified: f.lastModified,
+                      });
+                    } catch {
+                      return f;
+                    }
+                  })
+                )
+              : safeFiles;
           if (epoch !== draftEpochRef.current || !mountedRef.current) return;
           blobbedFiles.forEach((file) => removedUploadFilesRef.current.delete(file));
 
@@ -603,12 +610,64 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       [room, setSelectedFiles]
     );
     const pickFile = useFilePicker(handleFiles, true);
+    const pickAttachment = useCallback(
+      async (pickerMode: 'media' | 'document', accept: string) => {
+        if (!isMobileTauri()) {
+          await pickFile(accept);
+          return;
+        }
+
+        try {
+          const files = await pickNativeFile(pickerMode, (source, error) => {
+            log.warn('Native attachment file error:', source, error);
+          });
+          if (files.length > 0) await handleFiles(files, undefined, { alreadyInMemory: true });
+        } catch (error) {
+          log.error('Failed to open native attachment picker', { roomId }, error);
+        }
+      },
+      [handleFiles, pickFile, roomId]
+    );
     const handlePaste = useFilePasteHandler(handleFiles);
     const dropZoneVisible = useFileDropZone(fileDropContainerRef, handleFiles);
     const [hasText, setHasText] = useState(false);
     const lastEncryptionPreparationAt = useRef(0);
+    const detectAutocomplete = useCallback(() => {
+      const firstPosition = Editor.start(editor, []);
+      const secondChar = Editor.after(editor, firstPosition, {
+        distance: 2,
+        unit: 'character',
+      });
+      const quickReactPrefix = Editor.string(
+        editor,
+        Editor.range(editor, firstPosition, secondChar)
+      );
+      if (quickReactPrefix === '+#') {
+        setQuickTextReact(true);
+        setAutocompleteQuery(undefined);
+        return;
+      }
+      setQuickTextReact(false);
+
+      const prevWordRange = getPrevWorldRange(editor);
+      if (!prevWordRange) {
+        setAutocompleteQuery(undefined);
+        return;
+      }
+
+      const isRangeAtBeginning = !Point.isAfter(Range.start(prevWordRange), firstPosition);
+      const query =
+        (isRangeAtBeginning
+          ? getAutocompleteQuery(editor, prevWordRange, BEGINNING_AUTOCOMPLETE_PREFIXES)
+          : undefined) ??
+        getAutocompleteQuery(editor, prevWordRange, ANYWHERE_AUTOCOMPLETE_PREFIXES);
+
+      setAutocompleteQuery(query);
+    }, [editor]);
+
     const handleEditorChange = useCallback(() => {
       setHasText(!isEmptyEditor(editor));
+      detectAutocomplete();
       if (!room.hasEncryptionStateEvent()) return;
 
       const now = Date.now();
@@ -616,7 +675,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
 
       lastEncryptionPreparationAt.current = now;
       mx.getCrypto()?.prepareToEncrypt(room);
-    }, [editor, mx, room]);
+    }, [editor, detectAutocomplete, mx, room]);
     const hasContent = hasText || selectedFiles.length > 0;
 
     const isComposing = useComposingCheck();
@@ -1074,22 +1133,22 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       const submittedReplyDraft = submission.replyClaim?.snapshot;
       const submittedSilentReply = submission.replyClaim?.silentReply ?? silentReply;
 
-      /**
-       * the currently with the room associated per-message profile, if any, so that it can be included in the message content when sending.
-       * This allows the server to apply the correct profile-based transformations (e.g. font size adjustments) when processing the message,
-       * and also allows clients to display an accurate preview of how the message will look with the profile applied while it's being composed.
-       */
-      const globalPerMessageProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
-      const roomPerMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
-      const perMessageProfile = roomPerMessageProfile ?? globalPerMessageProfile;
+      const catalog = new ProfileCatalog(mx);
+      const [account, roomSelection] = await Promise.all([
+        catalog.getSelection('account'),
+        catalog.getSelection({ roomId }),
+      ]);
+      const perMessageProfile = resolvePersona({
+        latched: latchedPersona,
+        room: roomSelection,
+        account,
+        now: Date.now(),
+      });
 
       if (perMessageProfile) {
         contents.forEach((c) => {
-          // We intentionally mutate the objects here to avoid unnecessary copying
-          // mutating should be unproblematic here, since contents isn't a react component,
-          // or used for rendering
           c[prefix.MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME] =
-            convertPerMessageProfileToBeeperFormat(perMessageProfile, false);
+            projectPersona(perMessageProfile);
         });
       }
 
@@ -1459,7 +1518,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
             pmpNoFallback,
             latchedPersona,
             isPKCommand: (text) => PKitCommandMessageHandler.isPKCommand(text),
-            pluralkitProxyMessageHandler,
             imagePacksUsed: imagePacksUsedRef.current,
           });
 
@@ -1625,7 +1683,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         pkCompatEnable,
         silentReply,
         pmpProxyingEnable,
-        pluralkitProxyMessageHandler,
         scheduledTime,
         editingScheduledDelayId,
         nicknames,
@@ -1774,38 +1831,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           sendTypingStatus(!isEmptyEditor(editor));
         }
 
-        const firstPosition = Editor.start(editor, []);
-        const secondChar = Editor.after(editor, firstPosition, {
-          distance: 2,
-          unit: 'character',
-        });
-        const quickReactPrefix = Editor.string(
-          editor,
-          Editor.range(editor, firstPosition, secondChar)
-        );
-        if (quickReactPrefix === '+#') {
-          setQuickTextReact(true);
-          setAutocompleteQuery(undefined);
-          return;
-        }
-        setQuickTextReact(false);
-
-        const prevWordRange = getPrevWorldRange(editor);
-        if (!prevWordRange) {
-          setAutocompleteQuery(undefined);
-          return;
-        }
-
-        const isRangeAtBeginning = !Point.isAfter(Range.start(prevWordRange), firstPosition);
-        const query =
-          (isRangeAtBeginning
-            ? getAutocompleteQuery(editor, prevWordRange, BEGINNING_AUTOCOMPLETE_PREFIXES)
-            : undefined) ??
-          getAutocompleteQuery(editor, prevWordRange, ANYWHERE_AUTOCOMPLETE_PREFIXES);
-
-        setAutocompleteQuery(query);
+        detectAutocomplete();
       },
-      [editor, sendTypingStatus, hideActivity]
+      [editor, sendTypingStatus, hideActivity, detectAutocomplete]
     );
 
     const handleEmoticonSelect = (key: string, shortcode: string) => {
@@ -1852,18 +1880,21 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       content[prefix.MATRIX_UNSTABLE_IMAGE_SOURCE_PACK_PROPERTY_NAME] =
         getImagePackReferencesForMxcWrappedInMap(mxc, mx, ImageUsage.Sticker, room);
 
-      /**
-       * the currently with the room associated per-message profile, if any, so that it can be included in the message content when sending.
-       * This allows the server to apply the correct profile-based transformations (e.g. font size adjustments) when processing the message,
-       * and also allows clients to display an accurate preview of how the message will look with the profile applied while it's being composed.
-       */
-      const globalPerMessageProfile = await getCurrentlyUsedPerMessageProfileForAccount(mx);
-      const roomPerMessageProfile = await getCurrentlyUsedPerMessageProfileForRoom(mx, roomId);
-      const perMessageProfile = roomPerMessageProfile ?? globalPerMessageProfile;
+      const catalog = new ProfileCatalog(mx);
+      const [account, roomSelection] = await Promise.all([
+        catalog.getSelection('account'),
+        catalog.getSelection({ roomId }),
+      ]);
+      const perMessageProfile = resolvePersona({
+        latched: latchedPersona,
+        room: roomSelection,
+        account,
+        now: Date.now(),
+      });
 
       if (perMessageProfile) {
         content[prefix.MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME] =
-          convertPerMessageProfileToBeeperFormat(perMessageProfile, false);
+          projectPersona(perMessageProfile);
       }
       content[prefix.MATRIX_UNSTABLE_IMAGE_SOURCE_PACK_PROPERTY_NAME] =
         getImagePackReferencesForMxcWrappedInMap(mxc, mx, ImageUsage.Sticker, room);
@@ -1897,7 +1928,12 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           const content = await getGifMsgContent(mx, gif, url, spoiler);
           if (!content) throw new Error('Unsendable GIF content');
 
-          return await handleSendContents({ contents: [content], submission, isLive });
+          const sent = await handleSendContents({ contents: [content], submission, isLive });
+          // When the editor has text, the reply is not attached to the GIF, so hand the
+          // claim back for the follow-up message to carry it.
+          if (sent && submission.replyClaim && toPlainText(submission.children).trim().length > 0)
+            restoreReplyClaim(submission.replyClaim);
+          return sent;
         } catch (error) {
           log.error('failed to send gif', { roomId }, error);
           restoreReplyClaim(submission.replyClaim);
@@ -1905,8 +1941,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         }
       });
     };
-
-    if (isEditInitializing) return <div ref={ref} />;
 
     return (
       <div ref={ref}>
@@ -2231,10 +2265,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       {() => (
                         <AttachmentContent
                           onPickPhotos={() => {
-                            pickFile('image/*,.tgs');
+                            void pickAttachment('media', 'image/*,video/*,.tgs');
                           }}
                           onPickFile={() => {
-                            pickFile('*');
+                            void pickAttachment('document', '*');
                           }}
                           onPickPoll={() => {
                             setShowPollPicker(true);
@@ -2292,17 +2326,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                               size="300"
                               radii="300"
                               onClick={() => {
-                                pickFile('image/*,.tgs');
-                                setAddMenuAnchor(undefined);
-                              }}
-                              before={menuIcon(ImageIcon)}
-                            >
-                              <Text size="B300">Photos</Text>
-                            </MenuItem>
-                            <MenuItem
-                              size="300"
-                              radii="300"
-                              onClick={() => {
                                 pickFile('*');
                                 setAddMenuAnchor(undefined);
                               }}
@@ -2333,8 +2356,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   </IconButton>
                 </>
               )}
-              {pmpPickerEnable && (
-                <PersistentPersonaPicker
+              {pmpPickerEnable && (isMobileOrTablet() ? !editingEvent : true) && (
+                <PersonaPicker
                   tab={personaPickerTab}
                   mx={mx}
                   roomId={roomId}
@@ -2516,6 +2539,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       isLongPress.current = false;
                       return;
                     }
+                    if (sentOnPointerUpRef.current) return;
                     submit();
                     return;
                   }
@@ -2528,6 +2552,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   if (hasContent) e.preventDefault();
                 }}
                 onPointerDown={() => {
+                  sentOnPointerUpRef.current = false;
                   if (showAudioRecorder) return;
                   if (hasContent) {
                     isLongPress.current = false;
@@ -2575,11 +2600,26 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   window.addEventListener('pointerup', onUp);
                   window.addEventListener('pointercancel', discardRecording);
                 }}
-                onPointerUp={() => {
+                onPointerUp={(evt: PointerEvent<HTMLButtonElement>) => {
                   if (longPressTimer.current !== null) {
                     clearTimeout(longPressTimer.current);
                     longPressTimer.current = null;
                   }
+                  // iOS drops the synthesized click when the page mutates during a tap.
+                  if (evt.pointerType === 'mouse') return;
+                  if (showAudioRecorder || !hasContent || isLongPress.current) return;
+                  // Touch implicitly captures the pointer, so a release off the button lands here too.
+                  const rect = evt.currentTarget.getBoundingClientRect();
+                  if (
+                    evt.clientX < rect.left ||
+                    evt.clientX > rect.right ||
+                    evt.clientY < rect.top ||
+                    evt.clientY > rect.bottom
+                  ) {
+                    return;
+                  }
+                  sentOnPointerUpRef.current = true;
+                  submit();
                 }}
                 onPointerCancel={() => {
                   if (longPressTimer.current !== null) {

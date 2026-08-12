@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAtom, useAtomValue } from 'jotai';
 import { useNavigate } from 'react-router-dom';
-import { SyncState, ClientEvent } from '$types/matrix-sdk';
+import type { Room } from '$types/matrix-sdk';
+import { SyncState, ClientEvent, Direction } from '$types/matrix-sdk';
+import { getSlidingSyncManager } from '$client/initMatrix';
+import { getEventTimeline, getFirstLinkedTimeline, getLiveTimeline } from '$utils/timeline';
 import { activeSessionIdAtom, pendingNotificationAtom } from '../state/sessions';
 import { mDirectAtom } from '../state/mDirectList';
 import { useSyncState } from './useSyncState';
@@ -12,6 +15,20 @@ import { getOrphanParents, guessPerfectParent } from '../utils/room/hierarchy';
 import { roomToParentsAtom } from '../state/room/roomToParents';
 import { createLogger } from '../utils/debug';
 
+const SUBSCRIPTION_WAIT_TIMEOUT_MS = 10000;
+
+const log = createLogger('NotificationJumper');
+
+const isEventInLiveTimelineChain = (room: Room | null, eventId: string | undefined): boolean => {
+  if (!eventId) return true;
+  if (!room) return false;
+  const timeline = getEventTimeline(room, eventId);
+  return (
+    timeline !== undefined &&
+    getFirstLinkedTimeline(timeline, Direction.Forward) === getLiveTimeline(room)
+  );
+};
+
 export function NotificationJumper() {
   const [pending, setPending] = useAtom(pendingNotificationAtom);
   const activeSessionId = useAtomValue(activeSessionIdAtom);
@@ -19,7 +36,6 @@ export function NotificationJumper() {
   const roomToParents = useAtomValue(roomToParentsAtom);
   const mx = useMatrixClient();
   const navigate = useNavigate();
-  const log = createLogger('NotificationJumper');
 
   // Set true the moment we fire navigateRoom. Only reset when `pending` changes
   // to a new value (via the effect below). Do NOT reset inside performJump itself:
@@ -27,6 +43,8 @@ export function NotificationJumper() {
   // churn re-calls performJump (from the ClientEvent.Room listener or effect
   // re-runs) before React has committed the null, causing repeated navigation.
   const jumpingRef = useRef(false);
+  const waitingForTimelineRef = useRef(false);
+  const timelineReadyRef = useRef(false);
 
   const performJump = useCallback(() => {
     if (!pending || jumpingRef.current) return;
@@ -50,15 +68,21 @@ export function NotificationJumper() {
     const isSyncing = mx.getSyncState() === SyncState.Syncing;
     const room = mx.getRoom(pending.roomId);
     const isJoined = room?.getMyMembership() === 'join';
+    const targetInLiveTimeline = isEventInLiveTimelineChain(room, pending.eventId);
+    const canJump =
+      !pending.eventId ||
+      timelineReadyRef.current ||
+      (!waitingForTimelineRef.current && targetInLiveTimeline);
 
-    if (isSyncing && isJoined) {
+    if (isSyncing && isJoined && canJump) {
       log.log('jumping to:', pending.roomId, pending.eventId);
       jumpingRef.current = true;
       // Navigate directly to home or direct path — bypasses space routing which
       // on mobile shows the space-nav panel first instead of the room timeline.
       const roomIdOrAlias = getCanonicalAliasOrRoomId(mx, pending.roomId);
+      let path: string;
       if (mDirects.has(pending.roomId)) {
-        navigate(getDirectRoomPath(roomIdOrAlias, pending.eventId));
+        path = getDirectRoomPath(roomIdOrAlias, pending.eventId);
       } else {
         // If the room lives inside a space, route through the space path so
         // SpaceRouteRoomProvider can resolve it — HomeRouteRoomProvider only
@@ -70,31 +94,39 @@ export function NotificationJumper() {
         if (orphanParents.length > 0) {
           const parentSpace =
             guessPerfectParent(mx, pending.roomId, orphanParents) ?? orphanParents[0];
-          navigate(
-            getSpaceRoomPath(
-              getCanonicalAliasOrRoomId(mx, parentSpace ?? pending.roomId),
-              roomIdOrAlias,
-              pending.eventId
-            )
+          path = getSpaceRoomPath(
+            getCanonicalAliasOrRoomId(mx, parentSpace ?? pending.roomId),
+            roomIdOrAlias,
+            pending.eventId
           );
         } else {
-          navigate(getHomeRoomPath(roomIdOrAlias, pending.eventId));
+          path = getHomeRoomPath(roomIdOrAlias, pending.eventId);
         }
+      }
+
+      try {
+        navigate(path);
+      } catch (error) {
+        jumpingRef.current = false;
+        log.error('failed to navigate to notification:', error);
       }
       setPending(null);
       // jumpingRef stays true until pending changes — see effect below.
     } else {
-      log.log('still waiting for room data...', {
+      log.log('still waiting to jump...', {
         isSyncing,
         hasRoom: !!room,
         membership: room?.getMyMembership(),
+        targetInLiveTimeline,
       });
     }
-  }, [pending, activeSessionId, mx, mDirects, roomToParents, navigate, setPending, log]);
+  }, [pending, activeSessionId, mx, mDirects, roomToParents, navigate, setPending]);
 
   // Reset the guard only when pending is replaced (new notification or cleared).
   useEffect(() => {
     jumpingRef.current = false;
+    waitingForTimelineRef.current = false;
+    timelineReadyRef.current = false;
   }, [pending]);
 
   // Keep a stable ref to the latest performJump so that the listeners below
@@ -104,6 +136,54 @@ export function NotificationJumper() {
   // the second source of repeated navigation.
   const performJumpRef = useRef(performJump);
   performJumpRef.current = performJump;
+
+  useEffect(() => {
+    if (!pending) return undefined;
+    if (pending.targetSessionId && pending.targetSessionId !== activeSessionId) return undefined;
+    if (pending.targetSessionId && mx.getUserId() !== pending.targetSessionId) return undefined;
+
+    const manager = getSlidingSyncManager(mx);
+    const targetInLiveTimeline = isEventInLiveTimelineChain(
+      mx.getRoom(pending.roomId),
+      pending.eventId
+    );
+    if (!manager && targetInLiveTimeline) return undefined;
+    waitingForTimelineRef.current = true;
+
+    if (!manager) {
+      const onSync = (state: SyncState) => {
+        if (state !== SyncState.Syncing) return;
+        waitingForTimelineRef.current = false;
+        timelineReadyRef.current = true;
+        performJumpRef.current();
+      };
+      mx.on(ClientEvent.Sync, onSync);
+      return () => mx.removeListener(ClientEvent.Sync, onSync);
+    }
+
+    const stopWaiting = manager.prepareRoomSubscription(pending.roomId, () => {
+      waitingForTimelineRef.current = false;
+      timelineReadyRef.current = true;
+      performJumpRef.current();
+    });
+    const temporarySubscription = manager.isRoomSubscriptionTemporary(pending.roomId);
+
+    const timeoutId = globalThis.setTimeout(() => {
+      if (!waitingForTimelineRef.current) return;
+      log.warn('subscription never confirmed, jumping without it');
+      waitingForTimelineRef.current = false;
+      timelineReadyRef.current = true;
+      performJumpRef.current();
+    }, SUBSCRIPTION_WAIT_TIMEOUT_MS);
+
+    return () => {
+      globalThis.clearTimeout(timeoutId);
+      stopWaiting();
+      if (!temporarySubscription) return;
+      if (jumpingRef.current) manager.releaseRoomSubscriptionUnlessRouted(pending.roomId);
+      else manager.unsubscribeFromRoom(pending.roomId);
+    };
+  }, [pending, activeSessionId, mx]);
 
   useSyncState(
     mx,
@@ -116,12 +196,12 @@ export function NotificationJumper() {
   useEffect(() => {
     if (!pending) return undefined;
 
-    const onRoom = () => performJumpRef.current();
-    mx.on(ClientEvent.Room, onRoom);
+    const retryJump = () => performJumpRef.current();
+    mx.on(ClientEvent.Room, retryJump);
     performJumpRef.current();
 
     return () => {
-      mx.removeListener(ClientEvent.Room, onRoom);
+      mx.removeListener(ClientEvent.Room, retryJump);
     };
   }, [pending, mx]); // performJump intentionally omitted — use ref above
 

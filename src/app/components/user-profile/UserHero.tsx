@@ -19,6 +19,8 @@ import { BreakWord, LineClamp3 } from '$styles/Text.css';
 import type { UserPresence } from '$hooks/useUserPresence';
 import { useRoom } from '$hooks/useRoom';
 import { useSableCosmetics } from '$hooks/useSableCosmetics';
+import { ThemeKind, useActiveTheme } from '$hooks/useTheme';
+import { useAccessibleNameColor } from '$hooks/useAccessibleNameColor';
 import { useNickname } from '$hooks/useNickname';
 import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
 import { ImageViewer } from '$components/image-viewer';
@@ -41,6 +43,7 @@ import { useTimeoutToggle } from '$hooks/useTimeoutToggle';
 import { CopyIcon, CrossIcon } from '@phosphor-icons/react';
 import { useOpenSettings } from '$features/settings';
 import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import type { Persona } from '$app/persona';
 
 type UserHeroProps = {
   userId: string;
@@ -260,6 +263,8 @@ type UserHeroNameProps = {
   userId: string;
   server?: string;
   customHeroCards?: boolean;
+  pmp?: Persona;
+  clearPmp?: () => void;
 };
 
 type UserHeroNameInnerProps = {
@@ -270,6 +275,8 @@ type UserHeroNameInnerProps = {
   color?: string;
   font?: string;
   customHeroCards?: boolean;
+  isPmp?: boolean;
+  clearPmp?: () => void;
 };
 
 function UserHeroNameInner({
@@ -279,6 +286,8 @@ function UserHeroNameInner({
   server,
   color,
   font,
+  isPmp,
+  clearPmp,
 }: UserHeroNameInnerProps) {
   const [copied, setCopied] = useTimeoutToggle();
   const [isHovered, setIsHovered] = useState(false);
@@ -330,26 +339,77 @@ function UserHeroNameInner({
             )
           }
         />
+        {isPmp && (
+          <>
+            {' - '}
+            <Chip
+              onClick={(evt) => {
+                evt.stopPropagation();
+                clearPmp?.();
+              }}
+              style={{ backgroundColor: 'transparent', color: 'inherit', padding: '0' }}
+              before={
+                <Text
+                  size="T200"
+                  className={classNames(BreakWord, LineClamp3, css.LinkUnderline)}
+                  truncate
+                >
+                  View account profile
+                </Text>
+              }
+            />
+          </>
+        )}
       </Box>
     </Box>
   );
 }
 
-export function UserHeroName({ displayName, userId, server, customHeroCards }: UserHeroNameProps) {
+export function UserHeroName({
+  displayName,
+  userId,
+  server,
+  customHeroCards,
+  pmp,
+  clearPmp,
+}: UserHeroNameProps) {
   const username = getMxIdLocalPart(userId);
   const nick = useNickname(userId);
 
+  // personas
+  const profile = useUserProfile(userId, useRoom(), undefined, false, true);
+  const themeKind =
+    profile.heroBrightness === 'light'
+      ? ThemeKind.Light
+      : profile.heroBrightness === 'dark'
+        ? ThemeKind.Dark
+        : undefined;
+
+  // had to pull this out of usePersonaCosmetics because i couldn't pass around themeKind properly.
+  const activeTheme = useActiveTheme();
+  const accessibleNameColor = useAccessibleNameColor(themeKind ?? activeTheme.kind);
+
+  const pmpNameColor =
+    pmp &&
+    accessibleNameColor(
+      (themeKind ?? activeTheme.kind) === ThemeKind.Dark
+        ? pmp['eu.she-a.color']?.on_dark
+        : pmp['eu.she-a.color']?.on_light
+    );
+
   // Sable username color and fonts
   const { color, font } = useSableCosmetics(userId, useRoom(), customHeroCards);
-  const shownName = nick ?? displayName ?? username ?? userId;
+  const shownName = pmp?.displayname ?? nick ?? displayName ?? username ?? userId;
 
   return (
     <UserHeroNameInner
       username={username}
+      isPmp={!!pmp}
       server={server}
       shownName={shownName}
-      color={color}
+      color={pmpNameColor ?? color}
       font={font}
+      clearPmp={clearPmp}
     />
   );
 }
@@ -358,6 +418,8 @@ export function GlobalUserHeroName({ displayName, userId, server }: UserHeroName
   const username = getMxIdLocalPart(userId);
   const nick = useNickname(userId);
   const profile = useUserProfile(userId);
+  const activeTheme = useActiveTheme();
+  const accessibleNameColor = useAccessibleNameColor(activeTheme.kind);
 
   const shownName = nick ?? displayName ?? username ?? userId;
 
@@ -367,7 +429,7 @@ export function GlobalUserHeroName({ displayName, userId, server }: UserHeroName
       server={server}
       shownName={shownName}
       font={profile.resolvedFont}
-      color={profile.resolvedColor}
+      color={accessibleNameColor(profile.resolvedColor)}
     />
   );
 }

@@ -917,7 +917,7 @@ describe('useTimelineEventRenderer', () => {
     function renderMessageAtItem(
       mEvent: MatrixEvent,
       item: number,
-      focusItem?: { index: number; highlight: boolean; scrollTo: boolean }
+      focusItem?: { eventId: string; highlight: boolean; scrollTo: boolean }
     ) {
       const opts = { ...rendererOpts, state: { ...rendererOpts.state, focusItem } };
       const { result } = renderHook(() => useTimelineEventRenderer(opts));
@@ -941,40 +941,49 @@ describe('useTimelineEventRenderer', () => {
         replyEventId: undefined,
       });
 
-    it('highlights the focused row for a regular raw timeline index', () => {
+    it('highlights the row whose event id matches', () => {
       const { container } = renderMessageAtItem(msgEvent('$a:example.com'), 3, {
-        index: 3,
+        eventId: '$a:example.com',
         highlight: true,
         scrollTo: false,
       });
       expect(highlightOf(container)).toBe('true');
     });
 
-    it('does not highlight a different row', () => {
-      const { container } = renderMessageAtItem(msgEvent('$a:example.com'), 4, {
-        index: 3,
+    it('does not highlight a different event', () => {
+      const { container } = renderMessageAtItem(msgEvent('$b:example.com'), 3, {
+        eventId: '$a:example.com',
         highlight: true,
         scrollTo: false,
       });
       expect(highlightOf(container)).toBe('false');
     });
 
-    it('never highlights merged relation rows, which all carry itemIndex -1', () => {
-      // ThreadDrawer derives focusItem.index from the row's itemIndex, and every
-      // merged extra shares the -1 sentinel, so -1 must highlight nothing.
+    it('highlights the same event regardless of the raw index it renders at', () => {
+      for (const item of [0, 3, 40]) {
+        const { container } = renderMessageAtItem(msgEvent('$a:example.com'), item, {
+          eventId: '$a:example.com',
+          highlight: true,
+          scrollTo: false,
+        });
+        expect(highlightOf(container)).toBe('true');
+      }
+    });
+
+    it('does not highlight merged relation rows that share the itemIndex -1 sentinel', () => {
       const jumpTarget = renderMessageAtItem(msgEvent('$edit-1:example.com'), -1, {
-        index: -1,
+        eventId: '$reaction-2:example.com',
         highlight: true,
         scrollTo: false,
       });
       expect(highlightOf(jumpTarget.container)).toBe('false');
 
       const otherExtra = renderMessageAtItem(msgEvent('$reaction-2:example.com'), -1, {
-        index: -1,
+        eventId: '$reaction-2:example.com',
         highlight: true,
         scrollTo: false,
       });
-      expect(highlightOf(otherExtra.container)).toBe('false');
+      expect(highlightOf(otherExtra.container)).toBe('true');
     });
   });
 });

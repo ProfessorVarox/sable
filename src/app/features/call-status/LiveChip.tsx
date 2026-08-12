@@ -35,7 +35,7 @@ export function LiveChip({ count, room, members }: LiveChipProps) {
       menu={
         <Menu
           style={{
-            maxHeight: '75vh',
+            maxHeight: '75dvh',
             maxWidth: toRem(300),
             display: 'flex',
           }}
@@ -65,6 +65,7 @@ export function LiveChip({ count, room, members }: LiveChipProps) {
                           room.roomId,
                           undefined,
                           userId,
+                          undefined,
                           getMouseEventCords(evt.nativeEvent),
                           'Right'
                         )

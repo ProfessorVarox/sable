@@ -10,8 +10,10 @@ import '@fontsource/space-mono/700-italic.css';
 import 'katex/dist/katex.min.css';
 import 'folds/dist/style.css';
 import { configClass, varsClass } from 'folds';
+import { setNonce as setReactColorfulNonce } from 'react-colorful';
 import App from './app/pages/App';
 import './app/i18n';
+import { getCspNonce } from './app/utils/cspNonce';
 
 import './index.css';
 import './app/styles/themes.css';
@@ -30,6 +32,8 @@ import { installTauriNativeBehaviors } from './app/utils/tauriNative';
 import { installAndroidBackBridge } from './app/utils/androidBack';
 
 enableMapSet();
+const tauriStyleNonce = getCspNonce();
+if (tauriStyleNonce) setReactColorfulNonce(tauriStyleNonce);
 installConsolePasteScamWarning();
 registerMatrixUriProtocol();
 const log = createLogger('index');

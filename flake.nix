@@ -65,10 +65,11 @@
             androidEnv.composeAndroidPackages {
               cmdLineToolsVersion = "8.0";
               includeNDK = true;
+              ndkVersion = "29.0.14206865";
               buildToolsVersions = [ "35.0.0" ];
 
               platformVersions = [
-                "30"
+                "35"
                 platformVersion
               ];
               includeEmulator = true;
@@ -117,7 +118,7 @@
                 ;
               pname = "sable";
               fetcherVersion = 3;
-              hash = "sha256-1siT4fB6ty2azmWXe5L40EFUdk0th59qIdARUB0cVOc=";
+              hash = "sha256-1oGrGJQudg/MevvD8Ui0iDzCmMysumWm00D70lvD4xw=";
             };
 
           mkPnpmCheck =
@@ -204,6 +205,7 @@
             pkgs.nil
             pkgs.nixd
             pkgs.jdk
+            pkgs.mise
           ];
         in
         {
@@ -293,7 +295,7 @@
               RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
             };
 
-            android = pkgs.mkShell {
+            android = pkgs.mkShell rec {
               inherit buildInputs nativeBuildInputs;
 
               packages = defaultPackages ++ [
@@ -308,6 +310,8 @@
 
               GIO_EXTRA_MODULES = "${pkgs.glib-networking}/lib/gio/modules";
               GST_PLUGIN_SYSTEM_PATH = "${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0";
+
+              GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${ANDROID_SDK_ROOT}/build-tools/35.0.0/aapt2";
 
               RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
             };

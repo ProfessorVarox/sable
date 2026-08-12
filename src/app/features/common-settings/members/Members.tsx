@@ -1,7 +1,8 @@
 import type { ChangeEventHandler, MouseEventHandler } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { RectCords } from 'folds';
-import { Box, Chip, config, IconButton, Input, PopOut, Scroll, Spinner, Text, toRem } from 'folds';
+import { Box, Chip, config, IconButton, Input, Scroll, Spinner, Text, toRem } from 'folds';
+import { PopOut } from '$components/overlay-stack';
 import {
   ArrowsDownUp,
   CaretUp,
@@ -141,7 +142,13 @@ export function Members({ requestBack, requestClose }: MembersProps) {
     const btn = evt.currentTarget as HTMLButtonElement;
     const userId = btn.getAttribute('data-user-id');
     if (userId) {
-      openProfile(room.roomId, space?.roomId, userId, getMouseEventCords(evt.nativeEvent));
+      openProfile(
+        room.roomId,
+        space?.roomId,
+        userId,
+        undefined,
+        getMouseEventCords(evt.nativeEvent)
+      );
     }
   };
 

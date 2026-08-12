@@ -46,7 +46,11 @@ pub fn setup_close_to_background(webview_window: &WebviewWindow<crate::BrowserEn
             return;
         };
         let state = window.state::<DesktopSettingsState>();
-        if state.close_to_background_on_close.load(Ordering::Relaxed) {
+        if state.close_to_background_on_close.load(Ordering::Relaxed)
+            && can_restore_from_background(DesktopRuntimeState {
+                tray_available: state.tray_available.load(Ordering::Relaxed),
+            })
+        {
             api.prevent_close();
             let _ = window.hide();
         }
@@ -59,8 +63,19 @@ enum ExitRequestAction {
     CloseWindowsToBackground,
 }
 
-fn exit_request_action(settings: DesktopSettings, code: Option<i32>) -> ExitRequestAction {
-    if code.is_some() || !settings.close_to_background_on_close {
+fn can_restore_from_background(runtime: DesktopRuntimeState) -> bool {
+    cfg!(target_os = "macos") || runtime.tray_available
+}
+
+fn exit_request_action(
+    settings: DesktopSettings,
+    runtime: DesktopRuntimeState,
+    code: Option<i32>,
+) -> ExitRequestAction {
+    if code.is_some()
+        || !settings.close_to_background_on_close
+        || !can_restore_from_background(runtime)
+    {
         ExitRequestAction::AllowExit
     } else {
         ExitRequestAction::CloseWindowsToBackground
@@ -216,7 +231,8 @@ fn handle_exit_request(
     api: &tauri::ExitRequestApi,
 ) {
     let settings = current_desktop_settings(app);
-    if exit_request_action(settings, code) == ExitRequestAction::CloseWindowsToBackground {
+    let runtime = desktop_runtime_state(app);
+    if exit_request_action(settings, runtime, code) == ExitRequestAction::CloseWindowsToBackground {
         api.prevent_exit();
         close_all_windows(app);
     }
@@ -280,7 +296,25 @@ fn appindicator_available() -> bool {
     ];
     CANDIDATES
         .iter()
-        .any(|name| unsafe { libloading::Library::new(name) }.is_ok())
+        .any(|name| unsafe { libloading::Library::new(*name) }.is_ok())
+}
+
+// The AppImage bundles libayatana-appindicator, so the library probe passes on
+// every desktop. Without a StatusNotifierItem host the icon is created and never
+// rendered, which strands the window with no way to restore it.
+#[cfg(target_os = "linux")]
+fn status_notifier_host_available() -> bool {
+    const WATCHER: &str = "org.kde.StatusNotifierWatcher";
+    let Ok(name) = zbus::names::BusName::try_from(WATCHER) else {
+        return false;
+    };
+    let Ok(connection) = zbus::blocking::Connection::session() else {
+        return false;
+    };
+    let Ok(dbus) = zbus::blocking::fdo::DBusProxy::new(&connection) else {
+        return false;
+    };
+    dbus.name_has_owner(name).unwrap_or(false)
 }
 
 pub fn create_system_tray(app: &AppHandle<crate::BrowserEngine>) -> tauri::Result<()> {
@@ -289,6 +323,15 @@ pub fn create_system_tray(app: &AppHandle<crate::BrowserEngine>) -> tauri::Resul
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "appindicator library not found; skipping system tray",
+        )
+        .into());
+    }
+
+    #[cfg(target_os = "linux")]
+    if !status_notifier_host_available() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no StatusNotifierWatcher on the session bus; skipping system tray",
         )
         .into());
     }
@@ -335,16 +378,23 @@ mod tests {
         desktop_settings_from_values, tray_available_for_session, DesktopSettings,
     };
 
+    const TRAY_UP: DesktopRuntimeState = DesktopRuntimeState {
+        tray_available: true,
+    };
+    const NO_TRAY: DesktopRuntimeState = DesktopRuntimeState {
+        tray_available: false,
+    };
+
     #[test]
     fn close_behavior_keeps_sable_running() {
         let settings = DesktopSettings {
             close_to_background_on_close: true,
-            show_system_tray_icon: false,
+            show_system_tray_icon: true,
             use_custom_title_bar: false,
         };
 
         assert_eq!(
-            exit_request_action(settings, None),
+            exit_request_action(settings, TRAY_UP, None),
             ExitRequestAction::CloseWindowsToBackground
         );
     }
@@ -358,24 +408,37 @@ mod tests {
         };
 
         assert_eq!(
-            exit_request_action(settings, None),
+            exit_request_action(settings, TRAY_UP, None),
             ExitRequestAction::AllowExit
         );
     }
 
     #[test]
-    fn tray_failure_still_closes_to_background_when_requested() {
+    fn tray_failure_allows_exit_instead_of_stranding_the_process() {
         let settings = DesktopSettings {
             close_to_background_on_close: true,
             show_system_tray_icon: true,
             use_custom_title_bar: false,
         };
 
-        assert_eq!(
-            exit_request_action(settings, None),
-            ExitRequestAction::CloseWindowsToBackground
-        );
         assert!(!tray_available_for_session(settings, false));
+        assert_eq!(
+            exit_request_action(settings, NO_TRAY, None),
+            if cfg!(target_os = "macos") {
+                ExitRequestAction::CloseWindowsToBackground
+            } else {
+                ExitRequestAction::AllowExit
+            }
+        );
+    }
+
+    #[test]
+    fn macos_closes_to_background_without_a_tray() {
+        assert_eq!(
+            can_restore_from_background(NO_TRAY),
+            cfg!(target_os = "macos")
+        );
+        assert!(can_restore_from_background(TRAY_UP));
     }
 
     #[test]
@@ -387,7 +450,7 @@ mod tests {
         };
 
         assert_eq!(
-            exit_request_action(settings, Some(0)),
+            exit_request_action(settings, TRAY_UP, Some(0)),
             ExitRequestAction::AllowExit
         );
     }

@@ -93,6 +93,7 @@ export const EventReaders = as<'div', EventReadersProps>(
                         room.roomId,
                         space?.roomId,
                         readerId,
+                        undefined,
                         getMouseEventCords(event.nativeEvent),
                         'Bottom'
                       );

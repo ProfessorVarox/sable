@@ -60,6 +60,7 @@ function createEvent({
     isRedacted: () => false,
     isRedaction: () => isRedaction,
     isEncrypted: () => false,
+    getAssociatedStatus: () => null,
     getRelation: () => relation ?? null,
     threadRootId,
   } as unknown as MatrixEvent;
@@ -229,6 +230,39 @@ describe('useProcessedTimeline new-messages divider', () => {
     expect(result.current[2]).toMatchObject({ id: '$c', collapsed: true });
   });
 
+  it('rebuilds a cached row when its send status changes in place', () => {
+    let echoStatus: string | null = 'sending';
+    const echo = createEvent({ id: '$echo', ts: 1_000_500, sender: MY_USER });
+    Object.defineProperty(echo, 'getAssociatedStatus', { value: () => echoStatus });
+    const events = [createEvent({ id: '$a', ts: 1_000_000 }), echo];
+    const timeline = createTimeline(events);
+    const ignoredUsersSet = new Set<string>();
+    const { result, rerender } = renderHook(
+      ({ count }: { count: number }) =>
+        useProcessedTimeline({
+          items: Array.from({ length: count }, (_, index) => index),
+          linkedTimelines: [timeline],
+          ignoredUsersSet,
+          hiddenEvents,
+          mxUserId: MY_USER,
+          readUptoEventId: undefined,
+          hideMembershipEvents: true,
+          hideNickAvatarEvents: true,
+          isReadOnly: false,
+          hideMemberInReadOnly: false,
+        }),
+      { initialProps: { count: events.length } }
+    );
+    const existingRows = [...result.current];
+
+    echoStatus = 'not_sent';
+    events.push(createEvent({ id: '$c', ts: 1_001_000 }));
+    rerender({ count: events.length });
+
+    expect(result.current[1]).not.toBe(existingRows[1]);
+    expect(result.current[2]).toMatchObject({ id: '$c' });
+  });
+
   it('rebuilds rows when an event lands mid-prefix instead of being appended', () => {
     const events = [
       createEvent({ id: '$a', ts: 1_000_000 }),
@@ -394,6 +428,146 @@ describe('useProcessedTimeline new-messages divider', () => {
     expect(dividerIds(processed)).toEqual([]);
   });
 
+  it('renders exactly one divider when a reaction merges between the anchor and its row', () => {
+    const events = [
+      createEvent({ id: '$a', ts: 1000 }),
+      createEvent({ id: '$b', ts: 3000 }),
+      createReaction('$r', '$a'),
+    ];
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [createTimeline(events)],
+        ignoredUsersSet: new Set(),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: '$a',
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(dividerIds(result.current)).toHaveLength(1);
+  });
+
+  it('places a reaction whose target is filtered out by timeline order, not at the end', () => {
+    const ignored = '@ignored:example.org';
+    const events = [
+      createEvent({ id: '$a', ts: 1000 }),
+      createEvent({ id: '$hidden', ts: 2000, sender: ignored }),
+      createReaction('$r', '$hidden'),
+      createEvent({ id: '$b', ts: 4000 }),
+      createEvent({ id: '$c', ts: 5000 }),
+    ];
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [createTimeline(events)],
+        ignoredUsersSet: new Set([ignored]),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$r', '$b', '$c']);
+  });
+
+  it('keeps orphan edits ordered after a reaction has moved beside its parent', () => {
+    const ignored = '@ignored:example.org';
+    const events = [
+      createEvent({ id: '$a' }),
+      createEvent({ id: '$b' }),
+      createReaction('$reaction', '$a'),
+      createEvent({ id: '$hidden', sender: ignored }),
+      createEdit('$edit', '$hidden'),
+      createEvent({ id: '$c' }),
+    ];
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [createTimeline(events)],
+        ignoredUsersSet: new Set([ignored]),
+        hiddenEvents: {
+          ...hiddenEvents,
+          hiddenEventReactions: true,
+          hiddenEventEdits: true,
+        },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$reaction', '$b', '$edit', '$c']);
+  });
+
+  it('keeps a reaction next to its target when timestamps are equal', () => {
+    const events = [
+      createEvent({ id: '$a', ts: 1000 }),
+      createEvent({ id: '$b', ts: 1000 }),
+      createEvent({ id: '$c', ts: 1000 }),
+      createReaction('$r', '$a'),
+    ];
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [createTimeline(events)],
+        ignoredUsersSet: new Set(),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual(['$a', '$r', '$b', '$c']);
+  });
+
+  it('drops a cached row whose event id was rewritten in place by the remote echo', () => {
+    let echoId = '~!room:txn1';
+    const ignoredUsersSet = new Set<string>();
+    const base = createEvent({ id: 'placeholder', ts: 1000 });
+    const echo = Object.create(base, {
+      getId: { value: () => echoId },
+    }) as MatrixEvent;
+    const events: MatrixEvent[] = [echo];
+
+    const { result, rerender } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [createTimeline(events)],
+        ignoredUsersSet,
+        hiddenEvents,
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+    expect(renderedIds(result.current)).toEqual(['~!room:txn1']);
+
+    echoId = '$real';
+    events.push(createEvent({ id: '$c', ts: 2000 }));
+    rerender();
+
+    expect(renderedIds(result.current)).toEqual(['$real', '$c']);
+  });
+
   it('renders no divider without a read receipt', () => {
     const processed = processTimeline(
       [createEvent({ id: '$a' }), createEvent({ id: '$b' })],
@@ -545,14 +719,15 @@ describe('getProcessedRowIndexForRawTimelineIndex (fuzz)', () => {
       );
       const start = faker.number.int({ min: -1, max: nextIndex + 2 });
 
-      // Reference: item indices are non-decreasing, so the addressable target
-      // is the last row with a non-sentinel index not beyond the raw index.
       const candidates = rows
         .map((row, rowIndex) => ({ rowIndex, itemIndex: row.itemIndex }))
         .filter((c) => c.itemIndex >= 0 && c.itemIndex <= start);
-      const last = candidates.at(-1);
-      const expected = last
-        ? { rowIndex: last.rowIndex, focusRawIndex: last.itemIndex }
+      const best = candidates.reduce<(typeof candidates)[number] | undefined>(
+        (acc, c) => (acc === undefined || c.itemIndex > acc.itemIndex ? c : acc),
+        undefined
+      );
+      const expected = best
+        ? { rowIndex: best.rowIndex, focusRawIndex: best.itemIndex }
         : undefined;
 
       expect(getProcessedRowIndexForRawTimelineIndex(rows, start), `seed ${seed}`).toEqual(
@@ -853,6 +1028,7 @@ function createEncryptedEvent(id: string, ts: number) {
     getTs: () => ts,
     isRedacted: () => false,
     isRedaction: () => false,
+    getAssociatedStatus: () => null,
     isEncrypted: () => true,
     getRelation: () => null,
     threadRootId: undefined,
@@ -870,13 +1046,16 @@ const bodyOf = (processed: ProcessedEvent[], id: string) =>
 describe('useProcessedTimeline decryption', () => {
   // Stable so the append-only fast path is reachable.
   const ignoredUsersSet = new Set<string>();
-  const renderTimeline = (getEvents: () => MatrixEvent[]) =>
+  const renderTimeline = (
+    getEvents: () => MatrixEvent[],
+    timelineHiddenEvents: ResolvedHiddenEventSettings = hiddenEvents
+  ) =>
     renderHook(() =>
       useProcessedTimeline({
         items: getEvents().map((_, i) => i),
         linkedTimelines: [createTimeline(getEvents())],
         ignoredUsersSet,
-        hiddenEvents,
+        hiddenEvents: timelineHiddenEvents,
         mxUserId: MY_USER,
         readUptoEventId: undefined,
         hideMembershipEvents: true,
@@ -911,6 +1090,23 @@ describe('useProcessedTimeline decryption', () => {
 
     expect(renderedIds(result.current)).toEqual(['$a', '$enc', '$live']);
     expect(bodyOf(result.current, '$enc')).toBe('the secret');
+  });
+
+  it('refreshes a row whose event was redacted since it was cached', () => {
+    let redacted = false;
+    const event = createEvent({ id: '$redacted' });
+    event.isRedacted = () => redacted;
+    const { result, rerender } = renderTimeline(() => [event], {
+      ...hiddenEvents,
+      showTombstoneEvents: true,
+    });
+
+    expect(result.current[0]?.isRedacted).toBe(false);
+
+    redacted = true;
+    rerender();
+
+    expect(result.current[0]?.isRedacted).toBe(true);
   });
 
   it('keeps the append-only fast path for unencrypted events', () => {

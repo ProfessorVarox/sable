@@ -131,6 +131,7 @@ export const PollResponsesViewer = as<'div', PollResponsesViewerProps>(
                           room.roomId,
                           space?.roomId,
                           senderId,
+                          undefined,
                           getMouseEventCords(event.nativeEvent),
                           'Bottom'
                         );

@@ -13,6 +13,24 @@ The stable web app is available at [app.sable.moe](https://app.sable.moe/) and t
 
 You can also download our desktop app for Windows and Linux from [releases](https://github.com/SableClient/Sable/releases/latest). Release artifacts include build attestations, and desktop installations update automatically.
 
+### Desktop (Linux / macOS / Windows)
+
+<a href="https://github.com/SableClient/Sable/releases/latest"><img alt="Download" src="https://img.shields.io/badge/Download-181717?style=for-the-badge&logo=github"></a>
+&nbsp;
+<a href="https://aur.archlinux.org/packages/sable-bin"><img alt="AUR" src="https://img.shields.io/badge/Install_via_AUR-1793D1?style=for-the-badge&logo=arch-linux"></a>
+&nbsp;
+<a href="https://snapcraft.io/sable"><img alt="Snap Store" src="https://img.shields.io/badge/Install_via_Snap-82BEA0?style=for-the-badge&logo=snapcraft"></a>
+&nbsp;
+<a href="https://flathub.org/apps/moe.sable.client"><img alt="Flathub" src="https://img.shields.io/badge/Install_via_Flathub-4A86CF?style=for-the-badge&logo=flathub"></a>
+
+On macOS, via our [Homebrew tap](https://github.com/SableClient/homebrew-sable):
+
+```sh
+brew install --cask SableClient/sable/sable
+```
+
+The fully qualified name matters: since [Homebrew 6.0.0](https://brew.sh/2026/06/11/homebrew-6.0.0/) non-official taps need explicit trust, and installing this way trusts just this one cask. `brew tap` followed by a short-name install now fails unless you also run `brew trust`.
+
 ## Android (Obtainium)
 
 Android APKs are published to every release, and [Obtainium](https://obtainium.imranr.dev) keeps them updated straight from GitHub. Each release also ships an `obtainium.json` app config. Use it for the nightly channel, where prereleases and date-based version tracking have to be enabled to follow the rolling `nightly` tag.

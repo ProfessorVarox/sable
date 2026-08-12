@@ -7,10 +7,23 @@ export const PAGINATION_LIMIT = 60;
 export const getLiveTimeline = (room: Room): EventTimeline =>
   room.getUnfilteredTimelineSet().getLiveTimeline();
 
+/** True when `eventId` is the newest event the live timeline holds. */
+export const isNewestLiveEvent = (room: Room, eventId: string): boolean => {
+  const events = getLiveTimeline(room).getEvents?.() ?? [];
+  return events[events.length - 1]?.getId?.() === eventId;
+};
+
 export const getEventTimeline = (room: Room, eventId: string): EventTimeline | undefined => {
   const timelineSet = room.getUnfilteredTimelineSet();
   return timelineSet.getTimelineForEvent(eventId) ?? undefined;
 };
+
+/** Resolves against the displayed chain's own set, which for a jump is not the room's. */
+export const getDisplayedEventTimeline = (
+  linkedTimelines: EventTimeline[],
+  eventId: string
+): EventTimeline | undefined =>
+  linkedTimelines[0]?.getTimelineSet().getTimelineForEvent(eventId) ?? undefined;
 
 export const getFirstLinkedTimeline = (
   timeline: EventTimeline,

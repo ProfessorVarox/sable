@@ -9,7 +9,7 @@ import { UserRoomProfile } from './user-profile';
 import { ResponsiveMenu } from './ResponsiveMenu';
 
 function UserRoomProfileContextMenu({ state }: { state: UserRoomProfileState }) {
-  const { roomId, spaceId, userId, cords, position, initialProfile } = state;
+  const { roomId, spaceId, userId, pmp, cords, position, initialProfile } = state;
   const allJoinedRooms = useAllJoinedRoomsSet();
   const getRoom = useGetRoom(allJoinedRooms);
   const room = getRoom(roomId);
@@ -28,6 +28,7 @@ function UserRoomProfileContextMenu({ state }: { state: UserRoomProfileState }) 
       align={cords.y > window.innerHeight / 2 ? 'End' : 'Start'}
       returnFocusOnDeactivate
       surfaceColor={surfaceColor}
+      overlayDragHandle
       menu={
         <Menu style={{ width: toRem(340) }}>
           <SpaceProvider value={space ?? null}>
@@ -36,6 +37,7 @@ function UserRoomProfileContextMenu({ state }: { state: UserRoomProfileState }) 
                 userId={userId}
                 initialProfile={initialProfile}
                 onSurfaceColorChange={setSurfaceColor}
+                pmp={pmp}
               />
             </RoomProvider>
           </SpaceProvider>

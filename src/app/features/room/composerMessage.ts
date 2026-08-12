@@ -17,17 +17,15 @@ import {
 import { sanitizeText } from '$utils/sanitize';
 import { getMentionContent } from '$utils/room/relations';
 import type { IReplyDraft } from '$state/room/roomInputDrafts';
-import {
-  convertPerMessageProfileToBeeperFormat,
-  getCurrentlyUsedPerMessageProfileForAccount,
-  getCurrentlyUsedPerMessageProfileForRoom,
-  type PerMessageProfileMsc4461,
-} from '$hooks/usePerMessageProfile';
+import { ProfileCatalog } from '$app/persona/catalog';
+import type { PerMessageProfileMsc4461 } from '$app/persona';
+import { convertPerMessageProfileToBeeperFormat } from '$app/persona/projection';
+import { resolvePersonaProxy } from '$app/persona/proxy';
+import { resolvePersona } from '$app/persona/selection';
 import * as prefix from '$unstable/prefixes';
 import { outgoingMessageTransforms } from './outgoingMessageTransforms';
 import { buildReplacementContent } from './buildReplacementContent';
 import { Command, SHRUG, TABLEFLIP, UNFLIP } from '$hooks/useCommands';
-import type { PKitProxyMessageHandler } from '$plugins/pluralkit-handler/PKitProxyMessageHandler';
 import type { MSC4459ImagePackReference } from '$types/matrix/common';
 import type { SerializableMap } from '$types/wrapper/SerializableMap';
 
@@ -63,7 +61,6 @@ export interface BuildOutgoingMessageDeps {
   /** Persona latched by an earlier proxied message in this room. */
   latchedPersona: PerMessageProfileMsc4461 | undefined;
   isPKCommand: (plainText: string) => boolean;
-  pluralkitProxyMessageHandler: PKitProxyMessageHandler;
   imagePacksUsed: SerializableMap<string, MSC4459ImagePackReference>;
 }
 
@@ -124,8 +121,6 @@ const applyPerMessageProfileFallback = (
   const bodyWithoutFallback = content.body.startsWith(pmpPrefix)
     ? content.body.slice(pmpPrefix.length)
     : content.body;
-  // guard against double-prefixing when the fallback is already present
-  if (!content.body.startsWith(pmpPrefix)) content.body = pmpPrefix + content.body;
 
   const htmlPrefix = `<strong data-mx-profile-fallback>${sanitizeText(profile.displayname)}: </strong>`;
   if (content.formatted_body && !content.formatted_body.startsWith(htmlPrefix)) {
@@ -136,6 +131,9 @@ const applyPerMessageProfileFallback = (
     const escapedBody = sanitizeText(bodyWithoutFallback).replaceAll('\n', '<br/>');
     content.formatted_body = `${htmlPrefix}${escapedBody}`;
   }
+
+  // guard against double-prefixing when the fallback is already present
+  if (!content.body.startsWith(pmpPrefix)) content.body = pmpPrefix + content.body;
 };
 
 export async function buildOutgoingMessage(
@@ -156,7 +154,6 @@ export async function buildOutgoingMessage(
     pmpNoFallback,
     latchedPersona,
     isPKCommand,
-    pluralkitProxyMessageHandler,
     imagePacksUsed,
   } = deps;
 
@@ -224,20 +221,17 @@ export async function buildOutgoingMessage(
 
   // PluralKit-style proxy wrappers must be stripped before building `content`, otherwise
   // the wrapper itself gets sent verbatim.
+  const catalog = new ProfileCatalog(mx);
   let proxiedPerMessageProfile: PerMessageProfileMsc4461 | undefined;
   let proxyStripped = false;
   if (pmpProxyingEnable) {
-    proxiedPerMessageProfile = await pluralkitProxyMessageHandler.getPmpBasedOnMessage(plainText);
-    if (proxiedPerMessageProfile) {
-      // plainText has spoilers stripped, which breaks spoilers carrying a proxy tag, so
-      // match the proxy against an unsanitized copy instead.
-      const unsanitizedPlainText = toPlainText(
-        serializedChildren,
-        true,
-        false,
-        nicknameReplacement
-      ).trim();
-      const stripped = pluralkitProxyMessageHandler.stripProxyFromMessage(unsanitizedPlainText);
+    const proxy = resolvePersonaProxy(
+      await catalog.list({ migrate: false }),
+      toPlainText(serializedChildren, true, false, nicknameReplacement).trim()
+    );
+    if (proxy) {
+      proxiedPerMessageProfile = proxy.persona;
+      const stripped = proxy.body;
       if (stripped !== undefined) {
         proxyStripped = true;
         // Re-run the normal pipeline so a proxied message is parsed like any other.
@@ -263,12 +257,17 @@ export async function buildOutgoingMessage(
     content.formatted_body = customHtml;
   }
 
-  const [globalProfile, roomProfile] = await Promise.all([
-    getCurrentlyUsedPerMessageProfileForAccount(mx),
-    getCurrentlyUsedPerMessageProfileForRoom(mx, roomId),
+  const [account, roomSelection] = await Promise.all([
+    catalog.getSelection('account'),
+    catalog.getSelection({ roomId }),
   ]);
-  const perMessageProfile =
-    proxiedPerMessageProfile ?? latchedPersona ?? roomProfile ?? globalProfile;
+  const perMessageProfile = resolvePersona({
+    proxy: proxiedPerMessageProfile,
+    latched: latchedPersona,
+    room: roomSelection,
+    account,
+    now: Date.now(),
+  });
   if (perMessageProfile) applyPerMessageProfileFallback(content, perMessageProfile, pmpNoFallback);
 
   return {
@@ -329,6 +328,7 @@ export function buildEditReplacement(
     eventId,
     getMentionContent(Array.from(mentionData.users), mentionData.room),
     (getLinks(children) ?? []).map((matched_url) => ({ matched_url })),
+    // An edit belongs to the identity used for the original event, not the currently selected one.
     currentContent['com.beeper.per_message_profile'] ??
       oldContent['com.beeper.per_message_profile'],
     pmpNoFallback

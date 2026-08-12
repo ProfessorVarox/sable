@@ -19,6 +19,7 @@ import { isReactQueryDevtoolsEnabled } from './reactQueryDevtoolsGate';
 import { bootstrapSettingsStore } from '$state/settings';
 import { AppShell } from '$components/app-shell';
 import { normalizeOAuthCallbackUrl } from '$utils/oauthCallback';
+import { getCspNonce } from '$utils/cspNonce';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,7 +54,7 @@ function BootstrappedAppShell({ clientConfig, screenSize, jotaiStore }: Bootstra
       </JotaiProvider>
       {reactQueryDevtoolsEnabled && (
         <Suspense fallback={null}>
-          <ReactQueryDevtools initialIsOpen={false} />
+          <ReactQueryDevtools initialIsOpen={false} styleNonce={getCspNonce() || undefined} />
         </Suspense>
       )}
     </QueryClientProvider>

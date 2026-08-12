@@ -17,6 +17,11 @@ concurrency:
   group: tauri-build-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  NODE_OPTIONS: --max-old-space-size=8192
+
 jobs:
   setup-release:
     name: Resolve release target
@@ -87,6 +92,8 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
+    outputs:
+      dmg_sha256: ${{ steps.dmg_sha.outputs.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,12 +110,6 @@ jobs:
             rust-targets: ''
             args: ''
             bundle_path: src-tauri/target/release/bundle
-          - name: Linux (CEF)
-            platform: ubuntu-22.04
-            asset-platform: linux-x86_64
-            rust-targets: ''
-            cef: true
-            bundle_path: src-tauri/target/release/bundle
     env:
       TAG: ${{ needs.setup-release.outputs.tag }}
       VERSION: ${{ needs.setup-release.outputs.version }}
@@ -119,9 +120,6 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-      CARGO_INCREMENTAL: 0
-      CARGO_TERM_COLOR: always
-      NODE_OPTIONS: --max-old-space-size=8192
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
@@ -171,7 +169,6 @@ jobs:
           echo "TAURI_BUILD_ARGS=${ARGS# }" >> "$GITHUB_ENV"
 
       - name: Build desktop bundles
-        if: ${{ !matrix.cef }}
         shell: bash
         run: pnpm tauri build ${{ matrix.args }} $TAURI_BUILD_ARGS
 
@@ -189,7 +186,6 @@ jobs:
           fi
 
       - name: Normalize desktop artifact names
-        if: ${{ !matrix.cef }}
         shell: bash
         env:
           ASSET_PLATFORM: ${{ matrix.asset-platform }}
@@ -225,7 +221,6 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.sig
 
       - name: Attach bundles to release
-        if: ${{ !matrix.cef }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -238,62 +233,17 @@ jobs:
                 gh release upload "$TAG" "$path" --clobber
           done
 
-      # --- Linux: CEF runtime, packaged as deb / rpm / AppImage ---
-      - name: Remove cached CEF build outputs
-        if: matrix.cef
-        shell: bash
-        run: |
-          build_dir="src-tauri/target/release/build"
-          if [ -d "$build_dir" ]; then
-            find "$build_dir" -mindepth 1 -maxdepth 1 -type d -name 'cef-*' -print -exec rm -rf {} +
-          fi
-
-      - name: Build CEF binary
-        if: matrix.cef
-        shell: bash
-        run: pnpm tauri:cef build $TAURI_BUILD_ARGS
-
-      - name: Build native packages
-        if: matrix.cef
-        shell: bash
-        run: mise run cef:package "$VERSION"
-
-      - name: Sign the AppImage for the updater
-        if: ${{ matrix.cef && env.TAURI_SIGNING_PRIVATE_KEY != '' }}
-        shell: bash
-        run: |
-          for f in src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage; do
-            [ -e "$f" ] || continue
-            pnpm tauri signer sign "$f"
-          done
-
-      - name: Attest Linux bundles
-        if: matrix.cef
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/rpm/*.rpm
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/appimage/*.sig
-
-      - name: Attach native packages to release
-        if: matrix.cef
+      - name: Compute DMG checksum
+        id: dmg_sha
+        if: ${{ matrix.name == 'macOS' }}
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           BUNDLE_PATH: ${{ matrix.bundle_path }}
         run: |
-          BUNDLE="$BUNDLE_PATH"
-          test -d "$BUNDLE" || { echo "Bundle directory not found: $BUNDLE" >&2; exit 1; }
-          for f in "$BUNDLE"/deb/Sable-*-linux-x86_64.deb \
-                   "$BUNDLE"/rpm/Sable-*-linux-x86_64.rpm \
-                   "$BUNDLE"/appimage/Sable-*-linux-x86_64.AppImage \
-                   "$BUNDLE"/appimage/Sable-*-linux-x86_64.AppImage.sig; do
-            [ -e "$f" ] || continue
-            echo "Uploading $f"
-            gh release upload "$TAG" "$f" --clobber
-          done
+          DMG="$(find "$BUNDLE_PATH" -name "Sable-${VERSION}-macos-universal.dmg" -type f | head -1)"
+          [ -n "$DMG" ] || { echo "DMG not found in $BUNDLE_PATH" >&2; exit 1; }
+          SHA="$(sha256sum "$DMG" | awk '{print $1}')"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
   android:
     name: Build Android
@@ -315,10 +265,7 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-      CARGO_INCREMENTAL: 0
-      CARGO_TERM_COLOR: always
       MISE_ENV: tauri
-      NODE_OPTIONS: --max-old-space-size=8192
       # Matches the ABIs passed to `tauri android build` below.
       RUST_TARGETS: aarch64-linux-android armv7-linux-androideabi
       ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
@@ -350,7 +297,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       - name: Resolve NDK
         shell: bash
@@ -455,9 +402,6 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-      CARGO_INCREMENTAL: 0
-      CARGO_TERM_COLOR: always
-      NODE_OPTIONS: --max-old-space-size=8192
       RUST_TARGETS: aarch64-apple-ios
     steps:
       - name: Checkout repository
@@ -624,7 +568,7 @@ jobs:
 
   updater-manifest:
     name: Publish updater manifest
-    needs: [setup-release, build]
+    needs: [setup-release, build, linux]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -709,3 +653,290 @@ jobs:
                 echo "Removing superseded nightly asset: $name"
                 gh release delete-asset nightly "$name" --yes
               done
+
+  # Nightlies use `--snapshot`, which packages without publishing.
+  linux:
+    name: Build Linux (CEF)
+    needs: setup-release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      TAG: ${{ needs.setup-release.outputs.tag }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+      VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
+      SABLE_BUILD_FLAVOR: ${{ needs.setup-release.outputs.nightly == 'true' && 'dev' || 'stable' }}
+      VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+      VITE_SENTRY_ENVIRONMENT: ${{ needs.setup-release.outputs.nightly == 'true' && 'preview' || 'production' }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
+      MISE_ENV: tauri
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup-release.outputs.ref }}
+          # GoReleaser reads the version from git history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup app
+        uses: ./.github/actions/setup
+        with:
+          tauri: 'true'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+
+      - name: Stamp release version into tauri.conf.json
+        shell: bash
+        env:
+          UPDATER_ENDPOINT: ${{ needs.setup-release.outputs.nightly == 'true' && format('https://github.com/{0}/releases/download/nightly/latest.json', github.repository) || '' }}
+        run: node .github/scripts/set-tauri-version.mjs "$VERSION" "$UPDATER_ENDPOINT"
+
+      # Not in [bootstrap.packages]: snapcraft ships only as a snap.
+      - name: Install snapcraft
+        if: ${{ needs.setup-release.outputs.nightly != 'true' }}
+        run: sudo snap install snapcraft --classic
+
+      - name: Trust the AUR host key
+        if: ${{ needs.setup-release.outputs.nightly != 'true' }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+
+      - name: Resolve GoReleaser args
+        id: gr
+        shell: bash
+        run: |
+          if [ "$IS_NIGHTLY" = "true" ]; then
+            echo 'args=release --clean --snapshot --skip=snapcraft,aur' >> "$GITHUB_OUTPUT"
+          else
+            echo 'args=release --clean' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run GoReleaser
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GORELEASER_GITHUB_TOKEN || github.token }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: goreleaser ${{ steps.gr.outputs.args }}
+
+      - name: Build the AppImage
+        shell: bash
+        run: |
+          DISPLAY_NAME=Sable
+          [ "$IS_NIGHTLY" = "true" ] && DISPLAY_NAME="Sable Nightly"
+          mise run cef:package "$VERSION" \
+            src-tauri/target/x86_64-unknown-linux-gnu/release/sable "$DISPLAY_NAME"
+
+      - name: Sign the AppImage for the updater
+        if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        shell: bash
+        run: |
+          for f in src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage; do
+            [ -e "$f" ] || continue
+            pnpm tauri signer sign "$f"
+          done
+
+      - name: Attest Linux bundles
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            .goreleaser-dist/*.deb
+            .goreleaser-dist/*.rpm
+            .goreleaser-dist/*.pkg.tar.zst
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.sig
+
+      - name: Attach Linux packages to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in .goreleaser-dist/Sable-*.deb \
+                   .goreleaser-dist/Sable-*.rpm \
+                   .goreleaser-dist/Sable-*.pkg.tar.zst \
+                   .goreleaser-dist/Sable-*-linux-x86_64.tar.gz \
+                   src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage \
+                   src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage.sig; do
+            [ -e "$f" ] || continue
+            echo "Uploading $f"
+            gh release upload "$TAG" "$f" --clobber
+          done
+
+      - name: Upload .deb as workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sable-linux-deb
+          path: .goreleaser-dist/Sable-*.deb
+          retention-days: 1
+          include-hidden-files: true
+          if-no-files-found: error
+
+  distribute-nightly-aur:
+    name: Publish nightly to AUR
+    needs: [setup-release, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ needs.setup-release.outputs.nightly == 'true' }}
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.setup-release.outputs.tag }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download .deb artifact and compute checksum
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sable-linux-deb
+          path: deb-artifact
+
+      - name: Compute checksum
+        shell: bash
+        run: |
+          set -- deb-artifact/Sable-*-linux-x86_64.deb
+          [ "$#" -eq 1 ] && [ -e "$1" ] || { echo "Expected exactly one .deb, got $*" >&2; exit 1; }
+          echo "SHA256=$(sha256sum "$1" | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      - name: Push to AUR sable-nightly-bin
+        shell: bash
+        env:
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+        run: |
+          if [ -z "${AUR_KEY:-}" ]; then
+            echo "::notice::AUR_KEY is not set; skipping the AUR publish."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur_key -o IdentitiesOnly=yes"
+
+          git clone "ssh://aur@aur.archlinux.org/sable-nightly-bin.git" aur-repo
+          cp packaging/aur/sable-nightly-bin.PKGBUILD aur-repo/PKGBUILD
+          cp packaging/aur/sable-nightly-bin.install aur-repo/sable-nightly-bin.install
+
+          cd aur-repo
+          # pkgver forbids '-'; _relver keeps the asset URL's form.
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${VERSION//-/.}/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^_relver=.*/_relver=${VERSION}/" \
+            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${SHA256}')/" \
+            PKGBUILD
+
+          # makepkg refuses to run as root.
+          docker run --rm -v "$PWD:/src:ro" archlinux:base-devel bash -c '
+            useradd -m build
+            cp /src/PKGBUILD /home/build/
+            su build -c "cd /home/build && makepkg --printsrcinfo"
+          ' > .SRCINFO
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD sable-nightly-bin.install .SRCINFO
+          if git diff --cached --quiet; then
+            echo "Nothing changed; skipping the push."
+            exit 0
+          fi
+          git commit -m "nightly ${VERSION}"
+          git push
+
+  distribute-obtainium:
+    name: Generate Obtainium import file
+    needs: [setup-release, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.setup-release.outputs.tag }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate obtainium.json
+        shell: bash
+        run: node scripts/obtainium-generate.js "$VERSION" "$TAG" obtainium.json
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" obtainium.json --clobber
+
+  distribute-homebrew:
+    name: Publish Homebrew cask
+    # GoReleaser's homebrew_casks pipe would build the cask from our Linux
+    # archive, since it is the only one it produces. Tauri owns the .dmg and
+    # importing it needs the Pro-only `prebuilt` builder.
+    needs: [setup-release, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Casks track stable releases.
+    if: ${{ needs.setup-release.outputs.nightly != 'true' }}
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.setup-release.outputs.tag }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve DMG checksum
+        shell: bash
+        env:
+          DMG_SHA256: ${{ needs.build.outputs.dmg_sha256 }}
+        run: |
+          [ -n "${DMG_SHA256:-}" ] || { echo "DMG sha256 is empty" >&2; exit 1; }
+          echo "SHA256=$DMG_SHA256" >> "$GITHUB_ENV"
+
+      - name: Push the cask to the tap
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew publish."
+            exit 0
+          fi
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/SableClient/homebrew-sable.git" tap
+
+          mkdir -p tap/Casks
+          sed \
+            -e "s/^  version .*/  version \"${VERSION}\"/" \
+            -e "s/^  sha256 .*/  sha256 \"${SHA256}\"/" \
+            packaging/homebrew/sable.rb > tap/Casks/sable.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/sable.rb
+          if git diff --cached --quiet; then
+            echo "Nothing changed; skipping the push."
+            exit 0
+          fi
+          git commit -m "sable ${VERSION}"
+          # The tap may still be an empty repository on the first run.
+          git push origin HEAD:refs/heads/main

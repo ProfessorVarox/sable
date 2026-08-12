@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { forwardRef, useImperativeHandle, type ReactNode } from 'react';
-import { act, render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { Editor } from 'slate';
 import type { Room } from '$types/matrix-sdk';
@@ -17,9 +17,19 @@ const {
   rendererCtxPermissions,
   rendererCtxSettings,
   processedTimelineOptions,
+  processedRowsVisible,
+  processedRowIds,
   windowFocused,
   rowItemIndex,
   rowRenders,
+  eventRedacted,
+  unrenderedJumpTarget,
+  liveTimeline,
+  eventTimeline,
+  navigateRoomMock,
+  vListProps,
+  timelineSyncOptions,
+  timelineActionsOptions,
 } = vi.hoisted(() => ({
   vListHandle: {
     scrollSize: 1000,
@@ -32,15 +42,19 @@ const {
   },
   timelineSync: {
     eventsLength: 1,
+    prependVersion: 0,
     timeline: { linkedTimelines: [] },
     liveTimelineLinked: true,
     backwardStatus: 'idle',
     forwardStatus: 'idle',
     canPaginateBack: false,
-    focusItem: undefined as { index: number; scrollTo: boolean; highlight: boolean } | undefined,
+    canPaginateForward: false,
+    jumpFailed: false,
+    focusItem: undefined as { eventId: string; scrollTo: boolean; highlight: boolean } | undefined,
     setFocusItem: vi.fn<() => void>(),
-    setTimeline: vi.fn<() => void>(),
     loadEventTimeline: vi.fn<() => void>(),
+    cancelEventTimelineLoad: vi.fn<() => void>(),
+    focusLiveTimeline: vi.fn<() => void>(),
     handleTimelinePagination: vi.fn<() => void>(),
   },
   setUnreadTimelineMock: vi.fn<() => void>(),
@@ -52,12 +66,28 @@ const {
   processedTimelineOptions: {
     current: undefined as Record<string, unknown> | undefined,
   },
+  processedRowsVisible: { current: true },
+  processedRowIds: { current: ['$evt1'] as string[] },
   windowFocused: { current: false },
   rowItemIndex: { current: 0 },
   rowRenders: { count: 0 },
+  eventRedacted: { current: false },
+  unrenderedJumpTarget: {
+    current: undefined as { eventId: string; rawIndex: number } | undefined,
+  },
+  liveTimeline: {
+    getState: () => undefined,
+    getEvents: () => [{ getId: () => '$evt1' }] as unknown[],
+  },
+  eventTimeline: { current: undefined as object | undefined },
+  navigateRoomMock: vi.fn<() => void>(),
+  vListProps: { shift: false, shiftValues: [] as boolean[] },
+  timelineSyncOptions: { current: undefined as Record<string, unknown> | undefined },
+  timelineActionsOptions: { current: undefined as Record<string, unknown> | undefined },
 }));
 
 let lastOnScroll: ((offset: number) => void) | undefined;
+let lastOnScrollEnd: (() => void) | undefined;
 
 vi.mock('virtua', () => ({
   VList: forwardRef(function MockVList(
@@ -65,14 +95,21 @@ vi.mock('virtua', () => ({
       data,
       children,
       onScroll,
+      onScrollEnd,
+      shift,
     }: {
       data: unknown[];
       children: (item: unknown, index: number) => ReactNode;
       onScroll?: (offset: number) => void;
+      onScrollEnd?: () => void;
+      shift?: boolean;
     },
     ref
   ) {
     lastOnScroll = onScroll;
+    lastOnScrollEnd = onScrollEnd;
+    vListProps.shift = shift ?? false;
+    vListProps.shiftValues.push(vListProps.shift);
     useImperativeHandle(ref, () => vListHandle);
     return (
       // Outer element is the VList scroll container (messageListRef's first
@@ -104,7 +141,7 @@ vi.mock('$hooks/useMessageEdit', () => ({
 }));
 
 vi.mock('$hooks/useRoomNavigate', () => ({
-  useRoomNavigate: () => ({ navigateRoom: vi.fn<() => void>() }),
+  useRoomNavigate: () => ({ navigateRoom: navigateRoomMock }),
 }));
 
 vi.mock('$hooks/useSpace', () => ({ useSpaceOptionally: () => undefined }));
@@ -118,24 +155,30 @@ vi.mock('$state/hooks/userRoomProfile', () => ({
 }));
 
 vi.mock('$hooks/timeline/useTimelineSync', () => ({
-  useTimelineSync: () => ({
-    ...timelineSync,
-    setUnreadInfo: setUnreadTimelineMock,
-  }),
+  useTimelineSync: (options: Record<string, unknown>) => {
+    timelineSyncOptions.current = options;
+    return {
+      ...timelineSync,
+      setUnreadInfo: setUnreadTimelineMock,
+    };
+  },
 }));
 
 vi.mock('$hooks/timeline/useTimelineActions', () => ({
-  useTimelineActions: () => ({
-    handleUserClick: vi.fn<() => void>(),
-    handleUsernameClick: vi.fn<() => void>(),
-    handleReplyClick: vi.fn<() => void>(),
-    handleReactionToggle: vi.fn<() => void>(),
-    handleEdit: vi.fn<() => void>(),
-    handleResend: vi.fn<() => void>(),
-    handleDeleteFailedSend: vi.fn<() => void>(),
-    handleOpenReply: vi.fn<() => void>(),
-    setOpenThread: vi.fn<() => void>(),
-  }),
+  useTimelineActions: (options: Record<string, unknown>) => {
+    timelineActionsOptions.current = options;
+    return {
+      handleUserClick: vi.fn<() => void>(),
+      handleUsernameClick: vi.fn<() => void>(),
+      handleReplyClick: vi.fn<() => void>(),
+      handleReactionToggle: vi.fn<() => void>(),
+      handleEdit: vi.fn<() => void>(),
+      handleResend: vi.fn<() => void>(),
+      handleDeleteFailedSend: vi.fn<() => void>(),
+      handleOpenReply: vi.fn<() => void>(),
+      setOpenThread: vi.fn<() => void>(),
+    };
+  },
 }));
 
 vi.mock('$hooks/timeline/useProcessedTimeline', async (importOriginal) => {
@@ -152,21 +195,44 @@ vi.mock('$hooks/timeline/useProcessedTimeline', async (importOriginal) => {
       getTs: () => Date.now(),
       getSender: () => '@me:example.org',
       getId: () => '$evt1',
-      isRedacted: () => false,
+      isRedacted: () => eventRedacted.current,
     },
     timelineSet: undefined,
     eventSender: '@me:example.org',
+    isRedacted: eventRedacted.current,
     editId: undefined,
     reactionsKey: '',
     content: undefined,
   } as unknown as ProcessedEvent;
+  const eventsById = new Map<string, ProcessedEvent>([['$evt1', fakeEvent]]);
+  const rowFor = (id: string, index: number): ProcessedEvent => {
+    const existing = eventsById.get(id);
+    if (existing) return existing;
+    const row = {
+      ...fakeEvent,
+      id,
+      itemIndex: index,
+      mEvent: {
+        getType: () => 'm.room.message',
+        getStateKey: () => undefined,
+        getTs: () => Date.now(),
+        getSender: () => '@me:example.org',
+        getId: () => id,
+        isRedacted: () => false,
+      },
+    } as unknown as ProcessedEvent;
+    eventsById.set(id, row);
+    return row;
+  };
   return {
     ...actual,
     useProcessedTimeline: (options: Record<string, unknown>) => {
       processedTimelineOptions.current = options;
-      // Same object every call so the row memo can compare eventData by identity.
       fakeEvent.itemIndex = rowItemIndex.current;
-      return (options.items as number[]).length === 0 ? [] : [fakeEvent];
+      fakeEvent.isRedacted = eventRedacted.current;
+      return !processedRowsVisible.current || (options.items as number[]).length === 0
+        ? []
+        : processedRowIds.current.map(rowFor);
     },
   };
 });
@@ -222,10 +288,20 @@ vi.mock('$components/room-intro', () => ({ RoomIntro: () => null }));
 
 vi.mock('$utils/timeline', () => ({
   getRoomUnreadInfo: () => getRoomUnreadInfoMock(),
-  getEventTimeline: () => undefined,
+  getEventTimeline: (_room: unknown, eventId: string) =>
+    unrenderedJumpTarget.current?.eventId === eventId ? {} : eventTimeline.current,
+  getDisplayedEventTimeline: (_linkedTimelines: unknown, eventId: string) =>
+    unrenderedJumpTarget.current?.eventId === eventId ? {} : eventTimeline.current,
   getFirstLinkedTimeline: () => undefined,
   getInitialTimeline: () => undefined,
-  getEventIdAbsoluteIndex: () => undefined,
+  getEventIdAbsoluteIndex: () => unrenderedJumpTarget.current?.rawIndex,
+  isNewestLiveEvent: (
+    room: { getLiveTimeline: () => { getEvents?: () => { getId?: () => string }[] } },
+    id: string
+  ) => {
+    const events = room.getLiveTimeline().getEvents?.() ?? [];
+    return events[events.length - 1]?.getId?.() === id;
+  },
 }));
 
 vi.mock('$utils/notifications', () => ({ markAsRead: vi.fn<() => void>() }));
@@ -264,7 +340,8 @@ const fireResize = (element: Element) => {
 const roomEmitter = new EventEmitter();
 const room = {
   roomId: '!room:example.org',
-  getLiveTimeline: () => undefined,
+  getLiveTimeline: () => liveTimeline,
+  findEventById: () => undefined,
   on: roomEmitter.on.bind(roomEmitter),
   removeListener: roomEmitter.removeListener.bind(roomEmitter),
 } as unknown as Room;
@@ -282,29 +359,57 @@ const getContentEl = (container: HTMLElement) => {
   return contentEl as Element;
 };
 
+const getScrollEl = (container: HTMLElement) => {
+  const scrollEl = container.querySelector('[data-testid="vlist-scroll"]');
+  expect(scrollEl).toBeTruthy();
+  return scrollEl as Element;
+};
+
 const renderTimeline = () => render(<RoomTimeline room={room} editor={{} as Editor} />);
+const settleInitialScroll = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  });
 
 beforeEach(() => {
   getRoomUnreadInfoMock.mockReset();
   rendererCtxPermissions.canRedact = false;
   rendererCtxSettings.hideReads = false;
   processedTimelineOptions.current = undefined;
+  timelineSyncOptions.current = undefined;
+  timelineActionsOptions.current = undefined;
+  processedRowsVisible.current = true;
+  processedRowIds.current = ['$evt1'];
   windowFocused.current = false;
   rowItemIndex.current = 0;
   rowRenders.count = 0;
+  eventRedacted.current = false;
+  unrenderedJumpTarget.current = undefined;
+  eventTimeline.current = liveTimeline;
+  liveTimeline.getEvents = () => [{ getId: () => '$evt1' }];
+  navigateRoomMock.mockReset();
+  vListProps.shift = false;
+  vListProps.shiftValues.length = 0;
   timelineSync.eventsLength = 1;
+  timelineSync.prependVersion = 0;
   timelineSync.focusItem = undefined;
   timelineSync.canPaginateBack = false;
+  timelineSync.canPaginateForward = false;
   timelineSync.liveTimelineLinked = true;
+  timelineSync.jumpFailed = false;
   timelineSync.backwardStatus = 'idle';
   timelineSync.forwardStatus = 'idle';
   (timelineSync.handleTimelinePagination as ReturnType<typeof vi.fn>).mockReset();
+  (timelineSync.cancelEventTimelineLoad as ReturnType<typeof vi.fn>).mockReset();
+  (timelineSync.loadEventTimeline as ReturnType<typeof vi.fn>).mockReset();
+  (timelineSync.focusLiveTimeline as ReturnType<typeof vi.fn>).mockReset();
 });
 
 describe('RoomTimeline content ResizeObserver', () => {
   beforeEach(() => {
     observers.length = 0;
     lastOnScroll = undefined;
+    lastOnScrollEnd = undefined;
     vListHandle.scrollSize = 1000;
     vListHandle.scrollOffset = 0;
     vListHandle.viewportSize = 600;
@@ -324,9 +429,7 @@ describe('RoomTimeline content ResizeObserver', () => {
 
     // Let the mount-time initial scroll and its 80ms timer settle, then
     // isolate the content-resize behavior.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    });
+    await settleInitialScroll();
     vListHandle.scrollToIndex.mockClear();
 
     const contentEl = getContentEl(container);
@@ -341,9 +444,7 @@ describe('RoomTimeline content ResizeObserver', () => {
   it('does not re-pin on content growth after scrolling off the bottom', async () => {
     const { container } = renderTimeline();
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    });
+    await settleInitialScroll();
 
     // Scroll far off the bottom: scrollSize - offset - viewportSize >= 100.
     act(() => lastOnScroll?.(0));
@@ -355,18 +456,186 @@ describe('RoomTimeline content ResizeObserver', () => {
     expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
   });
 
+  it('resolves a jump target by event id, not by raw timeline index', async () => {
+    timelineSync.liveTimelineLinked = false;
+    const { rerender } = renderTimeline();
+
+    await settleInitialScroll();
+    vListHandle.scrollToIndex.mockClear();
+
+    rowItemIndex.current = 9;
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'center' })
+    );
+  });
+
+  it('treats a jump to the final live row as latest', async () => {
+    const { rerender, queryByText } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'end' })
+    );
+    expect(queryByText('Jump to Latest')).toBeNull();
+    expect(navigateRoomMock).toHaveBeenCalledWith(room.roomId, undefined, { replace: true });
+  });
+
+  it('does not treat the final rendered row from a historical timeline as latest', async () => {
+    eventTimeline.current = {};
+    const { rerender, getByText } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'center' })
+    );
+    expect(getByText('Jump to Latest')).toBeTruthy();
+    expect(navigateRoomMock).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a jump target as latest while the room has newer events', async () => {
+    eventTimeline.current = liveTimeline;
+    timelineSync.liveTimelineLinked = true;
+    (liveTimeline as unknown as { getEvents: () => { getId: () => string }[] }).getEvents = () => [
+      { getId: () => '$evt1' },
+      { getId: () => '$newer' },
+    ];
+
+    const { rerender, getByText } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'center' })
+    );
+    expect(navigateRoomMock).not.toHaveBeenCalled();
+    expect(getByText('Jump to Latest')).toBeTruthy();
+  });
+
+  it('keeps the jump target anchored across a prepend', async () => {
+    timelineSync.liveTimelineLinked = false;
+    const { rerender } = render(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    await settleInitialScroll();
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
+    timelineSync.eventsLength = 2;
+    timelineSync.prependVersion = 1;
+    vListProps.shiftValues.length = 0;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    expect(vListProps.shiftValues).toContain(true);
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'center' })
+    );
+  });
+
+  it('stops anchoring the jump target once the user scrolls', async () => {
+    timelineSync.liveTimelineLinked = false;
+    const { container, rerender } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    act(() => {
+      getScrollEl(container).dispatchEvent(new Event('wheel', { bubbles: true }));
+    });
+    vListHandle.scrollToIndex.mockClear();
+
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
+    timelineSync.eventsLength = 2;
+    timelineSync.prependVersion = 1;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it('retries an unresolved focus after timeline events are rendered', async () => {
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    processedRowsVisible.current = false;
+    const { rerender } = renderTimeline();
+
+    expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+
+    processedRowsVisible.current = true;
+    timelineSync.eventsLength = 2;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'center' })
+    );
+  });
+
+  it('cancels a pending context load when opening an already-rendered event', () => {
+    renderTimeline();
+
+    const handleOpenEvent = timelineActionsOptions.current?.handleOpenEvent as
+      | ((eventId: string) => void)
+      | undefined;
+    act(() => handleOpenEvent?.('$evt1'));
+
+    expect(timelineSync.cancelEventTimelineLoad).toHaveBeenCalled();
+  });
+
+  it('keeps a fresh highlight visible for two seconds when refocusing the same event', () => {
+    vi.useFakeTimers();
+    try {
+      timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
+      const { rerender } = renderTimeline();
+
+      act(() => vi.advanceTimersByTime(1500));
+      timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
+      rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+      act(() => vi.advanceTimersByTime(600));
+
+      expect(timelineSync.setFocusItem).not.toHaveBeenCalledWith(undefined);
+
+      act(() => vi.advanceTimersByTime(1400));
+      expect(timelineSync.setFocusItem).toHaveBeenCalledWith(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('scrolls to the nearest visible row when the jump target is filtered out', async () => {
     const { rerender } = renderTimeline();
 
     // Let the mount-time initial scroll settle, then isolate the focus jump.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    });
+    await settleInitialScroll();
     vListHandle.scrollToIndex.mockClear();
 
-    // The mocked timeline exposes one row (itemIndex 0), so raw index 5 has no
-    // exact row to match.
-    timelineSync.focusItem = { index: 5, scrollTo: true, highlight: true };
+    unrenderedJumpTarget.current = { eventId: '$hidden', rawIndex: 5 };
+    timelineSync.focusItem = { eventId: '$hidden', scrollTo: true, highlight: true };
     rerender(<RoomTimeline room={room} editor={{} as Editor} />);
 
     expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
@@ -378,11 +647,43 @@ describe('RoomTimeline content ResizeObserver', () => {
     const [setFocusItemCall] = (timelineSync.setFocusItem as ReturnType<typeof vi.fn>).mock.calls;
     type FocusItem = NonNullable<typeof timelineSync.focusItem>;
     const updater = setFocusItemCall?.[0] as (prev: FocusItem) => FocusItem;
-    expect(updater({ index: 5, scrollTo: true, highlight: true })).toEqual({
-      index: 0,
+    expect(updater({ eventId: '$hidden', scrollTo: true, highlight: true })).toEqual({
+      eventId: '$evt1',
+      scrollTo: true,
+      highlight: true,
+    });
+  });
+
+  it('does not paginate from a focused scroll after Virtua acknowledges it', async () => {
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.canPaginateForward = true;
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    renderTimeline();
+
+    (timelineSync.setFocusItem as ReturnType<typeof vi.fn>).mockClear();
+    act(() => lastOnScroll?.(900));
+
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
+
+    act(() => lastOnScrollEnd?.());
+
+    const settleFocus = (timelineSync.setFocusItem as ReturnType<typeof vi.fn>).mock.calls.at(
+      -1
+    )?.[0] as
+      | ((
+          focusItem: NonNullable<typeof timelineSync.focusItem>
+        ) => NonNullable<typeof timelineSync.focusItem>)
+      | undefined;
+    expect(settleFocus?.({ eventId: '$evt1', scrollTo: true, highlight: true })).toEqual({
+      eventId: '$evt1',
       scrollTo: false,
       highlight: true,
     });
+
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
+    act(() => lastOnScroll?.(900));
+
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
   });
 });
 
@@ -436,15 +737,9 @@ describe('failed backfill on an empty timeline', () => {
     timelineSync.canPaginateBack = true;
     timelineSync.backwardStatus = 'error';
 
-    const { container, getByText } = renderTimeline();
+    const { getByText } = renderTimeline();
 
-    expect(container.textContent).toContain('Failed to load history.');
-    expect(container.querySelector('[data-testid="vlist-content"]')?.textContent).not.toContain(
-      'placeholder'
-    );
-    const listWrapper = container.querySelector('[data-testid="vlist-scroll"]')
-      ?.parentElement as HTMLElement;
-    expect(listWrapper.style.opacity).toBe('1');
+    expect(getByText('Failed to load history.')).toBeVisible();
 
     act(() => {
       getByText('Retry').click();
@@ -494,15 +789,93 @@ describe('MemoizedTimelineItem', () => {
     expect(rowRenders.count).toBe(before);
   });
 
-  it('does not re-render for a focusItem pointing at the -1 merged-row sentinel', () => {
+  it('does not re-render a merged relation row for a focusItem targeting another event', () => {
     rowItemIndex.current = -1;
     const { rerender } = renderTimeline();
     const before = rowRenders.count;
 
-    timelineSync.focusItem = { index: -1, highlight: true, scrollTo: false };
+    timelineSync.focusItem = { eventId: '$other', highlight: true, scrollTo: false };
     rerender(<RoomTimeline room={room} editor={{} as Editor} />);
 
     expect(rowRenders.count).toBe(before);
+  });
+
+  it('re-renders a row when its event is redacted in place', () => {
+    const { rerender } = renderTimeline();
+    const before = rowRenders.count;
+
+    eventRedacted.current = true;
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(rowRenders.count).toBeGreaterThan(before);
+  });
+});
+
+describe('jump reveal and focus-regain read receipts', () => {
+  it('keeps the timeline hidden while a jump is still pending', () => {
+    timelineSync.jumpFailed = false;
+    const { getByText } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />
+    );
+
+    expect(getByText('canRedact:false hideReads:false')).not.toBeVisible();
+  });
+
+  it('restarts a route jump when the Room instance is replaced with the same id', () => {
+    const replacementRoom = Object.create(room) as Room;
+    const { rerender } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />
+    );
+    expect(timelineSync.loadEventTimeline).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <RoomTimeline room={replacementRoom} editor={{} as Editor} eventId="$jump:example.org" />
+    );
+
+    expect(timelineSync.loadEventTimeline).toHaveBeenCalledTimes(2);
+  });
+
+  it('reveals the timeline when the jump fails instead of leaving a blank room', () => {
+    timelineSync.jumpFailed = false;
+    const { getByText, rerender } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />
+    );
+    expect(getByText('canRedact:false hideReads:false')).not.toBeVisible();
+
+    timelineSync.jumpFailed = true;
+    act(() => {
+      rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />);
+    });
+
+    expect(getByText('canRedact:false hideReads:false')).toBeVisible();
+  });
+
+  it('restores bottom state when a jump fails', async () => {
+    const { getByText, queryByText } = renderTimeline();
+    await waitFor(() => expect(getByText('canRedact:false hideReads:false')).toBeVisible());
+
+    act(() => lastOnScroll?.(0));
+    expect(getByText('Jump to Latest')).toBeTruthy();
+
+    const onJumpError = timelineSyncOptions.current?.onJumpError as (() => void) | undefined;
+    act(() => onJumpError?.());
+
+    expect(queryByText('Jump to Latest')).toBeNull();
+  });
+
+  it('clears a notification route when an own message returns to the live timeline', async () => {
+    timelineSync.jumpFailed = true;
+    const { getByText, queryByText } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />
+    );
+    await waitFor(() => expect(getByText('canRedact:false hideReads:false')).toBeVisible());
+    expect(getByText('Jump to Latest')).toBeTruthy();
+
+    const onReturnToLive = timelineSyncOptions.current?.onReturnToLive as (() => void) | undefined;
+    act(() => onReturnToLive?.());
+
+    expect(navigateRoomMock).toHaveBeenCalledWith(room.roomId, undefined, { replace: true });
+    expect(queryByText('Jump to Latest')).toBeNull();
   });
 });
 
@@ -551,9 +924,7 @@ describe('scroll-edge pagination', () => {
   it('marks the timeline as at the bottom when jumping to latest', async () => {
     const { getByText, queryByText } = renderTimeline();
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    });
+    await waitFor(() => expect(getByText('canRedact:false hideReads:false')).toBeVisible());
 
     // Simulate a stale virtualizer measurement reporting the viewport above the
     // bottom. A programmatic jump may not emit a follow-up scroll event.
@@ -564,6 +935,7 @@ describe('scroll-edge pagination', () => {
       getByText('Jump to Latest').click();
     });
 
+    expect(timelineSync.focusLiveTimeline).toHaveBeenCalled();
     expect(queryByText('Jump to Latest')).toBeNull();
   });
 
@@ -582,16 +954,17 @@ describe('scroll-edge pagination', () => {
     expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
   });
 
-  it('paginates forwards near the bottom only while the live timeline is not linked', () => {
+  it('paginates forwards near the bottom only while a forward token remains', () => {
     const { rerender } = renderTimeline();
 
     timelineSync.liveTimelineLinked = false;
+    timelineSync.canPaginateForward = true;
     rerender(<RoomTimeline room={room} editor={{} as Editor} />);
     act(() => lastOnScroll?.(0));
     expect(timelineSync.handleTimelinePagination).toHaveBeenCalledWith(false);
 
     (timelineSync.handleTimelinePagination as ReturnType<typeof vi.fn>).mockClear();
-    timelineSync.liveTimelineLinked = true;
+    timelineSync.canPaginateForward = false;
     rerender(<RoomTimeline room={room} editor={{} as Editor} />);
     act(() => lastOnScroll?.(0));
     expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
@@ -603,9 +976,7 @@ describe('backfill scroll anchoring', () => {
     const { rerender } = renderTimeline();
 
     // Let the mount-time initial scroll settle, then watch backfill only.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    });
+    await settleInitialScroll();
     vListHandle.scrollToIndex.mockClear();
 
     timelineSync.backwardStatus = 'loading';
@@ -622,9 +993,7 @@ describe('backfill scroll anchoring', () => {
   it('does not scroll away after a backfill if the user had scrolled up', async () => {
     const { rerender } = renderTimeline();
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    });
+    await settleInitialScroll();
 
     act(() => lastOnScroll?.(0));
     vListHandle.scrollToIndex.mockClear();

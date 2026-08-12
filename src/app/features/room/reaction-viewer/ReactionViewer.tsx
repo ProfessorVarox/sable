@@ -116,6 +116,7 @@ export const ReactionViewer = as<'div', ReactionViewerProps>(
                           room.roomId,
                           space?.roomId,
                           senderId,
+                          undefined,
                           getMouseEventCords(event.nativeEvent),
                           'Bottom'
                         );

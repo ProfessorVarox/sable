@@ -46,6 +46,9 @@ importers:
       '@lottiefiles/dotlottie-react':
         specifier: ^0.12.0
         version: 0.12.3(react@18.3.1)
+      '@lottiefiles/dotlottie-web':
+        specifier: 0.40.1
+        version: 0.40.1
       '@noble/hashes':
         specifier: ^2.2.0
         version: 2.2.0
@@ -155,8 +158,8 @@ importers:
         specifier: ^12.0.3
         version: 12.0.3(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       folds:
-        specifier: ^2.6.2
-        version: 2.6.2(@vanilla-extract/css@1.21.1)(@vanilla-extract/recipes@0.5.7(@vanilla-extract/css@1.21.1))(classnames@2.5.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: ^2.7.1
+        version: 2.7.1(@vanilla-extract/css@1.21.1)(@vanilla-extract/recipes@0.5.7(@vanilla-extract/css@1.21.1))(classnames@2.5.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       html-dom-parser:
         specifier: ^8.0.0
         version: 8.0.0
@@ -353,6 +356,9 @@ importers:
       oxlint-tsgolint:
         specifier: ^0.24.0
         version: 0.24.0
+      tauri-plugin-app-icon-api:
+        specifier: github:SableClient/tauri-plugin-app-icon#6da508ab93ee8c791aa28112c8e171e42257cc3c
+        version: https://codeload.github.com/SableClient/tauri-plugin-app-icon/tar.gz/6da508ab93ee8c791aa28112c8e171e42257cc3c
       testcontainers:
         specifier: ^12.0.4
         version: 12.0.4
@@ -3938,8 +3944,8 @@ packages:
   focus-trap@8.2.2:
     resolution: {integrity: sha512-qV0g8hRYBqgACcFOH3f9wXc4zPKhr/0z9RI2a6ZijZ72EeBi4g8oBy8zAWuUR1TsMpOzwpUMFvjdasrC41Joug==}
 
-  folds@2.6.2:
-    resolution: {integrity: sha512-1HemxxSnBm8/U5kq1pDQrFkpltWgQN90DmWCZWkZb7D2pe8BhOJSwIRLjk9WxHcw6nn69oz2XNYIXtSw0LvX1w==}
+  folds@2.7.1:
+    resolution: {integrity: sha512-A1XGXJ4hp1W0cpFUIjYj9gPSzKVxqj9BlTBJTqmmtTUiEFDzXvhBITJdcqmlDsmcd756tu/iygSAzdky5fDcrg==}
     peerDependencies:
       '@vanilla-extract/css': 1.9.2
       '@vanilla-extract/recipes': 0.3.0
@@ -5329,6 +5335,10 @@ packages:
 
   tauri-plugin-android-fs-api@28.4.0:
     resolution: {integrity: sha512-YOo1P+cRjuaoPbTNZprMhr56ruKO4hIDq7kJOum91NqkN+VWY9F+UPAdjZokhzJSsbkeY0nsb1VDLXb2/h3f3w==}
+
+  tauri-plugin-app-icon-api@https://codeload.github.com/SableClient/tauri-plugin-app-icon/tar.gz/6da508ab93ee8c791aa28112c8e171e42257cc3c:
+    resolution: {tarball: https://codeload.github.com/SableClient/tauri-plugin-app-icon/tar.gz/6da508ab93ee8c791aa28112c8e171e42257cc3c}
+    version: 0.1.0
 
   teex@1.0.1:
     resolution: {integrity: sha512-eYE6iEI62Ni1H8oIa7KlDU6uQBtqr4Eajni3wX7rpfXD8ysFx8z0+dri+KWEPWpBsxXfxu58x/0jvTVT1ekOSg==}
@@ -9152,7 +9162,7 @@ snapshots:
     dependencies:
       tabbable: 6.5.0
 
-  folds@2.6.2(@vanilla-extract/css@1.21.1)(@vanilla-extract/recipes@0.5.7(@vanilla-extract/css@1.21.1))(classnames@2.5.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  folds@2.7.1(@vanilla-extract/css@1.21.1)(@vanilla-extract/recipes@0.5.7(@vanilla-extract/css@1.21.1))(classnames@2.5.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       '@vanilla-extract/css': 1.21.1
       '@vanilla-extract/recipes': 0.5.7(@vanilla-extract/css@1.21.1)
@@ -10750,6 +10760,10 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.11.1
       create-web-stream: 1.1.3
+
+  tauri-plugin-app-icon-api@https://codeload.github.com/SableClient/tauri-plugin-app-icon/tar.gz/6da508ab93ee8c791aa28112c8e171e42257cc3c:
+    dependencies:
+      '@tauri-apps/api': 2.11.1
 
   teex@1.0.1:
     dependencies:

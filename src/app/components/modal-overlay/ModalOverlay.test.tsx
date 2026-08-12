@@ -209,6 +209,24 @@ describe('ModalOverlay', () => {
       expect(screen.getByTestId('modal-child')).toBeInTheDocument();
     });
 
+    it('pads the fullscreen wrapper against device safe areas by default', () => {
+      mobile({ mobile: 'fullscreen' });
+
+      const wrapper = screen
+        .getByTestId('modal-child')
+        .closest('div[style*="padding-top"]') as HTMLElement;
+      expect(wrapper.style.paddingTop).toBe(
+        'var(--safe-area-inset-top, env(safe-area-inset-top, 0px))'
+      );
+    });
+
+    it('skips safe-area padding when respectSafeArea is false', () => {
+      mobile({ mobile: 'fullscreen', respectSafeArea: false });
+
+      const wrapper = screen.getByTestId('modal-child').parentElement as HTMLElement;
+      expect(wrapper.style.paddingTop ?? '').toBe('');
+    });
+
     it('wraps children in a Modal on desktop when size is set', () => {
       desktop({ size: '500' });
 
