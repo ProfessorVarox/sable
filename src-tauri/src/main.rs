@@ -212,7 +212,6 @@ fn main() {
     // window path is unstable (crate verified on X11 only).
     #[cfg(target_os = "linux")]
     unsafe {
-        // Tao/Tauri Wayland decorations are don't respect server side decorations, forcing GTK onto X11/XWayland for now.
         // https://github.com/tauri-apps/tao/issues/1046
         // https://github.com/tauri-apps/tauri/issues/11856
         // https://github.com/tauri-apps/tauri/issues/14251

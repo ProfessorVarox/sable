@@ -1,15 +1,13 @@
-import { expect, test } from '@playwright/test';
+import { test, expect } from './fixtures/test';
 import { LOGIN_PASSWORD, LOGIN_USERNAME } from './fixtures/loginAccount';
+import { e2eStorageStatePath } from './fixtures/runtime';
+import { homeserverBaseUrl } from './fixtures/session';
 
 const CLIENT_READY_TIMEOUT = 30_000;
 
 // The container homeserver is reachable only by url ("http://127.0.0.1:<port>"), which is the
 // shape that used to break: as a path segment it needs %2F, and hosting rewrites that to "/".
-const homeserverUrl = () => {
-  const url = process.env.TEST_HOMESERVER_URL;
-  if (!url) throw new Error('TEST_HOMESERVER_URL is not set by global setup');
-  return url;
-};
+const homeserverUrl = (storageStatePath: string) => homeserverBaseUrl(storageStatePath);
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -18,7 +16,7 @@ test.describe('password login against a homeserver given as a url', () => {
     await page.goto('/');
     await expect(page).toHaveURL(/\/login\?server=/);
 
-    const server = homeserverUrl();
+    const server = await homeserverUrl(e2eStorageStatePath());
     await page.getByRole('textbox').first().fill(server);
     await page.getByRole('textbox').first().press('Enter');
 
@@ -34,7 +32,7 @@ test.describe('password login against a homeserver given as a url', () => {
   });
 
   test('survives a reload of the login url', async ({ page }) => {
-    const server = homeserverUrl();
+    const server = await homeserverUrl(e2eStorageStatePath());
     await page.goto(`/login?server=${encodeURIComponent(server)}`);
     await page.reload();
 

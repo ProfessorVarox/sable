@@ -63,6 +63,10 @@ cp -f "$CEF_DIR"/*.so* "$DEST/" 2>/dev/null || true
 cp -f "$CEF_DIR"/chrome_crashpad_handler "$DEST/" 2>/dev/null || true
 cp -f "$CEF_DIR"/*.pak "$CEF_DIR"/*.dat "$CEF_DIR"/*.bin "$CEF_DIR"/*.json "$DEST/" 2>/dev/null || true
 
+# CEF's BSD license must accompany binary redistributions. The Rust crate's
+# extracted runtime omits it, so package the upstream notice vendored here.
+cp -f "$ROOT/packaging/licenses/CEF-LICENSE.txt" "$DEST/CEF-LICENSE.txt"
+
 # Strip debug symbols: CEF ships libcef.so unstripped (~1.3 GB → 241 MB).
 # Same approach as OutSystems cef.redist.linux and Spotify's desktop client.
 for lib in "$DEST"/libcef.so "$DEST"/libEGL.so "$DEST"/libGLESv2.so; do

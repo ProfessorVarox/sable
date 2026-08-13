@@ -727,7 +727,7 @@ describe('back-pagination', () => {
       );
 
       await act(async () => {
-        await result.current.handleTimelinePagination(true);
+        await result.current.handleTimelinePagination(true, true);
       });
 
       // Nothing rendered, so the loader keeps going up to MAX_AUTO_CONTINUATIONS.
@@ -745,7 +745,7 @@ describe('back-pagination', () => {
         useTimelineSync(syncOpts(thinPage.room, thinPaginate, () => true))
       );
       await act(async () => {
-        await thin.result.current.handleTimelinePagination(true);
+        await thin.result.current.handleTimelinePagination(true, true);
       });
       expect(thinPaginate).toHaveBeenCalledTimes(4);
 
@@ -761,6 +761,23 @@ describe('back-pagination', () => {
         await full.result.current.handleTimelinePagination(true);
       });
       expect(fullPaginate).toHaveBeenCalledTimes(1);
+    });
+
+    it('loads one sparse page for a user-driven scroll', async () => {
+      const { room, events } = createPaginableRoom();
+      const paginateEventTimeline = vi.fn<() => Promise<boolean>>(async () => {
+        events.push({});
+        return true;
+      });
+      const { result } = renderHook(() =>
+        useTimelineSync(syncOpts(room, paginateEventTimeline, () => false))
+      );
+
+      await act(async () => {
+        await result.current.handleTimelinePagination(true);
+      });
+
+      expect(paginateEventTimeline).toHaveBeenCalledTimes(1);
     });
 
     it('never reports idle before the fetched page is committed', async () => {
@@ -1169,45 +1186,6 @@ describe('live-arrive edge cases', () => {
 
     expect(onReturnToLive).toHaveBeenCalledOnce();
     expect(scrollToBottom).toHaveBeenCalledWith('instant');
-  });
-
-  it('signals a prepend on the displayed timeline', async () => {
-    const { room, timeline } = createRoom();
-    const { result } = renderSyncHook(room, { isAtBottom: false });
-
-    expect(result.current.prependVersion).toBe(0);
-    await act(async () => {
-      room.emit(RoomEvent.Timeline, makeLiveEvent(room.roomId, Date.now()), room, true, false, {
-        liveEvent: false,
-        timeline,
-      });
-      await Promise.resolve();
-    });
-
-    expect(result.current.prependVersion).toBe(1);
-  });
-
-  it('signals a filtered prepend batched with a visible append', async () => {
-    const { room, timeline, events } = createRoom();
-    const prependedEvent = makeLiveEvent(room.roomId, 1) as unknown as MatrixEvent;
-    const appendedEvent = makeLiveEvent(room.roomId, 2) as unknown as MatrixEvent;
-    const isEventVisible = (mEvent: MatrixEvent) => mEvent === appendedEvent;
-    const { result } = renderSyncHook(room, { isAtBottom: false, isEventVisible });
-
-    await act(async () => {
-      room.emit(RoomEvent.Timeline, prependedEvent, room, true, false, {
-        liveEvent: false,
-        timeline,
-      });
-      events.push({});
-      room.emit(RoomEvent.Timeline, appendedEvent, room, false, false, {
-        liveEvent: true,
-        timeline,
-      });
-      await Promise.resolve();
-    });
-
-    expect(result.current.prependVersion).toBe(1);
   });
 
   it('ignores timeline events emitted for a different room', async () => {
@@ -2167,6 +2145,29 @@ describe('event jump recovery', () => {
       eventId: '$read:test',
       scrollTo: true,
       highlight: false,
+    });
+  });
+
+  it('keeps a permalink context window when sliding sync resets the live timeline', async () => {
+    const fixture = setupUnloadedTarget('$target:test');
+    const { result } = renderSyncHook(fixture.room, { isAtBottom: false, mx: fixture.mx });
+
+    await act(async () => {
+      await result.current.loadEventTimeline('$target:test');
+    });
+    const contextTimeline = result.current.timeline;
+    const timelineSet = fixture.room.getUnfilteredTimelineSet();
+
+    await act(async () => {
+      timelineSet.emit(RoomEvent.TimelineReset, undefined, timelineSet, true);
+      await Promise.resolve();
+    });
+
+    expect(result.current.timeline).toBe(contextTimeline);
+    expect(result.current.focusItem).toEqual({
+      eventId: '$target:test',
+      scrollTo: true,
+      highlight: true,
     });
   });
 

@@ -24,6 +24,7 @@ import { ElementCallIntent, ElementWidgetActions } from './types';
 import { CallControl } from './CallControl';
 import { CallControlState } from './CallControlState';
 import { createDebugLogger } from '../../utils/debugLogger';
+import { getSlidingSyncManager } from '$client/initMatrix';
 
 const debugLog = createDebugLogger('CallEmbed');
 
@@ -235,6 +236,13 @@ export class CallEmbed {
 
     const controlState = initialControlState ?? new CallControlState(true, false, true);
     this.control = new CallControl(controlState, call, iframe);
+
+    // MatrixRTC ignores a call membership when the member's m.room.member
+    // event is absent from the local roster (sliding sync only ships $ME/$LAZY
+    // here). Subscribe the room with a full member wildcard so the host SDK
+    // accepts the other participants' memberships for the embed's lifetime.
+    const callRoomSubscription = getSlidingSyncManager(mx)?.subscribeToCallRoom(room.roomId);
+    if (callRoomSubscription) this.disposables.push(callRoomSubscription);
 
     this.disposables.push(
       this.listenAction(WidgetApiFromWidgetAction.UpdateAlwaysOnScreen, (evt) => {

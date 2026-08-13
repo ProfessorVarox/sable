@@ -1,47 +1,11 @@
-import { readFile } from 'node:fs/promises';
-import { test, expect, type Page } from '@playwright/test';
-import { createRoom, registerUser, sendMessage, sendText } from './fixtures/continuwuity';
+import type { Page } from '@playwright/test';
+import { test, expect } from './fixtures/test';
+import { createRoom, sendMessage, sendText } from './fixtures/continuwuity';
+import { homeserverBaseUrl, loginAsFreshUser } from './fixtures/session';
+import { wheelToBottomUntilVisible, wheelToTopUntilVisible } from './fixtures/timelineOrder';
 import { AppShell } from './pages/AppShell';
 
-const PASSWORD = 'test-passw0rd';
 const HISTORY_SIZE = 100;
-
-type InjectedSession = {
-  baseUrl: string;
-  userId: string;
-  deviceId: string;
-  accessToken: string;
-  slidingSyncOptIn?: boolean;
-};
-
-async function homeserverBaseUrl(storageStatePath: string): Promise<string> {
-  const state = JSON.parse(await readFile(storageStatePath, 'utf8')) as {
-    origins: { localStorage: { name: string; value: string }[] }[];
-  };
-  const entry = state.origins[0]!.localStorage.find((item) => item.name === 'matrixSessions')!;
-  return (JSON.parse(entry.value) as InjectedSession[])[0]!.baseUrl;
-}
-
-async function loginAsFreshUser(
-  page: Page,
-  baseUrl: string,
-  name: string
-): Promise<{ accessToken: string }> {
-  const user = await registerUser(baseUrl, name, PASSWORD);
-  const session: InjectedSession = {
-    baseUrl,
-    userId: user.userId,
-    deviceId: user.deviceId,
-    accessToken: user.accessToken,
-    slidingSyncOptIn: true,
-  };
-  await page.addInitScript((injected: InjectedSession) => {
-    localStorage.setItem('matrixSessions', JSON.stringify([injected]));
-    localStorage.setItem('matrixActiveSession', JSON.stringify(injected.userId));
-    localStorage.setItem('dismissNotice', 'true');
-  }, session);
-  return user;
-}
 
 const permalinkTo = (roomId: string, eventId: string): string =>
   `https://matrix.to/#/${roomId}/${eventId}`;
@@ -75,7 +39,6 @@ test.describe('permalink jumps', () => {
   test('jumps to a message beyond the loaded window when its permalink is clicked', async ({
     page,
   }, testInfo) => {
-    test.skip(testInfo.project.name !== 'desktop', 'desktop-focused');
     test.setTimeout(300_000);
     const storageStatePath = testInfo.project.use.storageState as string;
     const hsBaseUrl = await homeserverBaseUrl(storageStatePath);
@@ -90,10 +53,12 @@ test.describe('permalink jumps', () => {
 
     // The client initially loads only the latest 60 events, so message 20 sits
     // outside the loaded timeline: the jump has to fetch its context.
+    let firstId = '';
     let targetId = '';
     let latestId = '';
     for (let i = 1; i <= HISTORY_SIZE; i += 1) {
       const eventId = await sendText(hsBaseUrl, user.accessToken, room, `${tag}-${i}`, i);
+      if (i === 1) firstId = eventId;
       if (i === 20) targetId = eventId;
       latestId = eventId;
     }
@@ -101,7 +66,7 @@ test.describe('permalink jumps', () => {
 
     await page.goto('/');
     await expect(page.getByText(`${tag} Room`).first()).toBeVisible({ timeout: 180_000 });
-    await app.openRoom(`${tag} Room`);
+    await page.goto(`/home/${encodeURIComponent(room)}`);
 
     const targetRow = app.messageByEventId(targetId);
     await expect(permalinkLink(page, targetId)).toBeVisible({ timeout: 60_000 });
@@ -111,10 +76,19 @@ test.describe('permalink jumps', () => {
 
     await expect(targetRow).toBeVisible({ timeout: 60_000 });
     await expect(app.messageByEventId(latestId)).toHaveCount(0);
+    await expect(app.messageByEventId(firstId)).toHaveCount(0);
 
-    const sentBody = `${tag}-after-jump`;
-    await app.sendTextMessage(sentBody);
-    await expect(page.getByText(sentBody, { exact: true })).toBeVisible({ timeout: 60_000 });
+    await page.reload();
+    await expect(targetRow).toBeInViewport({ timeout: 60_000 });
+    await expect(app.messageByEventId(latestId)).toHaveCount(0);
+    await expect(app.messageByEventId(firstId)).toHaveCount(0);
+
+    await wheelToTopUntilVisible(page, `${tag}-1`);
+    await expect(app.messageByEventId(firstId)).toBeVisible({ timeout: 60_000 });
+
+    await wheelToBottomUntilVisible(page, `${tag}-${HISTORY_SIZE}`);
+    await expect(app.messageByEventId(latestId)).toBeVisible({ timeout: 60_000 });
+
     await expect(app.messageByEventId(latestId)).toBeVisible({ timeout: 60_000 });
   });
 

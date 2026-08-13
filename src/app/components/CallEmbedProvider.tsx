@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useAutoJoinCall } from '$hooks/useAutoJoinCall';
 import {
   CallEmbedContextProvider,
@@ -17,6 +17,8 @@ import { useSelectedRoom } from '$hooks/router/useSelectedRoom';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
 import { IncomingCallModal } from '$features/call/IncomingCallModal';
 import { toCallEmbedStartError } from '$plugins/call/callEmbedError';
+import { LivekitJsCallManagerProvider } from '$features/call/livekitJsCallManager';
+import { getNativeCallManager } from '$features/call/nativeCallManager';
 
 function CallUtils({ embed }: { embed: CallEmbed }) {
   const setCallEmbed = useSetAtom(callEmbedAtom);
@@ -63,6 +65,8 @@ function AutoJoinManager() {
 }
 
 export function CallEmbedProvider({ children }: CallEmbedProviderProps) {
+  const store = useStore();
+  getNativeCallManager(store);
   const callEmbed = useAtomValue(callEmbedAtom);
   const callEmbedRef = useRef<HTMLDivElement>(null);
   const joined = useCallJoined(callEmbed);
@@ -80,8 +84,10 @@ export function CallEmbedProvider({ children }: CallEmbedProviderProps) {
       <IncomingCallModal />
       {callEmbed && <CallUtils embed={callEmbed} />}
       <CallEmbedRefContextProvider value={callEmbedRef}>
-        <AutoJoinManager />
-        {children}
+        <LivekitJsCallManagerProvider>
+          <AutoJoinManager />
+          {children}
+        </LivekitJsCallManagerProvider>
       </CallEmbedRefContextProvider>
 
       <div

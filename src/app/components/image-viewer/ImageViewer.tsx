@@ -234,7 +234,11 @@ export const ImageViewer = as<'div', ImageViewerProps>(
     const nextActivation = useMobileTapActivation(isMobile, () => onNext?.());
     const galleryActivation = useMobileTapActivation(isMobile, () => {
       closeMenu();
-      void saveMediaToGallery(src, downloadFilename, galleryMimeType!);
+      void saveMediaToGallery(
+        getTauriMediaSourceUrl(src) ?? src,
+        downloadFilename,
+        galleryMimeType!
+      );
     });
     const resetZoomMenuActivation = useMobileTapActivation(isMobile, () => {
       resetTransforms();

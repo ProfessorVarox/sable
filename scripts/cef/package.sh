@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="Package the CEF build into an AppImage"
-#MISE tools={"github:AppImage/appimagetool" = {version = "1.9.1", matching = ".AppImage"}}
-# deb/rpm/archlinux/snap come from GoReleaser.
+#MISE description="Package the CEF build for Linux"
+#MISE tools={nfpm="2.47.0", "github:AppImage/appimagetool" = {version = "1.9.1", matching = ".AppImage"}}
 # Usage: scripts/cef/package.sh [version] [binary-path] [display-name]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -9,6 +8,16 @@ cd "$ROOT"
 
 VERSION="${1:-$(grep -m1 '"version":' src-tauri/tauri.conf.json | sed 's/.*: *"\(.*\)".*/\1/')}"
 : "${VERSION:?version not found in src-tauri/tauri.conf.json}"
+DEB_VERSION="$VERSION"
+RPM_VERSION="$VERSION"
+RPM_ITERATION=1
+if [[ "$VERSION" == *-* ]]; then
+  BASE_VERSION="${VERSION%%-*}"
+  PRERELEASE="${VERSION#*-}"
+  DEB_VERSION="${BASE_VERSION}~${PRERELEASE}"
+  RPM_VERSION="$BASE_VERSION"
+  RPM_ITERATION="0.${PRERELEASE}"
+fi
 
 STAGE="$ROOT/src-tauri/target/release"
 OUT="$STAGE/bundle"
@@ -46,7 +55,7 @@ else
 fi
 
 rm -rf "$WORK"
-mkdir -p "$OUT/appimage"
+mkdir -p "$OUT/deb" "$OUT/rpm" "$OUT/appimage"
 
 bash scripts/cef/stage.sh "$WORK/stage" "$DISPLAY_NAME"
 
@@ -80,6 +89,31 @@ stage_appindicator() {
 }
 stage_appindicator "$APPDIR/usr/bin"
 
+# The AppImage mount is nosuid, so Chrome's setuid sandbox cannot run there.
+rm -f "$APPDIR/usr/bin/chrome-sandbox"
+
+if command -v nfpm >/dev/null 2>&1; then
+  PKGROOT="$WORK/pkgroot"
+  mkdir -p "$PKGROOT/opt/sable" "$PKGROOT/usr/bin" "$PKGROOT/usr/share/applications"
+  cp -a "$WORK/stage/runtime/." "$PKGROOT/opt/sable/"
+  cp -f "$BIN_PATH" "$PKGROOT/opt/sable/sable"
+  chmod 755 "$PKGROOT/opt/sable/sable"
+  cat > "$PKGROOT/usr/bin/sable" <<'EOF'
+#!/bin/sh
+exec /opt/sable/sable "$@"
+EOF
+  chmod 755 "$PKGROOT/usr/bin/sable"
+  cp -a "$WORK/stage/share/." "$PKGROOT/usr/share/"
+
+  PKGROOT="$PKGROOT" PKG_VERSION="$DEB_VERSION" PKG_RELEASE=1 nfpm pkg -f nfpm.yaml -p deb \
+    -t "$OUT/deb/Sable-${VERSION}-linux-x86_64.deb"
+  PKGROOT="$PKGROOT" PKG_VERSION="$RPM_VERSION" PKG_RELEASE="$RPM_ITERATION" nfpm pkg -f nfpm.yaml -p rpm \
+    -t "$OUT/rpm/Sable-${VERSION}-linux-x86_64.rpm"
+else
+  echo "nfpm not found" >&2
+  exit 1
+fi
+
 cp -f "$WORK/stage/share/applications/sable.desktop" "$APPDIR/sable.desktop"
 cp -f src-tauri/icons/128x128.png "$APPDIR/sable.png"
 cat > "$APPDIR/AppRun" <<'EOF'
@@ -93,4 +127,4 @@ chmod 755 "$APPDIR/AppRun"
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$APPIMAGETOOL_CMD" "$APPDIR" \
   "$OUT/appimage/Sable-${VERSION}-linux-x86_64.AppImage"
 
-echo "AppImage in: $OUT/appimage"
+echo "Packages in: $OUT"

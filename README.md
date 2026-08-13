@@ -17,10 +17,6 @@ You can also download our desktop app for Windows and Linux from [releases](http
 
 <a href="https://github.com/SableClient/Sable/releases/latest"><img alt="Download" src="https://img.shields.io/badge/Download-181717?style=for-the-badge&logo=github"></a>
 &nbsp;
-<a href="https://aur.archlinux.org/packages/sable-bin"><img alt="AUR" src="https://img.shields.io/badge/Install_via_AUR-1793D1?style=for-the-badge&logo=arch-linux"></a>
-&nbsp;
-<a href="https://snapcraft.io/sable"><img alt="Snap Store" src="https://img.shields.io/badge/Install_via_Snap-82BEA0?style=for-the-badge&logo=snapcraft"></a>
-&nbsp;
 <a href="https://flathub.org/apps/moe.sable.client"><img alt="Flathub" src="https://img.shields.io/badge/Install_via_Flathub-4A86CF?style=for-the-badge&logo=flathub"></a>
 
 On macOS, via our [Homebrew tap](https://github.com/SableClient/homebrew-sable):

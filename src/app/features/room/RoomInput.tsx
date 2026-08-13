@@ -2052,7 +2052,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                   }
                 >
                   {uploadBoard && (
-                    <Scroll direction="Horizontal" size="300" hideTrack visibility="Hover">
+                    <Scroll
+                      direction="Horizontal"
+                      size="300"
+                      hideTrack
+                      visibility="Hover"
+                      data-gestures="scroll"
+                    >
                       <UploadBoardContent>
                         {Array.from(selectedFiles)
                           .toReversed()

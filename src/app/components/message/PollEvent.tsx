@@ -11,9 +11,9 @@ import {
   RoomEvent,
   type MatrixEvent,
 } from 'matrix-js-sdk';
+import { MsgType, RelationType } from '$types/matrix-sdk';
 import * as css from './PollEvent.css';
 import { useCallback, useEffect, useState } from 'react';
-import { MsgType, RelationType } from '$types/matrix-sdk';
 import { PollResponsesViewer } from '$features/room/poll-modals';
 import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
 import { useMatrixEvent } from '$hooks/useMatrixEvent';
@@ -224,7 +224,7 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
         rel_type: RelationType.Reference,
         event_id: eventId,
       },
-      'org.matrix.msc3381.poll.end': {},
+      [M_POLL_END.name]: {},
       [M_TEXT.name]: endText,
       body: endText,
       msgtype: MsgType.Text,

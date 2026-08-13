@@ -88,7 +88,6 @@ globalStyle(`body ${messageList} > *`, {
 });
 
 globalStyle(`body ${messageList} [data-message-id]`, {
-  overflowAnchor: 'auto',
   transition: 'background-color 0.1s ease-in-out !important',
   position: 'relative',
   zIndex: 1,

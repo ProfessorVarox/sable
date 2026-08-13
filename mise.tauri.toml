@@ -12,7 +12,8 @@ experimental = true
 # Android
 java = "temurin-21"
 android-sdk = "22.0"
-goreleaser = "2.17.0"
+actionlint = "1.7.10"
+"aqua:goreleaser/nfpm" = "2.47.0"
 
 [bootstrap.packages]
 # Debian/Ubuntu

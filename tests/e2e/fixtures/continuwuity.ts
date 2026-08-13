@@ -1,8 +1,11 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { GenericContainer, Wait } from 'testcontainers';
 
 const IMAGE = 'ghcr.io/continuwuity/continuwuity:latest';
 const CS_PORT = 8008;
 const SERVER_NAME = 'test.local';
+const execFileAsync = promisify(execFile);
 
 export type RegisteredUser = {
   userId: string;
@@ -12,6 +15,7 @@ export type RegisteredUser = {
 
 export type TestHomeserver = {
   baseUrl: string;
+  containerId: string;
   register: (username: string, password: string) => Promise<RegisteredUser>;
   stop: () => Promise<void>;
 };
@@ -34,17 +38,24 @@ export async function startContinuwuity(): Promise<TestHomeserver> {
     .withTmpFs({ '/database': 'rw' })
     .withWaitStrategy(Wait.forHttp('/_matrix/client/versions', CS_PORT).forStatusCode(200))
     .withStartupTimeout(120_000)
+    // The teardown project removes this container by id.
+    .withAutoCleanup(false)
     .start();
 
   const baseUrl = `http://${container.getHost()}:${container.getMappedPort(CS_PORT)}`;
 
   return {
     baseUrl,
+    containerId: container.getId(),
     register: (username, password) => registerUser(baseUrl, username, password),
     stop: async () => {
       await container.stop();
     },
   };
+}
+
+export async function removeContinuwuity(containerId: string): Promise<void> {
+  await execFileAsync('docker', ['rm', '-f', containerId]);
 }
 
 export async function registerUser(

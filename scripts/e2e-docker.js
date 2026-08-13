@@ -61,7 +61,10 @@ process.on('SIGTERM', () => process.exit(143));
 
 await waitForServer();
 
-const result = spawnSync('pnpm', ['exec', 'playwright', 'test', ...process.argv.slice(2)], {
+const args = process.argv.slice(2);
+if (args[0] === '--') args.shift();
+
+const result = spawnSync('pnpm', ['exec', 'playwright', 'test', ...args], {
   stdio: 'inherit',
   env: { ...process.env, PW_TEST_CONNECT_WS_ENDPOINT: `ws://127.0.0.1:${port}/` },
 });

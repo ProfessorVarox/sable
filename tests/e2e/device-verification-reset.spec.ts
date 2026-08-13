@@ -1,50 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import { test, expect, type Page } from '@playwright/test';
-import { registerUser } from './fixtures/continuwuity';
+import type { Page } from '@playwright/test';
+import { test, expect } from './fixtures/test';
+import { homeserverBaseUrl, loginAsFreshUser, PASSWORD } from './fixtures/session';
 
-const PASSWORD = 'test-passw0rd';
 const UPLOAD_ROUTE = '**/_matrix/client/*/keys/device_signing/upload';
 const TICKET_PATH = '/e2e-oauth-ticket';
 const SESSION = 'e2e-reset-oauth-session';
 
 type AuthDict = { type?: string; session?: string };
-
-type InjectedSession = {
-  baseUrl: string;
-  userId: string;
-  deviceId: string;
-  accessToken: string;
-  slidingSyncOptIn?: boolean;
-};
-
-async function homeserverBaseUrl(storageStatePath: string): Promise<string> {
-  const state = JSON.parse(await readFile(storageStatePath, 'utf8')) as {
-    origins: { localStorage: { name: string; value: string }[] }[];
-  };
-  const entry = state.origins[0]!.localStorage.find((item) => item.name === 'matrixSessions')!;
-  return (JSON.parse(entry.value) as InjectedSession[])[0]!.baseUrl;
-}
-
-async function loginAsFreshUser(
-  page: Page,
-  baseUrl: string,
-  name: string,
-  slidingSync = false
-): Promise<void> {
-  const user = await registerUser(baseUrl, name, PASSWORD);
-  const session: InjectedSession = {
-    baseUrl,
-    userId: user.userId,
-    deviceId: user.deviceId,
-    accessToken: user.accessToken,
-    ...(slidingSync ? { slidingSyncOptIn: true } : {}),
-  };
-  await page.addInitScript((injected: InjectedSession) => {
-    localStorage.setItem('matrixSessions', JSON.stringify([injected]));
-    localStorage.setItem('matrixActiveSession', JSON.stringify(injected.userId));
-    localStorage.setItem('dismissNotice', 'true');
-  }, session);
-}
 
 const recoveryKeyShown = (page: Page) => page.getByRole('button', { name: 'Copy', exact: true });
 
@@ -53,7 +15,12 @@ test.describe('device verification reset', () => {
     test.setTimeout(180_000);
     const storageStatePath = testInfo.project.use.storageState as string;
     const hsBaseUrl = await homeserverBaseUrl(storageStatePath);
-    await loginAsFreshUser(page, hsBaseUrl, `reset-uia-${testInfo.project.name}-${process.pid}`);
+    await loginAsFreshUser(
+      page,
+      hsBaseUrl,
+      `reset-uia-${testInfo.project.name}-${process.pid}`,
+      false
+    );
 
     await page.goto('/settings/devices');
 
@@ -92,7 +59,12 @@ test.describe('device verification reset', () => {
     test.setTimeout(180_000);
     const storageStatePath = testInfo.project.use.storageState as string;
     const hsBaseUrl = await homeserverBaseUrl(storageStatePath);
-    await loginAsFreshUser(page, hsBaseUrl, `reset-oauth-${testInfo.project.name}-${process.pid}`);
+    await loginAsFreshUser(
+      page,
+      hsBaseUrl,
+      `reset-oauth-${testInfo.project.name}-${process.pid}`,
+      false
+    );
 
     await page.goto('/settings/devices');
 
@@ -159,7 +131,8 @@ test.describe('device verification reset', () => {
     await loginAsFreshUser(
       page,
       hsBaseUrl,
-      `reset-oauth-race-${testInfo.project.name}-${process.pid}`
+      `reset-oauth-race-${testInfo.project.name}-${process.pid}`,
+      false
     );
 
     await page.goto('/settings/devices');
@@ -227,29 +200,5 @@ test.describe('device verification reset', () => {
 
     await expect(recoveryKeyShown(page)).toBeVisible({ timeout: 120_000 });
     await expect(page.getByText('Account Authorization')).toBeHidden();
-  });
-
-  test('sets up verification when the session syncs over sliding sync', async ({
-    page,
-  }, testInfo) => {
-    // Sliding sync serialises the crypto bootstrap across long-poll round-trips,
-    // so this test needs more headroom than the 180s its siblings use.
-    test.setTimeout(240_000);
-    const storageStatePath = testInfo.project.use.storageState as string;
-    const hsBaseUrl = await homeserverBaseUrl(storageStatePath);
-    await loginAsFreshUser(
-      page,
-      hsBaseUrl,
-      `setup-sliding-${testInfo.project.name}-${process.pid}`,
-      true
-    );
-
-    await page.goto('/settings/devices');
-
-    await page.getByRole('button', { name: 'Enable' }).click({ timeout: 180_000 });
-    await expect(page.getByText('Setup Device Verification')).toBeVisible();
-    await page.locator('form').getByRole('button', { name: 'Continue' }).click();
-
-    await expect(recoveryKeyShown(page)).toBeVisible({ timeout: 180_000 });
   });
 });

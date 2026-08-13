@@ -1,6 +1,7 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { MatrixClient, Room, RoomMember } from '$types/matrix-sdk';
+import { RoomMemberEvent } from '$types/matrix-sdk';
+import type { MatrixClient, MatrixEvent, Room, RoomMember } from '$types/matrix-sdk';
 
 const { hydrateAllRoomMembers } = vi.hoisted(() => ({
   hydrateAllRoomMembers: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -31,5 +32,42 @@ describe('useRoomMembers', () => {
     await Promise.resolve();
 
     expect(hydrateAllRoomMembers).not.toHaveBeenCalled();
+  });
+
+  it('keeps member updates flowing while the SDK member load is pending', async () => {
+    let resolveMemberLoad!: () => void;
+    const members: RoomMember[] = [];
+    const room = {
+      roomId: '!room:example.org',
+      getMembers: () => members,
+      getJoinedMembers: () => members,
+      getJoinedMemberCount: () => 1,
+      loadMembersIfNeeded: vi.fn<() => Promise<void>>(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveMemberLoad = resolve;
+          })
+      ),
+    } as unknown as Room;
+    let membershipHandler: ((event: MatrixEvent) => void) | undefined;
+    const mx = {
+      getRoom: () => room,
+      on: vi.fn<(event: string, handler: (event: MatrixEvent) => void) => void>(
+        (event, handler) => {
+          if (event === RoomMemberEvent.Membership) membershipHandler = handler;
+        }
+      ),
+      removeListener: vi.fn<() => void>(),
+    } as unknown as MatrixClient;
+    const event = { getRoomId: () => room.roomId } as MatrixEvent;
+
+    const { result } = renderHook(() => useRoomMembers(mx, room.roomId));
+    act(() => {
+      members.push({ userId: '@alice:example.org' } as RoomMember);
+      membershipHandler?.(event);
+    });
+
+    await waitFor(() => expect(result.current).toEqual(members));
+    resolveMemberLoad();
   });
 });

@@ -43,6 +43,42 @@ const touchList = (target: HTMLElement, clientX: number, clientY: number) => {
   return { touches: [point], targetTouches: [point], changedTouches: [point] };
 };
 
+function ChatSwipeProbe({
+  scrollerWidth,
+  contentsWidth,
+  move,
+}: {
+  scrollerWidth: number;
+  contentsWidth: number;
+  move: (distanceX: number) => void;
+}) {
+  const drawer = useMobileNavDrawer();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || !drawer) return undefined;
+    return drawer.registerChatSwipe(el, {
+      move,
+      end: vi.fn<(gesture: { distanceX: number; velocityX: number }) => void>(),
+      cancel: vi.fn<() => void>(),
+    });
+  }, [drawer, move]);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    vi.spyOn(el, 'clientWidth', 'get').mockReturnValue(scrollerWidth);
+    vi.spyOn(el, 'scrollWidth', 'get').mockReturnValue(contentsWidth);
+  }, [scrollerWidth, contentsWidth]);
+  return (
+    <div ref={containerRef} data-chat-swipe data-gestures="ignore">
+      <div ref={scrollRef} data-gestures="scroll">
+        <div data-testid="scrollContents">hi</div>
+      </div>
+    </div>
+  );
+}
+
 describe('MobileNavDrawer', () => {
   // The panels sit side by side in a track twice the viewport wide, moved by transform.
   // `hidden` leaves a scrollport that focus or scrollIntoView scrolls a full panel width,
@@ -93,5 +129,47 @@ describe('MobileNavDrawer', () => {
     fireEvent.touchMove(image, touchList(image, 200, 100));
 
     expect(move).toHaveBeenCalled();
+  });
+
+  describe('Scroll swipe gesture', () => {
+    it('should call chat swipe when swiping on a non-scrollable scrolling element', () => {
+      const move = vi.fn<(distanceX: number) => void>();
+
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <MobileNavDrawer
+            nav={<ChatSwipeProbe scrollerWidth={100} contentsWidth={50} move={move} />}
+          >
+            <div>content</div>
+          </MobileNavDrawer>
+        </MemoryRouter>
+      );
+
+      const image = screen.getByTestId('scrollContents');
+      fireEvent.touchStart(image, touchList(image, 260, 100));
+      fireEvent.touchMove(image, touchList(image, 200, 100));
+
+      expect(move).toHaveBeenCalled();
+    });
+
+    it('should not call chat swipe when swiping on a scrollable scrolling element', () => {
+      const move = vi.fn<(distanceX: number) => void>();
+
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <MobileNavDrawer
+            nav={<ChatSwipeProbe scrollerWidth={100} contentsWidth={150} move={move} />}
+          >
+            <div>content</div>
+          </MobileNavDrawer>
+        </MemoryRouter>
+      );
+
+      const image = screen.getByTestId('scrollContents');
+      fireEvent.touchStart(image, touchList(image, 260, 100));
+      fireEvent.touchMove(image, touchList(image, 200, 100));
+
+      expect(move).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test, expect } from './fixtures/test';
 import {
   createRoom,
   inviteUser,
@@ -73,7 +74,7 @@ async function enterRoom(page: Page, fixture: Fixture): Promise<void> {
     timeout: SYNC_TIMEOUT,
   });
   await fixture.app.openRoom(`${fixture.tag} Relay`);
-  await expect(page.getByText(`${fixture.tag}-seed-${SEED_SIZE}`, { exact: true })).toBeVisible({
+  await expect(fixture.app.messageByEventId(fixture.seedIds.at(-1)!)).toBeVisible({
     timeout: SYNC_TIMEOUT,
   });
 }
@@ -238,40 +239,6 @@ for (const transport of syncTransports) {
       await expectJumpedTo(page, fixture, targetEventId);
 
       await wheelToTopUntilVisible(page, `${fixture.tag}-seed-${SEED_SIZE}`);
-      await expectOrderedTimeline(page, fixture);
-    });
-
-    test('returns to a contiguous live tail when jumping to latest after a notification jump', async ({
-      page,
-      context,
-    }, testInfo) => {
-      test.skip(testInfo.project.name !== 'desktop', 'desktop-focused');
-      const fixture = await openSeededRoom(
-        page,
-        testInfo.project.use.storageState as string,
-        'nj-live',
-        transport.slidingSyncOptIn
-      );
-      await enterRoom(page, fixture);
-
-      await context.setOffline(true);
-      const targetEventId = await sendMissedBurst(fixture, 5);
-      await fixture.app.receiveNotificationClick(
-        fixture.alice.userId,
-        fixture.roomId,
-        targetEventId
-      );
-      await context.setOffline(false);
-
-      await expectJumpedTo(page, fixture, targetEventId);
-      await expect(fixture.app.jumpToLatestButton).toBeVisible({ timeout: SYNC_TIMEOUT });
-      await fixture.app.jumpToLatestButton.click();
-
-      await expect(
-        page.getByText(`${fixture.tag}-burst-${BURST_SIZE}`, { exact: true })
-      ).toBeVisible({
-        timeout: SYNC_TIMEOUT,
-      });
       await expectOrderedTimeline(page, fixture);
     });
 

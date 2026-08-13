@@ -1,6 +1,8 @@
 // oxlint-disable typescript/no-explicit-any
+// oxlint-disable jsx-a11y/click-events-have-key-events
+// oxlint-disable jsx-a11y/no-static-element-interactions
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ScreenSize, ScreenSizeProvider } from '$hooks/useScreenSize';
 import { ResponsiveMenu } from './ResponsiveMenu';
 import type { RectCords } from 'folds';
@@ -8,8 +10,14 @@ import type { RectCords } from 'folds';
 // ── Mocks ───────────────────────────────────────────────────────────────────
 
 vi.mock('folds', () => ({
-  Box: ({ children, direction, className, style }: any) => (
-    <div data-testid="box" data-direction={direction} className={className} style={style}>
+  Box: ({ children, direction, className, style, onClick }: any) => (
+    <div
+      data-testid="box"
+      data-direction={direction}
+      className={className}
+      style={style}
+      onClick={onClick}
+    >
       {children}
     </div>
   ),
@@ -19,9 +27,19 @@ vi.mock('folds', () => ({
       <div data-testid="popout-trigger">{children}</div>
     </div>
   ),
-  Overlay: ({ children, open }: any) => (open ? <div data-testid="overlay">{children}</div> : null),
+  Overlay: ({ children, open, backdrop }: any) =>
+    open ? (
+      <div data-testid="overlay">
+        {backdrop}
+        {children}
+      </div>
+    ) : null,
   OverlayBackdrop: () => <div data-testid="overlay-backdrop" />,
-  OverlayCenter: ({ children }: any) => <div data-testid="overlay-center">{children}</div>,
+  OverlayCenter: ({ children, onClick }: any) => (
+    <div data-testid="overlay-center" onClick={onClick}>
+      {children}
+    </div>
+  ),
 }));
 
 vi.mock('$utils/androidBack', () => ({
@@ -98,6 +116,7 @@ function renderMenuMobile(props: {
   menu: React.ReactNode;
   children?: React.ReactNode;
   mobile?: 'sheet' | 'dialog';
+  requestClose?: () => void;
 }) {
   return render(
     <ScreenSizeProvider value={ScreenSize.Mobile}>
@@ -279,6 +298,36 @@ describe('ResponsiveMenu', () => {
       renderMenuMobile({ anchor: anchorRect, menu: <SampleMenu />, mobile: 'dialog' });
 
       expect(screen.getByTestId('focus-trap')).toBeTruthy();
+    });
+
+    // Wiring dismissal to the backdrop instead leaves the dialog untappable:
+    // OverlayCenter paints over it.
+    it('closes when the area outside the dialog is tapped', () => {
+      const requestClose = vi.fn<() => void>();
+      renderMenuMobile({
+        anchor: anchorRect,
+        menu: <SampleMenu />,
+        mobile: 'dialog',
+        requestClose,
+      });
+
+      fireEvent.click(screen.getByTestId('overlay-center'));
+
+      expect(requestClose).toHaveBeenCalledOnce();
+    });
+
+    it('stays open when the dialog itself is tapped', () => {
+      const requestClose = vi.fn<() => void>();
+      renderMenuMobile({
+        anchor: anchorRect,
+        menu: <SampleMenu />,
+        mobile: 'dialog',
+        requestClose,
+      });
+
+      fireEvent.click(screen.getByTestId('sample-menu'));
+
+      expect(requestClose).not.toHaveBeenCalled();
     });
   });
 

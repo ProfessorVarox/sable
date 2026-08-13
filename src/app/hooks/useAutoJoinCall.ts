@@ -6,6 +6,7 @@ import { useSelectedRoom } from '$hooks/router/useSelectedRoom';
 import { autoJoinCallIntentAtom } from '$state/callEmbed';
 import { mDirectAtom } from '$state/mDirectList';
 import { useCallPreferences } from '$state/hooks/callPreferences';
+import { useRoomNavigate } from '$hooks/useRoomNavigate';
 
 export function useAutoJoinCall() {
   const mx = useMatrixClient();
@@ -15,6 +16,7 @@ export function useAutoJoinCall() {
   const callPreferences = useCallPreferences();
   const startDirectCall = useCallStart(true);
   const startRoomCall = useCallStart(false);
+  const { navigateRoom } = useRoomNavigate();
 
   useEffect(() => {
     if (selectedRoomId && autoJoinIntent && selectedRoomId === autoJoinIntent.roomId) {
@@ -26,6 +28,8 @@ export function useAutoJoinCall() {
           microphone: callPreferences.microphone,
           video: autoJoinIntent.video,
           sound: callPreferences.sound,
+          audioDeviceId: callPreferences.audioDeviceId,
+          videoDeviceId: callPreferences.videoDeviceId,
         });
         setAutoJoinIntent(null);
       }
@@ -38,7 +42,22 @@ export function useAutoJoinCall() {
     mDirects,
     callPreferences.microphone,
     callPreferences.sound,
+    callPreferences.audioDeviceId,
+    callPreferences.videoDeviceId,
     startDirectCall,
     startRoomCall,
   ]);
+
+  useEffect(() => {
+    const answerFromSystemUi = (event: Event) => {
+      const roomId = (event as CustomEvent<{ roomId?: unknown }>).detail?.roomId;
+      if (typeof roomId !== 'string') return;
+      const room = mx.getRoom(roomId);
+      if (!room) return;
+      setAutoJoinIntent({ roomId, video: false });
+      navigateRoom(roomId);
+    };
+    window.addEventListener('nativeCallAnswer', answerFromSystemUi);
+    return () => window.removeEventListener('nativeCallAnswer', answerFromSystemUi);
+  }, [mx, setAutoJoinIntent, navigateRoom]);
 }

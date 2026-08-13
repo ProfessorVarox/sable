@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
-import { registerUser, type RegisteredUser } from './continuwuity';
+import { createRoom, registerUser, sendText, type RegisteredUser } from './continuwuity';
 
 export const PASSWORD = 'test-passw0rd';
 
@@ -11,6 +11,60 @@ export type InjectedSession = {
   accessToken: string;
   slidingSyncOptIn?: boolean;
 };
+
+type StorageState = {
+  cookies: [];
+  origins: {
+    origin: string;
+    localStorage: { name: string; value: string }[];
+  }[];
+};
+
+export async function createSeededStorageState(
+  baseUrl: string,
+  origin: string,
+  username: string
+): Promise<StorageState> {
+  const user = await registerUser(baseUrl, username, PASSWORD);
+  const general = await createRoom(baseUrl, user.accessToken, {
+    name: 'General',
+    preset: 'private_chat',
+  });
+  await sendText(baseUrl, user.accessToken, general, 'Welcome to the test room.', 1);
+  await sendText(baseUrl, user.accessToken, general, 'Layout baseline seed message.', 2);
+
+  const random = await createRoom(baseUrl, user.accessToken, {
+    name: 'Random',
+    preset: 'private_chat',
+  });
+  await sendText(baseUrl, user.accessToken, random, 'Another seeded room.', 1);
+
+  await createRoom(baseUrl, user.accessToken, {
+    name: 'Test Space',
+    preset: 'private_chat',
+    creation_content: { type: 'm.space' },
+  });
+
+  const session: InjectedSession = {
+    baseUrl,
+    userId: user.userId,
+    deviceId: user.deviceId,
+    accessToken: user.accessToken,
+  };
+
+  return {
+    cookies: [],
+    origins: [
+      {
+        origin,
+        localStorage: [
+          { name: 'matrixSessions', value: JSON.stringify([session]) },
+          { name: 'matrixActiveSession', value: JSON.stringify(session.userId) },
+        ],
+      },
+    ],
+  };
+}
 
 /** Reads the homeserver the global setup provisioned out of the saved storage state. */
 export async function homeserverBaseUrl(storageStatePath: string): Promise<string> {

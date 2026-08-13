@@ -1,41 +1,11 @@
-import { readFile } from 'node:fs/promises';
-import { test, expect, type Page } from '@playwright/test';
-import { registerUser } from './fixtures/continuwuity';
+import { test, expect } from './fixtures/test';
+import { homeserverBaseUrl, loginAsFreshUser } from './fixtures/session';
 
 const UPLOAD_ROUTE = '**/_matrix/client/*/keys/device_signing/upload';
 const TICKET_PATH = '/e2e-oauth-ticket';
 const SESSION = 'e2e-oauth-session';
 
 type AuthDict = { type?: string; session?: string };
-type InjectedSession = {
-  baseUrl: string;
-  userId: string;
-  deviceId: string;
-  accessToken: string;
-};
-
-async function homeserverBaseUrl(storageStatePath: string): Promise<string> {
-  const state = JSON.parse(await readFile(storageStatePath, 'utf8')) as {
-    origins: { localStorage: { name: string; value: string }[] }[];
-  };
-  const entry = state.origins[0]!.localStorage.find((item) => item.name === 'matrixSessions')!;
-  return (JSON.parse(entry.value) as InjectedSession[])[0]!.baseUrl;
-}
-
-async function loginAsFreshUser(page: Page, baseUrl: string, name: string): Promise<void> {
-  const user = await registerUser(baseUrl, name, 'test-passw0rd');
-  const session: InjectedSession = {
-    baseUrl,
-    userId: user.userId,
-    deviceId: user.deviceId,
-    accessToken: user.accessToken,
-  };
-  await page.addInitScript((injected: InjectedSession) => {
-    localStorage.setItem('matrixSessions', JSON.stringify([injected]));
-    localStorage.setItem('matrixActiveSession', JSON.stringify(injected.userId));
-    localStorage.setItem('dismissNotice', 'true');
-  }, session);
-}
 
 test.describe('device verification setup', () => {
   test('completes the m.oauth UIA stage and reveals the recovery key', async ({
@@ -44,7 +14,12 @@ test.describe('device verification setup', () => {
   }, testInfo) => {
     const storageStatePath = testInfo.project.use.storageState as string;
     const hsBaseUrl = await homeserverBaseUrl(storageStatePath);
-    await loginAsFreshUser(page, hsBaseUrl, `oauth-uia-${testInfo.project.name}-${process.pid}`);
+    await loginAsFreshUser(
+      page,
+      hsBaseUrl,
+      `oauth-uia-${testInfo.project.name}-${process.pid}`,
+      false
+    );
 
     const ticketUrl = `${baseURL}${TICKET_PATH}`;
     const authDicts: (AuthDict | undefined)[] = [];

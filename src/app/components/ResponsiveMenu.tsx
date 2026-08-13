@@ -48,10 +48,19 @@ function MenuDialog({
   useDismissOnBack(requestClose);
 
   return (
+    // The focus trap allows an outside tap on mobile but never deactivates on
+    // it. OverlayCenter, not the backdrop, is what the tap lands on: it fills
+    // the overlay and paints over it.
     <Overlay open backdrop={<OverlayBackdrop />}>
-      <OverlayCenter>
+      <OverlayCenter role="presentation" onClick={requestClose}>
         <FocusTrap focusTrapOptions={focusTrapOptions}>
-          <Box direction="Column" role="dialog" aria-modal="true" className={css.DialogContent}>
+          <Box
+            direction="Column"
+            role="dialog"
+            aria-modal="true"
+            className={css.DialogContent}
+            onClick={(evt) => evt.stopPropagation()}
+          >
             {children}
           </Box>
         </FocusTrap>

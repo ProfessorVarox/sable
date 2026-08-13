@@ -8,6 +8,7 @@
     "app-icon:default",
     "deep-link:default",
     "edge-to-edge:default",
+    "livekit-mobile:default",
     "notifications:default",
     "sharekit:default"
   ]

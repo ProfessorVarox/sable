@@ -206,7 +206,7 @@ const useTimelinePagination = (
     const edgeTimeline = (lTimelines: EventTimeline[], backwards: boolean) =>
       backwards ? lTimelines[0] : lTimelines.at(-1);
 
-    return async (backwards: boolean) => {
+    return async (backwards: boolean, autoContinue = false) => {
       const directionKey = backwards ? 'backward' : 'forward';
       if (fetchingRef.current[directionKey]) return;
 
@@ -231,7 +231,8 @@ const useTimelinePagination = (
       let settledStatus: PaginationStatus = 'idle';
 
       try {
-        for (let attempt = 0; attempt <= MAX_AUTO_CONTINUATIONS; attempt += 1) {
+        const maxAttempts = autoContinue ? MAX_AUTO_CONTINUATIONS : 0;
+        for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
           const lTimelines = timelineRef.current.linkedTimelines;
           const timelineToPaginate = edgeTimeline(lTimelines, backwards);
           if (!timelineToPaginate) return;
@@ -448,7 +449,6 @@ export function useTimelineSync({
 
   const [focusItem, setFocusItem] = useState<TimelineFocusItem>();
   const [jumpFailedFor, setJumpFailedFor] = useState<string | undefined>();
-  const [prependVersion, setPrependVersion] = useState(0);
   const jumpFailed = jumpFailedFor !== undefined && jumpFailedFor === eventId;
 
   const resetAutoScrollPendingRef = useRef(false);
@@ -621,16 +621,13 @@ export function useTimelineSync({
   useLiveEventArrive(
     room,
     useCallback(
-      (mEvt: MatrixEvent, isLive: boolean, evtTimeline?: EventTimeline, prepended?: boolean) => {
+      (mEvt: MatrixEvent, isLive: boolean, evtTimeline?: EventTimeline) => {
         if (mEvt.isRedaction()) redactInFocusedWindow(mEvt);
 
         const isDisplayedTimeline =
           evtTimeline === undefined || linkedTimelinesRef.current.includes(evtTimeline);
         if (isDisplayedTimeline) {
           setActiveTimeline((ct) => ({ ...ct }));
-          if (prepended) {
-            setPrependVersion((version) => version + 1);
-          }
         }
 
         if (!isLive) return;
@@ -729,8 +726,8 @@ export function useTimelineSync({
   useLiveTimelineRefresh(
     room,
     useCallback(() => {
-      applyLiveTimeline(getInitialTimeline(room).linkedTimelines);
       if (focusedTimelineRef.current || inFlightJumpRef.current) return;
+      applyLiveTimeline(getInitialTimeline(room).linkedTimelines);
       if (eventId) {
         void loadEventTimeline(eventId);
         return;
@@ -798,7 +795,6 @@ export function useTimelineSync({
   return {
     timeline,
     eventsLength,
-    prependVersion,
     liveTimelineLinked,
     canPaginateBack,
     canPaginateForward,

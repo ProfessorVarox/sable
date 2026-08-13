@@ -42,7 +42,6 @@ const {
   },
   timelineSync: {
     eventsLength: 1,
-    prependVersion: 0,
     timeline: { linkedTimelines: [] },
     liveTimelineLinked: true,
     backwardStatus: 'idle',
@@ -391,7 +390,6 @@ beforeEach(() => {
   vListProps.shift = false;
   vListProps.shiftValues.length = 0;
   timelineSync.eventsLength = 1;
-  timelineSync.prependVersion = 0;
   timelineSync.focusItem = undefined;
   timelineSync.canPaginateBack = false;
   timelineSync.canPaginateForward = false;
@@ -441,6 +439,22 @@ describe('RoomTimeline content ResizeObserver', () => {
     );
   });
 
+  it('re-pins to the bottom when the timeline viewport shrinks while pinned and live', async () => {
+    const { container } = renderTimeline();
+
+    await settleInitialScroll();
+    vListHandle.scrollToIndex.mockClear();
+
+    const timeline = container.querySelector('[data-testid="timeline"]');
+    expect(timeline).toBeTruthy();
+    act(() => fireResize(timeline!));
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ align: 'end' })
+    );
+  });
+
   it('does not re-pin on content growth after scrolling off the bottom', async () => {
     const { container } = renderTimeline();
 
@@ -454,6 +468,42 @@ describe('RoomTimeline content ResizeObserver', () => {
     act(() => fireResize(contentEl));
 
     expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it('cancels the delayed initial bottom scroll when the user scrolls up', async () => {
+    const { container } = renderTimeline();
+    vListHandle.scrollToIndex.mockClear();
+
+    act(() => {
+      getScrollEl(container).dispatchEvent(new Event('wheel', { bubbles: true }));
+      lastOnScroll?.(0);
+    });
+    await settleInitialScroll();
+
+    expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel the delayed initial bottom scroll for a Virtua scroll callback', async () => {
+    renderTimeline();
+    vListHandle.scrollToIndex.mockClear();
+
+    act(() => lastOnScroll?.(0));
+    await settleInitialScroll();
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalled();
+  });
+
+  it('does not treat a pointer press as an initial timeline scroll', async () => {
+    const { container } = renderTimeline();
+    vListHandle.scrollToIndex.mockClear();
+
+    act(() => {
+      getScrollEl(container).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      lastOnScroll?.(0);
+    });
+    await settleInitialScroll();
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalled();
   });
 
   it('resolves a jump target by event id, not by raw timeline index', async () => {
@@ -538,24 +588,19 @@ describe('RoomTimeline content ResizeObserver', () => {
     expect(getByText('Jump to Latest')).toBeTruthy();
   });
 
-  it('keeps the jump target anchored across a prepend', async () => {
+  it('shifts the virtual list when rendered history prepends', async () => {
     timelineSync.liveTimelineLinked = false;
     const { rerender } = render(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
 
     await settleInitialScroll();
     vListHandle.scrollToIndex.mockClear();
 
-    timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
     timelineSync.eventsLength = 2;
-    timelineSync.prependVersion = 1;
+    processedRowIds.current = ['$older', '$evt1'];
     vListProps.shiftValues.length = 0;
     rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
 
     expect(vListProps.shiftValues).toContain(true);
-    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(
-      0,
-      expect.objectContaining({ align: 'center' })
-    );
   });
 
   it('stops anchoring the jump target once the user scrolls', async () => {
@@ -572,10 +617,75 @@ describe('RoomTimeline content ResizeObserver', () => {
 
     timelineSync.focusItem = { eventId: '$evt1', scrollTo: false, highlight: true };
     timelineSync.eventsLength = 2;
-    timelineSync.prependVersion = 1;
     rerender(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
 
     expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it('back-paginates after the user scrolls up from a focused event', async () => {
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.canPaginateBack = true;
+    const { container } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    act(() => {
+      getScrollEl(container).dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, deltaY: -100 })
+      );
+      lastOnScroll?.(0);
+    });
+
+    expect(timelineSync.handleTimelinePagination).toHaveBeenCalledWith(true);
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalledWith(true, true);
+  });
+
+  it('does not back-paginate from a settled permalink scroll callback', async () => {
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.canPaginateBack = true;
+    render(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
+
+    await settleInitialScroll();
+    act(() => lastOnScroll?.(0));
+
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
+  });
+
+  it('does not back-paginate when the focused reader scrolls toward the bottom', async () => {
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.canPaginateBack = true;
+    const { container } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    act(() => {
+      getScrollEl(container).dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 100 }));
+      lastOnScroll?.(0);
+    });
+
+    expect(timelineSync.handleTimelinePagination).not.toHaveBeenCalled();
+  });
+
+  it('consumes focused scroll intent after requesting one page', async () => {
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.canPaginateBack = true;
+    const { container } = render(
+      <RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />
+    );
+
+    await settleInitialScroll();
+    act(() => {
+      getScrollEl(container).dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, deltaY: -100 })
+      );
+      lastOnScroll?.(0);
+      lastOnScroll?.(0);
+    });
+
+    expect(timelineSync.handleTimelinePagination).toHaveBeenCalledTimes(1);
+    expect(timelineSync.handleTimelinePagination).toHaveBeenCalledWith(true);
   });
 
   it('retries an unresolved focus after timeline events are rendered', async () => {
@@ -880,6 +990,20 @@ describe('jump reveal and focus-regain read receipts', () => {
 });
 
 describe('unread read marker (normal sync)', () => {
+  it('does not let the delayed initial bottom scroll overwrite an unread marker', async () => {
+    getRoomUnreadInfoMock.mockReturnValue({
+      readUptoEventId: '$evt1',
+      inLiveTimeline: true,
+      scrollTo: true,
+    });
+
+    renderTimeline();
+    vListHandle.scrollToIndex.mockClear();
+    await settleInitialScroll();
+
+    expect(vListHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
   it('feeds the read marker to timeline processing and clears it on window blur', () => {
     getRoomUnreadInfoMock.mockReturnValue({
       readUptoEventId: '$read:example.org',

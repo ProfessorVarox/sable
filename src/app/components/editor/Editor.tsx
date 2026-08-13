@@ -1,10 +1,11 @@
 import type {
   ClipboardEventHandler,
+  FocusEvent,
   KeyboardEventHandler,
   MutableRefObject,
   ReactNode,
 } from 'react';
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Box, Scroll, Text } from 'folds';
 import type { Descendant, Editor } from 'slate';
 import { Node, Transforms, createEditor } from 'slate';
@@ -100,6 +101,9 @@ const insertPastedText = (editor: Editor, text: string): void => {
     Transforms.insertText(editor, line);
   });
 };
+
+const MemoizedEditable = memo(Editable);
+const EDITABLE_STYLE = { boxShadow: 'none' };
 
 type EditorChangeHandler = (value: Descendant[]) => void;
 const MAX_MULTILINE_MEASURE_RETRIES = 2;
@@ -444,32 +448,60 @@ export const CustomEditor = forwardRef<HTMLDivElement, CustomEditorProps>(
 
     const renderLeaf = useCallback((props: RenderLeafProps) => <RenderLeaf {...props} />, []);
 
-    const handleKeydown: KeyboardEventHandler = useCallback(
-      (evt) => {
-        onKeyDown?.(evt);
+    const latestRef = useRef({ editor, onKeyDown, onKeyUp, onPaste, shortcutOverrides });
+    latestRef.current = { editor, onKeyDown, onKeyUp, onPaste, shortcutOverrides };
 
-        const shortcutToggled = toggleKeyboardShortcut(editor, evt, shortcutOverrides);
-        if (shortcutToggled) evt.preventDefault();
+    const handleKeydown: KeyboardEventHandler = useCallback((evt) => {
+      const { editor: slate, onKeyDown: keyDown, shortcutOverrides: overrides } = latestRef.current;
+      keyDown?.(evt);
+
+      const shortcutToggled = toggleKeyboardShortcut(slate, evt, overrides);
+      if (shortcutToggled) evt.preventDefault();
+    }, []);
+
+    const handleKeyUp: KeyboardEventHandler = useCallback((evt) => {
+      latestRef.current.onKeyUp?.(evt);
+    }, []);
+
+    const handlePaste: ClipboardEventHandler = useCallback((evt) => {
+      const { editor: slate, onPaste: paste } = latestRef.current;
+      paste?.(evt);
+      if (evt.isDefaultPrevented() || !iosApp() || hasPasteData(evt.clipboardData)) return;
+
+      evt.preventDefault();
+      readClipboardText()
+        .then((text) => {
+          if (text) insertPastedText(slate, text);
+        })
+        .catch((err: unknown) => {
+          log.warn('Failed to read the native clipboard on paste:', err);
+        });
+    }, []);
+
+    const handleBlur = useCallback(
+      (evt: FocusEvent<HTMLDivElement>) => {
+        cancelFocusScroll();
+        if (!isMobileOrTablet()) return;
+        if (suppressBlurRefocusRef?.current) return;
+        const next = evt.relatedTarget as HTMLElement | null;
+        if (!next) return;
+        if (next !== editableRef.current && next.isContentEditable) return;
+        ReactEditor.focus(latestRef.current.editor);
       },
-      [editor, onKeyDown, shortcutOverrides]
+      [cancelFocusScroll, suppressBlurRefocusRef]
     );
 
-    const handlePaste: ClipboardEventHandler = useCallback(
-      (evt) => {
-        onPaste?.(evt);
-        if (evt.isDefaultPrevented() || !iosApp() || hasPasteData(evt.clipboardData)) return;
-
-        evt.preventDefault();
-        readClipboardText()
-          .then((text) => {
-            if (text) insertPastedText(editor, text);
-          })
-          .catch((err: unknown) => {
-            log.warn('Failed to read the native clipboard on paste:', err);
-          });
-      },
-      [editor, onPaste]
-    );
+    const handleFocus = useCallback(() => {
+      if (!isMobileOrTablet()) return;
+      cancelFocusScroll();
+      const scrollIn = () => {
+        if (editableRef.current?.contains(document.activeElement)) {
+          rootRef.current?.scrollIntoView({ block: 'nearest' });
+        }
+      };
+      window.visualViewport?.addEventListener('resize', scrollIn, { once: true });
+      focusScrollTimerRef.current = window.setTimeout(scrollIn, 500);
+    }, [cancelFocusScroll]);
 
     const renderPlaceholder = useCallback(
       ({ attributes, children }: RenderPlaceholderProps) => (
@@ -514,7 +546,7 @@ export const CustomEditor = forwardRef<HTMLDivElement, CustomEditorProps>(
               visibility="Always"
               hideTrack
             >
-              <Editable
+              <MemoizedEditable
                 ref={editableRef}
                 data-editable-name={editableName}
                 className={`${css.EditorTextarea} ${alwaysInlineEditor ? css.EditorTextareaInline : ''}`}
@@ -523,36 +555,18 @@ export const CustomEditor = forwardRef<HTMLDivElement, CustomEditorProps>(
                 renderElement={renderElement}
                 renderLeaf={renderLeaf}
                 onKeyDown={handleKeydown}
-                onKeyUp={onKeyUp}
+                onKeyUp={handleKeyUp}
                 onPaste={handlePaste}
                 // Defer to OS capitalization setting (respects iOS sentence-case toggle).
                 autoCapitalize="sentences"
                 autoCorrect="on"
                 enterKeyHint={enterKeyHint}
                 // keeps focus after pressing send, but yields to another editor.
-                onBlur={(evt) => {
-                  cancelFocusScroll();
-                  if (!isMobileOrTablet()) return;
-                  if (suppressBlurRefocusRef?.current) return;
-                  const next = evt.relatedTarget as HTMLElement | null;
-                  if (!next) return;
-                  if (next && next !== editableRef.current && next.isContentEditable) return;
-                  ReactEditor.focus(editor);
-                }}
+                onBlur={handleBlur}
                 // Once the virtual keyboard has settled, make sure the composer is
                 // not left hidden behind it.
-                onFocus={() => {
-                  if (!isMobileOrTablet()) return;
-                  cancelFocusScroll();
-                  const scrollIn = () => {
-                    if (editableRef.current?.contains(document.activeElement)) {
-                      rootRef.current?.scrollIntoView({ block: 'nearest' });
-                    }
-                  };
-                  window.visualViewport?.addEventListener('resize', scrollIn, { once: true });
-                  focusScrollTimerRef.current = window.setTimeout(scrollIn, 500);
-                }}
-                style={{ boxShadow: 'none' }}
+                onFocus={handleFocus}
+                style={EDITABLE_STYLE}
               />
             </Scroll>
             {(hasAfter || showResponsiveAfterInline) && (

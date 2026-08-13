@@ -32,6 +32,7 @@ export const UserHeroAvatarStatusContainer = style({
   height: toRem(29),
   width: '100%',
   minWidth: 0,
+  borderBottom: 'none !important',
 });
 export const UserHeroAvatarContainer = style({
   position: 'relative',

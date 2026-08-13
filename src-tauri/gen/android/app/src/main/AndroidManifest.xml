@@ -48,6 +48,7 @@
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"
             android:name="moe.sable.client.MainActivity"
+            android:supportsPictureInPicture="true"
             android:exported="true">
             <!-- Inbound share targets — receive text, images, videos, and files from other apps.
                  Mirrors the iOS share extension activation rules. -->

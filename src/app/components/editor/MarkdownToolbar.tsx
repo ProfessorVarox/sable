@@ -242,7 +242,7 @@ function MarkdownToolbar() {
 
   return (
     <Box className={`${css.EditorToolbarBase} ${floatingToolbar}`}>
-      <Scroll direction="Horizontal" size="0">
+      <Scroll direction="Horizontal" size="0" data-gestures="scroll">
         <Box className={css.EditorToolbar} alignItems="Center" gap="300">
           <Box shrink="No" gap="100">
             <MarkdownInlineButton

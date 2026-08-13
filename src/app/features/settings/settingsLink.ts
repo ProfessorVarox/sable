@@ -248,6 +248,7 @@ export const settingsLinkFocusIdsBySection: Record<SettingsSectionId, readonly s
     'bandwidth-saving-emojis',
     'sharehistory-command',
     'show-personas-tab',
+    'new-calls',
     'media-galleries',
   ],
   about: [

@@ -8,13 +8,14 @@ import type {
 import { JoinRule, RestrictedAllowType, EventType, RoomType } from '$types/matrix-sdk';
 
 import type { StateEvents } from '$types/matrix-sdk';
+import type { CustomRoomType } from '$types/matrix/room';
 import { getViaServers } from '$plugins/via-servers';
 import { getMxIdServer } from '$utils/mxIdHelper';
 import { CreateRoomAccess } from './types';
 import * as prefix from '$unstable/prefixes';
 
-const createRoomCreationContent = (
-  type: RoomType | undefined,
+export const createRoomCreationContent = (
+  type: RoomType | CustomRoomType | undefined,
   allowFederation: boolean,
   additionalCreators: string[] | undefined
 ): object => {
@@ -32,7 +33,7 @@ const createRoomCreationContent = (
   return content;
 };
 
-const createRoomJoinRulesState = (
+export const createRoomJoinRulesState = (
   access: CreateRoomAccess,
   parent: Room | undefined,
   knock: boolean
@@ -66,7 +67,7 @@ const createRoomJoinRulesState = (
   };
 };
 
-const createRoomParentState = (parent: Room) => ({
+export const createRoomParentState = (parent: Room) => ({
   type: EventType.SpaceParent,
   state_key: parent.roomId,
   content: {
@@ -80,20 +81,20 @@ const createSpacePowerLevelsOverride = () => ({
 });
 
 export const createRoomEncryptionState = () => ({
-  type: EventType.RoomEncryption,
+  type: 'm.room.encryption',
   state_key: '',
   content: {
     algorithm: 'm.megolm.v1.aes-sha2',
   },
 });
 
-const createRoomCallState = () => ({
+export const createRoomCallState = () => ({
   type: prefix.MATRIX_UNSTABLE_ROOM_TYPE_CALL_PROPERTY_NAME,
   state_key: '',
   content: {},
 });
 
-const createVoiceRoomPowerLevelsOverride = () => ({
+export const createVoiceRoomPowerLevelsOverride = () => ({
   events: {
     [EventType.GroupCallMemberPrefix]: 0,
   },
@@ -101,7 +102,7 @@ const createVoiceRoomPowerLevelsOverride = () => ({
 
 export type CreateRoomData = {
   version: string;
-  type?: RoomType;
+  type?: RoomType | CustomRoomType;
   parent?: Room;
   access: CreateRoomAccess;
   name: string;

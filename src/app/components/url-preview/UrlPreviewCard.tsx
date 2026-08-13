@@ -432,7 +432,14 @@ export const UrlPreviewHolder = as<'div'>(({ children, ...props }, ref) => {
       ref={ref}
       style={{ marginTop: config.space.S200, position: 'relative' }}
     >
-      <Scroll ref={scrollRef} direction="Horizontal" size="0" visibility="Hover" hideTrack>
+      <Scroll
+        ref={scrollRef}
+        direction="Horizontal"
+        size="0"
+        visibility="Hover"
+        hideTrack
+        data-gestures="scroll"
+      >
         <Box shrink="No" alignItems="Center">
           {canScrollLeft && (
             <>

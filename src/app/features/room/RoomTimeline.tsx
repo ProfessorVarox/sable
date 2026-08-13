@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import * as Sentry from '@sentry/react';
 import {
   Fragment,
   useCallback,
@@ -83,7 +82,7 @@ import type { Persona } from '$app/persona';
 
 const MAX_VIEWPORT_FILL_PAGINATIONS = 5;
 const VIRTUA_SCROLL_SETTLE_MS = 200;
-
+const FOCUSED_PAGINATION_EDGE_PX = 64;
 const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ']);
 
 const TimelineFloat = as<'div', css.TimelineFloatVariants>(
@@ -418,6 +417,8 @@ export function RoomTimeline({
   const ignoredUsersSet = useMemo(() => new Set(ignoredUsersList), [ignoredUsersList]);
 
   const [unreadInfo, setUnreadInfo] = useState(() => getRoomUnreadInfo(room, true));
+  const unreadScrollToRef = useRef(unreadInfo?.scrollTo === true);
+  unreadScrollToRef.current = unreadInfo?.scrollTo === true;
 
   const readUptoEventIdRef = useRef<string | undefined>(undefined);
   if (unreadInfo) readUptoEventIdRef.current = unreadInfo.readUptoEventId;
@@ -471,6 +472,10 @@ export function RoomTimeline({
   const mountScrollWindowRef = useRef<number>(Date.now() + 3000);
   const hasInitialScrolledRef = useRef(false);
   const initialScrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const initialScrollCancelledRef = useRef(false);
+  const hasUserScrollIntentRef = useRef(false);
+  const focusedPaginationIntentRef = useRef<'backward' | 'forward'>();
+  const touchStartYRef = useRef<number>();
   const pendingReadyRef = useRef(false);
   const currentRoomIdRef = useRef(room.roomId);
 
@@ -480,6 +485,10 @@ export function RoomTimeline({
     hasInitialScrolledRef.current = false;
     mountScrollWindowRef.current = Date.now() + 3000;
     currentRoomIdRef.current = room.roomId;
+    initialScrollCancelledRef.current = false;
+    hasUserScrollIntentRef.current = false;
+    focusedPaginationIntentRef.current = undefined;
+    touchStartYRef.current = undefined;
     pendingReadyRef.current = false;
     if (initialScrollTimerRef.current !== undefined) {
       clearTimeout(initialScrollTimerRef.current);
@@ -492,6 +501,7 @@ export function RoomTimeline({
   const timelineSyncRef = useRef<typeof timelineSync>(null as unknown as typeof timelineSync);
 
   const scrollElRef = useRef<HTMLElement | null>(null);
+  const [scrollElementVersion, setScrollElementVersion] = useState(0);
 
   const scrollToBottom = useCallback(
     (behavior: 'instant' | 'smooth' = 'instant') => {
@@ -516,14 +526,21 @@ export function RoomTimeline({
   );
 
   useLayoutEffect(() => {
-    const scrollEl = messageListRef.current?.firstElementChild;
-    scrollElRef.current = scrollEl instanceof HTMLElement ? scrollEl : null;
-    if (!scrollElRef.current) {
-      Sentry.captureMessage('Timeline: could not resolve the VList scroll container', {
-        level: 'warning',
-        tags: { feature: 'timeline' },
-      });
-    }
+    const messageListEl = messageListRef.current;
+    if (!messageListEl) return () => {};
+
+    const resolveScrollElement = () => {
+      const scrollEl = messageListEl.firstElementChild;
+      const nextScrollEl = scrollEl instanceof HTMLElement ? scrollEl : null;
+      if (nextScrollEl === scrollElRef.current) return;
+      scrollElRef.current = nextScrollEl;
+      setScrollElementVersion((version) => version + 1);
+    };
+
+    resolveScrollElement();
+    const observer = new MutationObserver(resolveScrollElement);
+    observer.observe(messageListEl, { childList: true });
+    return () => observer.disconnect();
   }, []);
 
   const jumpToEvent = useCallback(
@@ -539,6 +556,7 @@ export function RoomTimeline({
     setAtBottom(true);
   }, [setAtBottom]);
   const handleReturnToLive = useCallback(() => {
+    scrollAnchorRef.current = undefined;
     if (eventId) navigateRoom(room.roomId, undefined, { replace: true });
     setAtBottom(true);
   }, [eventId, navigateRoom, room.roomId, setAtBottom]);
@@ -654,12 +672,7 @@ export function RoomTimeline({
   });
 
   timelineSyncRef.current = timelineSync;
-
-  const previousPrependVersionRef = useRef(timelineSync.prependVersion);
-  const shiftForPrepend = previousPrependVersionRef.current !== timelineSync.prependVersion;
-  useLayoutEffect(() => {
-    previousPrependVersionRef.current = timelineSync.prependVersion;
-  }, [timelineSync.prependVersion]);
+  const focusLiveTimeline = timelineSync.focusLiveTimeline;
 
   const eventsLengthRef = useRef(timelineSync.eventsLength);
   eventsLengthRef.current = timelineSync.eventsLength;
@@ -734,12 +747,19 @@ export function RoomTimeline({
       timelineSync.liveTimelineLinked &&
       vListRef.current
     ) {
+      initialScrollCancelledRef.current = false;
       scrollToBottom();
       initialScrollTimerRef.current = setTimeout(() => {
         initialScrollTimerRef.current = undefined;
+        if (initialScrollCancelledRef.current) return;
+        if (unreadScrollToRef.current) {
+          setIsReady(true);
+          return;
+        }
         if (processedEventsRef.current.length > 0) {
           scrollToBottom();
           requestAnimationFrame(() => {
+            if (initialScrollCancelledRef.current) return;
             if (processedEventsRef.current.length > 0) {
               scrollToBottom();
               setIsReady(true);
@@ -795,10 +815,6 @@ export function RoomTimeline({
     return () => cancelAnimationFrame(id);
   }, [recalcTopSpacer, timelineSync.eventsLength]);
 
-  useLayoutEffect(() => {
-    restoreScrollPosition();
-  });
-
   const prevBackwardStatusRef = useRef(timelineSync.backwardStatus);
   const wasAtBottomBeforePaginationRef = useRef(false);
 
@@ -808,8 +824,9 @@ export function RoomTimeline({
     if (timelineSync.backwardStatus === 'loading') {
       wasAtBottomBeforePaginationRef.current = atBottomRef.current;
     } else if (prev === 'loading' && timelineSync.backwardStatus === 'idle') {
-      if (scrollAnchorRef.current !== undefined) restoreScrollAnchor();
-      else if (wasAtBottomBeforePaginationRef.current) scrollToBottom();
+      if (scrollOwnerRef.current === 'event' && scrollAnchorRef.current !== undefined) {
+        restoreScrollAnchor();
+      } else if (wasAtBottomBeforePaginationRef.current) scrollToBottom();
     }
   }, [timelineSync.backwardStatus, restoreScrollAnchor, scrollToBottom]);
 
@@ -880,6 +897,17 @@ export function RoomTimeline({
     jumpToEvent(eventId);
   }, [eventId, room, jumpToEvent]);
 
+  const previousEventIdRef = useRef(eventId);
+  useEffect(() => {
+    const previousEventId = previousEventIdRef.current;
+    previousEventIdRef.current = eventId;
+    if (previousEventId === undefined || eventId !== undefined) return;
+
+    scrollAnchorRef.current = undefined;
+    focusLiveTimeline();
+    setAtBottom(true);
+  }, [eventId, focusLiveTimeline, setAtBottom]);
+
   useEffect(() => {
     if (eventId) return;
     if (isReady) return;
@@ -904,6 +932,7 @@ export function RoomTimeline({
         if (processedIndex !== undefined && vListRef.current) {
           vListRef.current.scrollToIndex(processedIndex, { align: 'start' });
         }
+        unreadScrollToRef.current = false;
         setUnreadInfo((prev) => (prev ? { ...prev, scrollTo: false } : prev));
       }
     }
@@ -917,14 +946,14 @@ export function RoomTimeline({
     let contentObserver: ResizeObserver | undefined;
     if (contentEl) {
       contentObserver = new ResizeObserver(() => {
-        restoreScrollPosition();
+        if (scrollOwnerRef.current === 'live' && atBottomRef.current) scrollToBottom();
         syncAtBottom();
       });
       contentObserver.observe(contentEl);
     }
 
     const observer = new ResizeObserver(() => {
-      restoreScrollPosition();
+      if (scrollOwnerRef.current === 'live' && atBottomRef.current) scrollToBottom();
       syncAtBottom();
     });
 
@@ -933,7 +962,7 @@ export function RoomTimeline({
       observer.disconnect();
       contentObserver?.disconnect();
     };
-  }, [syncAtBottom, restoreScrollPosition]);
+  }, [scrollElementVersion, scrollToBottom, syncAtBottom]);
 
   const actions = useTimelineActions({
     room,
@@ -1090,25 +1119,49 @@ export function RoomTimeline({
   ]);
 
   useEffect(() => {
-    const scrollEl = scrollElRef.current;
-    if (!scrollEl) return () => {};
-    const release = () => {
+    const messageListEl = messageListRef.current;
+    if (!messageListEl) return () => {};
+    const setFocusedPaginationIntent = (direction: 'backward' | 'forward') => {
+      hasUserScrollIntentRef.current = true;
       scrollAnchorRef.current = undefined;
+      if (eventId === undefined && !timelineSyncRef.current.focusItem) return;
+      focusedPaginationIntentRef.current = direction;
     };
-    const releaseOnScrollKey = (evt: KeyboardEvent) => {
-      if (SCROLL_KEYS.has(evt.key)) release();
+    const recordWheelIntent = (evt: WheelEvent) => {
+      if (evt.deltaY === 0) return;
+      setFocusedPaginationIntent(evt.deltaY < 0 ? 'backward' : 'forward');
     };
-    scrollEl.addEventListener('wheel', release, { passive: true });
-    scrollEl.addEventListener('touchstart', release, { passive: true });
-    scrollEl.addEventListener('pointerdown', release, { passive: true });
-    scrollEl.addEventListener('keydown', releaseOnScrollKey);
+    const recordKeyIntent = (evt: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(evt.key)) return;
+      if (evt.key === 'Home' || evt.key === 'PageUp' || evt.key === 'ArrowUp') {
+        setFocusedPaginationIntent('backward');
+      } else if (evt.key === 'End' || evt.key === 'PageDown' || evt.key === 'ArrowDown') {
+        setFocusedPaginationIntent('forward');
+      } else {
+        setFocusedPaginationIntent(evt.shiftKey ? 'backward' : 'forward');
+      }
+    };
+    const recordTouchStart = (evt: TouchEvent) => {
+      touchStartYRef.current = evt.touches[0]?.clientY;
+    };
+    const recordTouchIntent = (evt: TouchEvent) => {
+      const startY = touchStartYRef.current;
+      const currentY = evt.touches[0]?.clientY;
+      if (startY === undefined || currentY === undefined || startY === currentY) return;
+      setFocusedPaginationIntent(currentY < startY ? 'forward' : 'backward');
+      touchStartYRef.current = currentY;
+    };
+    messageListEl.addEventListener('wheel', recordWheelIntent, { passive: true });
+    messageListEl.addEventListener('keydown', recordKeyIntent);
+    messageListEl.addEventListener('touchstart', recordTouchStart, { passive: true });
+    messageListEl.addEventListener('touchmove', recordTouchIntent, { passive: true });
     return () => {
-      scrollEl.removeEventListener('wheel', release);
-      scrollEl.removeEventListener('touchstart', release);
-      scrollEl.removeEventListener('pointerdown', release);
-      scrollEl.removeEventListener('keydown', releaseOnScrollKey);
+      messageListEl.removeEventListener('wheel', recordWheelIntent);
+      messageListEl.removeEventListener('keydown', recordKeyIntent);
+      messageListEl.removeEventListener('touchstart', recordTouchStart);
+      messageListEl.removeEventListener('touchmove', recordTouchIntent);
     };
-  }, []);
+  }, [eventId]);
 
   const handleVListScroll = useCallback(
     (offset: number) => {
@@ -1118,6 +1171,37 @@ export function RoomTimeline({
 
       const distanceFromBottom = v.scrollSize - offset - v.viewportSize;
       syncAtBottom(offset);
+
+      if (hasUserScrollIntentRef.current && distanceFromBottom >= 100) {
+        initialScrollCancelledRef.current = true;
+        if (initialScrollTimerRef.current !== undefined) {
+          clearTimeout(initialScrollTimerRef.current);
+          initialScrollTimerRef.current = undefined;
+        }
+        setIsReady(true);
+      }
+
+      if (eventId !== undefined || timelineSyncRef.current.focusItem) {
+        const intent = focusedPaginationIntentRef.current;
+        if (
+          intent === 'backward' &&
+          offset <= FOCUSED_PAGINATION_EDGE_PX &&
+          canPaginateBackRef.current &&
+          backwardStatusRef.current === 'idle'
+        ) {
+          focusedPaginationIntentRef.current = undefined;
+          void timelineSyncRef.current.handleTimelinePagination(true);
+        } else if (
+          intent === 'forward' &&
+          distanceFromBottom <= FOCUSED_PAGINATION_EDGE_PX &&
+          canPaginateForwardRef.current &&
+          forwardStatusRef.current === 'idle'
+        ) {
+          focusedPaginationIntentRef.current = undefined;
+          void timelineSyncRef.current.handleTimelinePagination(false);
+        }
+        return;
+      }
 
       if (scrollAnchorRef.current !== undefined) return;
 
@@ -1132,7 +1216,7 @@ export function RoomTimeline({
         void timelineSyncRef.current.handleTimelinePagination(false);
       }
     },
-    [notifyScroll, syncAtBottom]
+    [eventId, notifyScroll, syncAtBottom]
   );
   const handleVListScrollEnd = useCallback(() => {
     if (!timelineSyncRef.current.focusItem?.scrollTo) return;
@@ -1244,8 +1328,23 @@ export function RoomTimeline({
   });
 
   processedEventsRef.current = processedEvents;
-  // Virtua shift only supports prepends.
-  const shouldShift = shiftForPrepend;
+  const previousProcessedEventIdsRef = useRef<string[]>();
+  const processedEventIds = processedEvents.map((event) => event.id);
+  const previousProcessedEventIds = previousProcessedEventIdsRef.current;
+  const shouldShift =
+    previousProcessedEventIds !== undefined &&
+    processedEventIds.length > previousProcessedEventIds.length &&
+    previousProcessedEventIds.every(
+      (id, index) =>
+        id ===
+        processedEventIds[index + processedEventIds.length - previousProcessedEventIds.length]
+    );
+  useLayoutEffect(() => {
+    previousProcessedEventIdsRef.current = processedEventIds;
+  }, [processedEventIds]);
+  const vListKeyRef = useRef(room.roomId);
+  if (!isReady && scrollOwner === 'live')
+    vListKeyRef.current = `${room.roomId}:${processedEvents.map((event) => event.id).join(',')}`;
 
   useLayoutEffect(() => {
     if (!pendingReadyRef.current) return;
@@ -1276,16 +1375,20 @@ export function RoomTimeline({
     viewportFillCountRef.current = 0;
   }, [room.roomId]);
 
-  // Re-enters on every length change, so an unfillable viewport pages to the start of the
-  // room. Scrolling up is handled by handleVListScroll.
+  // Fill an initially short live timeline. Focused history is user-owned and must not
+  // auto-continue after its anchor is released.
   useEffect(() => {
+    if (scrollOwner !== 'live') return () => {};
     if (!canPaginateBackRef.current) return () => {};
+    if (scrollAnchorRef.current !== undefined) return () => {};
 
     let rafId: number;
     let attempts = 0;
     const MAX_ATTEMPTS = 20;
 
     const check = () => {
+      if (scrollAnchorRef.current !== undefined) return;
+
       const v = vListRef.current;
       if (!v) return;
 
@@ -1302,13 +1405,13 @@ export function RoomTimeline({
 
       if (v.scrollSize <= v.viewportSize + 300) {
         viewportFillCountRef.current += 1;
-        void timelineSyncRef.current.handleTimelinePagination(true);
+        void timelineSyncRef.current.handleTimelinePagination(true, true);
       }
     };
 
     rafId = requestAnimationFrame(check);
     return () => cancelAnimationFrame(rafId);
-  }, [room.roomId, timelineSync.eventsLength, timelineSync.backwardStatus]);
+  }, [room.roomId, scrollOwner, timelineSync.eventsLength, timelineSync.backwardStatus]);
 
   return (
     <Box grow="Yes" style={{ position: 'relative' }}>
@@ -1346,6 +1449,7 @@ export function RoomTimeline({
 
       <div
         ref={messageListRef}
+        data-testid="timeline"
         style={{
           flex: 1,
           minHeight: 0,
@@ -1360,9 +1464,11 @@ export function RoomTimeline({
       >
         <TimelineScrollingProvider value={isTimelineScrolling}>
           <VList<ProcessedEvent>
+            key={vListKeyRef.current}
             ref={vListRef}
             data={processedEvents}
             shift={shouldShift}
+            id="timeline-scroller"
             className={css.messageList}
             style={{
               flex: 1,

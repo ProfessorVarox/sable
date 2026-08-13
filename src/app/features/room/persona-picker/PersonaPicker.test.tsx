@@ -1,8 +1,9 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
+import { ClientEvent, type MatrixClient, type MatrixEvent } from 'matrix-js-sdk';
 import type { PerMessageProfileMsc4461 } from '$app/persona';
+import { MATRIX_SABLE_UNSTABLE_ACCOUNT_PER_MESSAGE_PROFILES_PROPERTY_NAME } from '$unstable/prefixes';
 import { PersonaPicker, PersonaPickerTab, useProfiles } from './PersonaPicker';
 
 const mocked = vi.hoisted(() => ({
@@ -21,6 +22,9 @@ const grabPersonaButton = (name: string) => {
 };
 
 vi.mock('$app/persona/catalog', () => ({
+  isPersonaAccountDataEvent: (eventType: string) =>
+    eventType === 'fi.mau.msc4461.per_message_profiles.v2' ||
+    eventType.startsWith('fyi.cisnt.permessageprofile.'),
   ProfileCatalog: class {
     constructor(private readonly mx: MatrixClient) {}
 
@@ -135,7 +139,25 @@ const profiles: PerMessageProfileMsc4461[] = [
   { id: 'second', displayname: 'Second', trigger: { prefix: [] } },
 ];
 
-function renderPicker(mx = {} as MatrixClient, tab = PersonaPickerTab.Global) {
+type TestMatrixClient = MatrixClient & { emitAccountData: (type: string) => void };
+
+function createMatrixClient(): TestMatrixClient {
+  const accountDataHandlers = new Set<(event: MatrixEvent) => void>();
+  return {
+    on(event: ClientEvent, handler: (accountData: MatrixEvent) => void) {
+      if (event === ClientEvent.AccountData) accountDataHandlers.add(handler);
+    },
+    removeListener(event: ClientEvent, handler: (accountData: MatrixEvent) => void) {
+      if (event === ClientEvent.AccountData) accountDataHandlers.delete(handler);
+    },
+    emitAccountData(type: string) {
+      const accountData = { getType: () => type } as MatrixEvent;
+      accountDataHandlers.forEach((handler) => handler(accountData));
+    },
+  } as TestMatrixClient;
+}
+
+function renderPicker(mx: MatrixClient = createMatrixClient(), tab = PersonaPickerTab.Global) {
   return render(
     <PersonaPicker
       tab={tab}
@@ -159,8 +181,8 @@ describe('PersonaPicker async flows', () => {
   });
 
   it('ignores a stale profile fetch after the client changes', async () => {
-    const firstClient = {} as MatrixClient;
-    const secondClient = {} as MatrixClient;
+    const firstClient = createMatrixClient();
+    const secondClient = createMatrixClient();
     const firstFetch = deferred<PerMessageProfileMsc4461[]>();
     const secondFetch = deferred<PerMessageProfileMsc4461[]>();
     mocked.getAll.mockImplementation((client: MatrixClient) =>
@@ -186,6 +208,23 @@ describe('PersonaPicker async flows', () => {
     });
 
     expect(view.result.current.profiles?.[0]?.id).toBe('new');
+  });
+
+  it('refreshes profiles when persona account data arrives after initial sync', async () => {
+    const mx = createMatrixClient();
+    mocked.getAll.mockResolvedValueOnce([]).mockResolvedValueOnce(profiles);
+    const mountedRef = { current: true };
+    const generationRef = { current: 0 };
+    const view = renderHook(() => useProfiles(mx, mountedRef, generationRef));
+
+    await waitFor(() => expect(view.result.current.profiles).toEqual([]));
+    act(() => {
+      mx.emitAccountData(
+        `${MATRIX_SABLE_UNSTABLE_ACCOUNT_PER_MESSAGE_PROFILES_PROPERTY_NAME}.index`
+      );
+    });
+
+    await waitFor(() => expect(view.result.current.profiles).toEqual(profiles));
   });
 
   it('does not update state when an in-flight profile fetch resolves after unmount', async () => {
@@ -246,7 +285,7 @@ describe('PersonaPicker async flows', () => {
   });
 
   it('rolls back a failed global selection without suppressing a room selection', async () => {
-    const mx = {} as MatrixClient;
+    const mx = createMatrixClient();
     const globalWrite = deferred<void>();
     const roomWrite = deferred<void>();
     mocked.setAccount.mockImplementationOnce(() => globalWrite.promise);

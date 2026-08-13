@@ -79,6 +79,10 @@ export function isAndroidTauri(): boolean {
   return getTauriOS() === 'android';
 }
 
+export function isWebKitGtk(): boolean {
+  return getTauriOS() === 'linux' && !/Chrome\//.test(window.navigator.userAgent);
+}
+
 export function hasControllingServiceWorker(): boolean {
   return hasServiceWorker() && navigator.serviceWorker.controller !== null;
 }

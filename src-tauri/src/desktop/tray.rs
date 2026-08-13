@@ -10,7 +10,7 @@ use serde_json::json;
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, RunEvent, WebviewWindow,
+    AppHandle, Emitter, Manager, RunEvent, WebviewWindow,
 };
 use tauri_plugin_store::StoreExt;
 
@@ -18,6 +18,7 @@ use tauri_plugin_store::StoreExt;
 use tauri::tray::{MouseButton, TrayIconEvent};
 
 pub(crate) const MAIN_TRAY_ID: &str = "main";
+pub(crate) const WINDOW_HIDDEN_TO_TRAY_EVENT: &str = "window-hidden-to-tray";
 const TRAY_MENU_SHOW_ID: &str = "tray_show";
 const TRAY_MENU_QUIT_ID: &str = "tray_quit";
 
@@ -52,6 +53,9 @@ pub fn setup_close_to_background(webview_window: &WebviewWindow<crate::BrowserEn
             })
         {
             api.prevent_close();
+            // Hiding does not reliably emit a native blur event, so notify the
+            // webview before it can process new timeline events as read.
+            let _ = window.emit(WINDOW_HIDDEN_TO_TRAY_EVENT, ());
             let _ = window.hide();
         }
     });

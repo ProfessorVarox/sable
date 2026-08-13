@@ -1,7 +1,28 @@
+import {
+  FALLBACK_INTERVAL_MS,
+  MAX_NOTIFICATION_LIFETIME_MS,
+  OUTGOING_DECLINE_EMBED_CLEAR_MS,
+  OUTGOING_RING_TIMEOUT_MS,
+  type OutgoingDeclineEvent,
+  REFERENCE_REL_TYPE,
+  RTC_DECLINE_EVENT_TYPE,
+  RTC_NOTIFICATION_EVENT_TYPE,
+  applyOutgoingDeclineToTracker,
+  decryptRtcTimelineEvent,
+  getRemoteRtcMemberUserIds,
+  isCallActive,
+  isOutgoingCallPending,
+  parseIncomingRtcNotification,
+} from '@sableclient/matrixrtc';
 import { useCallback, useEffect, useRef } from 'react';
 import * as Sentry from '@sentry/react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
-import type { RoomEventHandlerMap, MatrixEvent, Room } from '$types/matrix-sdk';
+import {
+  EventType,
+  type RoomEventHandlerMap,
+  type MatrixEvent,
+  type Room,
+} from '$types/matrix-sdk';
 import { MatrixRTCSessionManagerEvents, RoomEvent } from '$types/matrix-sdk';
 import { mDirectAtom } from '$state/mDirectList';
 import {
@@ -11,47 +32,31 @@ import {
   mutedCallRoomIdAtom,
   type IncomingCall,
 } from '$state/callEmbed';
+import { livekitJsCallAtom } from '$state/livekitJsCall';
+import { nativeCallAtom, selectActiveCallSessionIncludingNative } from '$state/nativeCall';
 import { settingsAtom } from '$state/settings';
-import {
-  parseIncomingRtcNotification,
-  RTC_DECLINE_EVENT_TYPE,
-  REFERENCE_REL_TYPE,
-  RTC_NOTIFICATION_EVENT_TYPE,
-} from '$features/call/rtcNotificationParser';
-import { decryptRtcTimelineEvent } from '$features/call/callSignalingDecrypt';
-import {
-  FALLBACK_INTERVAL_MS,
-  MAX_NOTIFICATION_LIFETIME_MS,
-  OUTGOING_DECLINE_EMBED_CLEAR_MS,
-} from '$features/call/callSignalingPolicy';
-import {
-  applyOutgoingDeclineToTracker,
-  type OutgoingDeclineEvent,
-} from '$features/call/outgoingDeclineHandler';
 import { parseRtcDeclineFromTimelineEvent } from '$features/call/rtcTimelineDecline';
 import { evaluateIncomingCallFallback } from '$features/call/callSignalingFallback';
 import { canPlayCallAudio } from '$features/call/callRingtone';
 import { dismissSystemCallNotifications } from '$features/call/callNotificationBridge';
 import { isIncomingCallSuppressed } from '$features/call/callIncomingIngress';
-import {
-  getRemoteRtcMemberUserIds,
-  isCallActive,
-  isOutgoingCallPending,
-} from '$features/call/callMembershipState';
 import { ringtoneManager } from '$features/call/CallRingtoneManager';
-import { OUTGOING_RING_TIMEOUT_MS } from '$features/call/callSignalingPolicy';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { createDebugLogger } from '$utils/debugLogger';
 
 const debugLog = createDebugLogger('CallSignaling');
 
 const canSenderStartCalls = (room: Room, senderId: string): boolean =>
-  room.currentState?.maySendStateEvent('org.matrix.msc3401.call.member', senderId) ?? false;
+  room.currentState?.maySendStateEvent(EventType.RTCMembership, senderId) ||
+  room.currentState?.maySendStateEvent(EventType.GroupCallMemberPrefix, senderId) ||
+  false;
 
 export function useIncomingCallSignaling() {
   const mx = useMatrixClient();
   const store = useStore();
   const callEmbed = useAtomValue(callEmbedAtom);
+  const livekitJsCall = useAtomValue(livekitJsCallAtom);
+  const nativeCall = useAtomValue(nativeCallAtom);
   const mDirects = useAtomValue(mDirectAtom);
   const settings = useAtomValue(settingsAtom);
   const incomingCall = useAtomValue(incomingCallAtom);
@@ -89,6 +94,8 @@ export function useIncomingCallSignaling() {
 
   type SignalingHandlerRefs = {
     callEmbed: typeof callEmbed;
+    livekitJsCall: typeof livekitJsCall;
+    nativeCall: typeof nativeCall;
     mDirects: typeof mDirects;
     outgoingRingbackAllowed: boolean;
     handleIncomingCall: (incoming: IncomingCall) => void;
@@ -117,7 +124,7 @@ export function useIncomingCallSignaling() {
     hasCallBeenActiveRef.current = false;
     outgoingRingRoomIdRef.current = null;
     outgoingStartRef.current = null;
-  }, [callEmbed]);
+  }, [callEmbed?.roomId, livekitJsCall?.roomId, nativeCall?.roomId]);
 
   useEffect(() => {
     ringtoneManager.syncSources(
@@ -147,7 +154,12 @@ export function useIncomingCallSignaling() {
 
   const handleOutgoingDecline = useCallback(
     (decline: OutgoingDeclineEvent) => {
-      if (!callEmbed || callEmbed.roomId !== decline.roomId) {
+      const activeCall = selectActiveCallSessionIncludingNative(
+        callEmbed,
+        livekitJsCall,
+        nativeCall
+      );
+      if (!activeCall || activeCall.roomId !== decline.roomId) {
         return;
       }
 
@@ -207,8 +219,10 @@ export function useIncomingCallSignaling() {
       Sentry.metrics.count('sable.call.outgoing.declined', 1);
       stopOutgoingRing();
 
-      void callEmbed
-        .hangup()
+      const hangup =
+        selectActiveCallSessionIncludingNative(callEmbed, livekitJsCall, nativeCall)?.hangup() ??
+        Promise.resolve();
+      void hangup
         .catch((error) => {
           debugLog.warn('call', 'Failed to hang up after outgoing decline', {
             roomId: decline.roomId,
@@ -219,12 +233,11 @@ export function useIncomingCallSignaling() {
         .finally(() => {
           window.setTimeout(() => {
             const activeEmbed = store.get(callEmbedAtom);
-            if (activeEmbed !== callEmbed) return;
-            setCallEmbed(undefined);
+            if (activeEmbed === callEmbed) setCallEmbed(undefined);
           }, OUTGOING_DECLINE_EMBED_CLEAR_MS);
         });
     },
-    [callEmbed, mDirects, mx, setCallEmbed, stopOutgoingRing, store]
+    [callEmbed, livekitJsCall, nativeCall, mDirects, mx, setCallEmbed, stopOutgoingRing, store]
   );
 
   const callAudioAllowed = canPlayCallAudio({
@@ -283,6 +296,8 @@ export function useIncomingCallSignaling() {
 
   signalingHandlerRefs.current = {
     callEmbed,
+    livekitJsCall,
+    nativeCall,
     mDirects,
     outgoingRingbackAllowed,
     handleIncomingCall,
@@ -421,7 +436,12 @@ export function useIncomingCallSignaling() {
       if (!senderId || !eventId) return;
 
       if (senderId === myUserId) {
-        if (type === RTC_NOTIFICATION_EVENT_TYPE && handlers().callEmbed?.roomId === room.roomId) {
+        const activeCall = selectActiveCallSessionIncludingNative(
+          handlers().callEmbed,
+          handlers().livekitJsCall,
+          handlers().nativeCall
+        );
+        if (type === RTC_NOTIFICATION_EVENT_TYPE && activeCall?.roomId === room.roomId) {
           activeOutgoingNotificationIdRef.current = eventId;
         }
         return;
@@ -436,8 +456,12 @@ export function useIncomingCallSignaling() {
 
       // Only inspect declines for the active outgoing call room. Cleartext declines are
       // cheap; encrypted events are decrypted only when they might be RTC declines.
-      const activeEmbed = handlers().callEmbed;
-      if (!activeEmbed || activeEmbed.roomId !== room.roomId) {
+      const activeCall = selectActiveCallSessionIncludingNative(
+        handlers().callEmbed,
+        handlers().livekitJsCall,
+        handlers().nativeCall
+      );
+      if (!activeCall || activeCall.roomId !== room.roomId) {
         return;
       }
       if (event.isDecryptionFailure()) {
@@ -496,7 +520,11 @@ export function useIncomingCallSignaling() {
     let outgoingRingTimeoutId: number | undefined;
 
     const evaluateOutgoingFallback = () => {
-      const activeCallRoomId = handlers().callEmbed?.roomId;
+      const activeCallRoomId = selectActiveCallSessionIncludingNative(
+        handlers().callEmbed,
+        handlers().livekitJsCall,
+        handlers().nativeCall
+      )?.roomId;
 
       const stop = () => {
         handlers().stopOutgoingRing();

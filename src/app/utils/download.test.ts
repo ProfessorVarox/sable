@@ -169,6 +169,42 @@ describe('saveMediaToGallery', () => {
     expect(showToast).toHaveBeenCalledWith('Saved to Gallery');
   });
 
+  it('writes all fetched Android image bytes before publishing the gallery file', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    mocks.fetch.mockResolvedValueOnce(new Response(bytes, { status: 200 }));
+
+    await saveMediaToGallery('https://matrix.example.org/photo', 'photo.png', 'image/png');
+
+    expect(androidFs.writeFile).toHaveBeenCalledWith('content://media/image', bytes);
+    expect(androidFs.writeFile.mock.invocationCallOrder[0]).toBeLessThan(
+      androidFs.setPublicFilePending.mock.invocationCallOrder[0]!
+    );
+    expect(androidFs.setPublicFilePending).toHaveBeenCalledWith('content://media/image', false);
+  });
+
+  it('does not create a gallery file when Android storage permission is denied', async () => {
+    androidFs.checkPublicFilesPermission.mockResolvedValue(false);
+    androidFs.requestPublicFilesPermission.mockResolvedValue(false);
+
+    await saveMediaToGallery(new Blob(['data']), 'photo.png', 'image/png');
+
+    expect(androidFs.createNewPublicImageFile).not.toHaveBeenCalled();
+    expect(androidFs.writeFile).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(
+      'Failed to save to gallery: Storage permission was denied'
+    );
+  });
+
+  it('does not clean up when Android fails before creating a gallery file', async () => {
+    androidFs.createNewPublicImageFile.mockRejectedValue(new Error('create failed'));
+
+    await saveMediaToGallery(new Blob(['data']), 'photo.png', 'image/png');
+
+    expect(androidFs.writeFile).not.toHaveBeenCalled();
+    expect(androidFs.removeFile).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith('Failed to save to gallery: create failed');
+  });
+
   it('rejects video media explicitly without touching any backend or falling back', async () => {
     await expect(saveMediaToGallery(new Blob(['data']), 'clip.mp4', 'video/mp4')).rejects.toThrow(
       'Only image media can be saved to the gallery'
@@ -189,6 +225,18 @@ describe('saveMediaToGallery', () => {
     expect(showToast).toHaveBeenCalledWith('Failed to save to gallery: write failed');
     expect(invoke).not.toHaveBeenCalled();
     expect(FileSaver.saveAs).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['publishing', 'setPublicFilePending', new Error('publish failed')],
+    ['scanning', 'scanPublicFile', new Error('scan failed')],
+  ] as const)('cleans up the Android gallery file when %s fails', async (_, method, error) => {
+    androidFs[method].mockRejectedValue(error);
+
+    await saveMediaToGallery(new Blob(['data']), 'photo.png', 'image/png');
+
+    expect(androidFs.removeFile).toHaveBeenCalledWith('content://media/image');
+    expect(showToast).toHaveBeenCalledWith(`Failed to save to gallery: ${error.message}`);
   });
 
   it('sends media bytes to the native Photos command on iOS', async () => {

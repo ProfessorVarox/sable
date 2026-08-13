@@ -13,6 +13,7 @@ import type { ClientConfig } from '$hooks/useClientConfig';
 import { ErrorPage } from '$components/DefaultErrorPage';
 import { Room } from '$features/room';
 import { Lobby } from '$features/lobby';
+import { ForumView } from '$features/forum';
 import { PageRoot } from '$components/page';
 import { ScreenSize } from '$hooks/useScreenSize';
 import { ReceiveSelfDeviceVerification } from '$components/DeviceVerification';
@@ -45,6 +46,7 @@ import {
   LOBBY_PATH_SEGMENT,
   NOTIFICATIONS_PATH_SEGMENT,
   ROOM_PATH_SEGMENT,
+  ROOM_FORUM_PATH_SEGMENT,
   SEARCH_PATH_SEGMENT,
   SERVER_PATH_SEGMENT,
   CREATE_PATH,
@@ -315,6 +317,14 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
               </HomeRouteRoomProvider>
             }
           />
+          <Route
+            path={ROOM_FORUM_PATH_SEGMENT}
+            element={
+              <HomeRouteRoomProvider>
+                <ForumView />
+              </HomeRouteRoomProvider>
+            }
+          />
         </Route>
         <Route
           path={DIRECT_PATH}
@@ -331,6 +341,14 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             element={
               <DirectRouteRoomProvider>
                 <Room />
+              </DirectRouteRoomProvider>
+            }
+          />
+          <Route
+            path={ROOM_FORUM_PATH_SEGMENT}
+            element={
+              <DirectRouteRoomProvider>
+                <ForumView />
               </DirectRouteRoomProvider>
             }
           />
@@ -372,6 +390,14 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             element={
               <SpaceRouteRoomProvider>
                 <Room />
+              </SpaceRouteRoomProvider>
+            }
+          />
+          <Route
+            path={ROOM_FORUM_PATH_SEGMENT}
+            element={
+              <SpaceRouteRoomProvider>
+                <ForumView />
               </SpaceRouteRoomProvider>
             }
           />

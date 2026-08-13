@@ -84,6 +84,13 @@ type ProxyAssociationWrapper = {
   compat?: AccountDataCompatVersion;
 };
 
+export function isPersonaAccountDataEvent(eventType: string) {
+  return (
+    eventType === MATRIX_UNSTABLE_MSC4461_ACCOUNT_PER_MESSAGE_PROFILES_PROPERTY_NAME ||
+    eventType.startsWith(`${ACCOUNT_DATA_PREFIX}.`)
+  );
+}
+
 function accountData(mx: MatrixClient, eventType: string) {
   return mx.getAccountData(eventType as Parameters<typeof mx.getAccountData>[0]);
 }

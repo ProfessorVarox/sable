@@ -3,14 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TauriWindowFocus } from './TauriWindowFocus';
 import { isWindowFocused, setNativeWindowFocused, subscribeWindowFocus } from '$utils/dom';
 
-const { mockIsTauri, mockOsType, mockIsFocused, mockOnFocusChanged, mockGetCurrentWindow } =
-  vi.hoisted(() => ({
-    mockIsTauri: vi.fn<() => boolean>(),
-    mockOsType: vi.fn<() => string>(),
-    mockIsFocused: vi.fn<() => Promise<boolean>>(),
-    mockOnFocusChanged: vi.fn<(cb: (e: { payload: boolean }) => void) => Promise<() => void>>(),
-    mockGetCurrentWindow: vi.fn<() => unknown>(),
-  }));
+const {
+  mockIsTauri,
+  mockOsType,
+  mockIsFocused,
+  mockOnFocusChanged,
+  mockListen,
+  mockGetCurrentWindow,
+} = vi.hoisted(() => ({
+  mockIsTauri: vi.fn<() => boolean>(),
+  mockOsType: vi.fn<() => string>(),
+  mockIsFocused: vi.fn<() => Promise<boolean>>(),
+  mockOnFocusChanged: vi.fn<(cb: (e: { payload: boolean }) => void) => Promise<() => void>>(),
+  mockListen:
+    vi.fn<(event: string, cb: (e: { payload: unknown }) => void) => Promise<() => void>>(),
+  mockGetCurrentWindow: vi.fn<() => unknown>(),
+}));
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: mockIsTauri }));
 vi.mock('@tauri-apps/plugin-os', () => ({ type: mockOsType }));
@@ -28,9 +36,11 @@ describe('TauriWindowFocus', () => {
     mockOsType.mockReturnValue('linux');
     mockIsFocused.mockResolvedValue(true);
     mockOnFocusChanged.mockResolvedValue(() => {});
+    mockListen.mockResolvedValue(() => {});
     mockGetCurrentWindow.mockReturnValue({
       isFocused: mockIsFocused,
       onFocusChanged: mockOnFocusChanged,
+      listen: mockListen,
     });
   });
 
@@ -62,6 +72,18 @@ describe('TauriWindowFocus', () => {
     expect(seen).toEqual([false, true]);
 
     unsubscribe();
+  });
+
+  it('treats a window hidden to tray as unfocused', async () => {
+    render(<TauriWindowFocus />);
+    await waitFor(() =>
+      expect(mockListen).toHaveBeenCalledWith('window-hidden-to-tray', expect.any(Function))
+    );
+
+    const hide = mockListen.mock.calls[0]![1];
+    hide({ payload: undefined });
+
+    expect(isWindowFocused()).toBe(false);
   });
 
   it('does not subscribe on mobile, leaving the DOM path authoritative', async () => {

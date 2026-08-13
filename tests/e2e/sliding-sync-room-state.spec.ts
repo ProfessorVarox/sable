@@ -1,49 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { test, expect, type Page } from '@playwright/test';
-import { createRoom, registerUser, sendText, setRoomName } from './fixtures/continuwuity';
+import { test, expect } from './fixtures/test';
+import { createRoom, sendText, setRoomName } from './fixtures/continuwuity';
+import { homeserverBaseUrl, loginAsFreshUser } from './fixtures/session';
 import { AppShell, CLIENT_READY_TIMEOUT } from './pages/AppShell';
-
-const PASSWORD = 'test-passw0rd';
 
 // More rooms than the window the joined list used to shrink to.
 const FILLER_ROOM_COUNT = 5;
-
-type InjectedSession = {
-  baseUrl: string;
-  userId: string;
-  deviceId: string;
-  accessToken: string;
-  slidingSyncOptIn?: boolean;
-};
-
-async function homeserverBaseUrl(storageStatePath: string): Promise<string> {
-  const state = JSON.parse(await readFile(storageStatePath, 'utf8')) as {
-    origins: { localStorage: { name: string; value: string }[] }[];
-  };
-  const entry = state.origins[0]!.localStorage.find((item) => item.name === 'matrixSessions')!;
-  return (JSON.parse(entry.value) as InjectedSession[])[0]!.baseUrl;
-}
-
-async function loginAsFreshUser(
-  page: Page,
-  baseUrl: string,
-  name: string
-): Promise<{ accessToken: string }> {
-  const user = await registerUser(baseUrl, name, PASSWORD);
-  const session: InjectedSession = {
-    baseUrl,
-    userId: user.userId,
-    deviceId: user.deviceId,
-    accessToken: user.accessToken,
-    slidingSyncOptIn: true,
-  };
-  await page.addInitScript((injected: InjectedSession) => {
-    localStorage.setItem('matrixSessions', JSON.stringify([injected]));
-    localStorage.setItem('matrixActiveSession', JSON.stringify(injected.userId));
-    localStorage.setItem('dismissNotice', 'true');
-  }, session);
-  return user;
-}
 
 test.describe('sliding sync room state', () => {
   // Regression guard for #1389: reintroducing the post-hydration narrowing of the

@@ -42,7 +42,7 @@ import { MobileSwipeDownModal, useMobileSheetClose } from '$components/MobileSwi
 import * as css from '$features/room/message/styles.css';
 import { useAtom, useSetAtom, useStore } from 'jotai';
 import type { Dispatch, MouseEventHandler, ReactNode, SetStateAction } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { MessageDeleteItem } from './MessageDelete';
 import FocusTrap from 'focus-trap-react';
 import { stopPropagation } from '$utils/keyboard';
@@ -598,6 +598,7 @@ export type OptionMenuProps = {
   onEditId?: (eventId?: string) => void;
   onReproxyId?: (profileId?: string) => void;
   hideReadReceipts?: boolean;
+  hideReplyButton?: boolean;
   showDeveloperTools?: boolean;
   canPinEvent?: boolean;
   canDelete?: boolean;
@@ -622,6 +623,7 @@ function OptionMenu({
   onReplyClick,
   onEditId,
   hideReadReceipts,
+  hideReplyButton,
   showDeveloperTools,
   canPinEvent,
   canDelete,
@@ -808,20 +810,22 @@ function OptionMenu({
               {isGif && isModal && (
                 <MessageFavoriteGifItem room={room} mEvent={mEvent} onClose={closeMenu} />
               )}
-              <MenuItem
-                size="300"
-                after={menuIcon(ArrowBendUpLeftIcon)}
-                radii="300"
-                data-event-id={mEvent.getId()}
-                onClick={(evt) => {
-                  onReplyClick(evt);
-                  onTotalClose();
-                }}
-              >
-                <Text className={css.MessageMenuItemText} as="span" size="T300" truncate>
-                  Reply
-                </Text>
-              </MenuItem>
+              {!hideReplyButton && (
+                <MenuItem
+                  size="300"
+                  after={menuIcon(ArrowBendUpLeftIcon)}
+                  radii="300"
+                  data-event-id={mEvent.getId()}
+                  onClick={(evt) => {
+                    onReplyClick(evt);
+                    onTotalClose();
+                  }}
+                >
+                  <Text className={css.MessageMenuItemText} as="span" size="T300" truncate>
+                    Reply
+                  </Text>
+                </MenuItem>
+              )}
               {!isThreadedMessage && (
                 <MenuItem
                   size="300"
@@ -912,6 +916,12 @@ function OptionMenu({
 export function MobileOptionsInternal({ options }: { options: OptionMenuProps }) {
   const [isActive, setIsActive] = useState(true);
   const [modal, setModal] = useAtom(modalAtom);
+
+  // The composer keeps the mobile keyboard open until its focused element is blurred.
+  useLayoutEffect(() => {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) activeElement.blur();
+  }, []);
 
   useEffect(() => {
     if (modal?.type === ModalType.MobileOptions) setIsActive(true);

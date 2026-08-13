@@ -193,6 +193,21 @@ describe('ImageViewer', () => {
     expect(screen.getByText('Save to Gallery')).toBeInTheDocument();
   });
 
+  it("saves the Matrix source behind Android's sable-media URL to the gallery", async () => {
+    mockPlatform('android');
+    const source = 'https://matrix.example.org/_matrix/client/v1/media/download/example.org/kitten';
+    const src = `https://sable-media.localhost/${encodeURIComponent(source)}?__sable_media_cache=3`;
+    saveMediaToGallery.mockClear();
+
+    renderViewer({ src, info: { mimetype: 'image/png' } });
+    fireEvent.contextMenu(screen.getByAltText('kitten.png'));
+    fireEvent.click(screen.getByText('Save to Gallery'));
+
+    await waitFor(() =>
+      expect(saveMediaToGallery).toHaveBeenCalledWith(source, 'kitten.png', 'image/png')
+    );
+  });
+
   it('labels the primary action Save to Photos on iOS without duplicating it in the overflow menu', () => {
     mockPlatform('ios');
 

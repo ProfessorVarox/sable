@@ -439,6 +439,10 @@ jobs:
         shell: bash
         run: mise -y run tauri:setup:ios
 
+      - name: Download iOS frameworks
+        shell: bash
+        run: pnpm ios:frameworks
+
       - name: Symlink icons to the ios folder
         shell: bash
         run: mise run icons:symlink --write --force
@@ -581,7 +585,6 @@ jobs:
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
       SABLE_BUILD_FLAVOR: ${{ needs.setup-release.outputs.nightly == 'true' && 'dev' || 'stable' }}
-      SABLE_PRODUCT_NAME: ${{ needs.setup-release.outputs.product_name }}
       REPO: ${{ github.repository }}
       STARTED_AT: ${{ needs.setup-release.outputs.started_at }}
     steps:
@@ -683,8 +686,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup-release.outputs.ref }}
-          # GoReleaser reads the version from git history.
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup app
@@ -703,42 +704,26 @@ jobs:
           UPDATER_ENDPOINT: ${{ needs.setup-release.outputs.nightly == 'true' && format('https://github.com/{0}/releases/download/nightly/latest.json', github.repository) || '' }}
         run: node .github/scripts/set-tauri-version.mjs "$VERSION" "$UPDATER_ENDPOINT"
 
-      # Not in [bootstrap.packages]: snapcraft ships only as a snap.
-      - name: Install snapcraft
-        if: ${{ needs.setup-release.outputs.nightly != 'true' }}
-        run: sudo snap install snapcraft --classic
-
-      - name: Trust the AUR host key
-        if: ${{ needs.setup-release.outputs.nightly != 'true' }}
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
-
-      - name: Resolve GoReleaser args
-        id: gr
+      - name: Build and package Linux bundles
         shell: bash
         run: |
-          if [ "$IS_NIGHTLY" = "true" ]; then
-            echo 'args=release --clean --snapshot --skip=snapcraft,aur' >> "$GITHUB_OUTPUT"
-          else
-            echo 'args=release --clean' >> "$GITHUB_OUTPUT"
-          fi
+          pnpm tauri:cef build
+          ! strings src-tauri/target/release/sable | grep -F 'http://localhost:8080'
 
-      - name: Run GoReleaser
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GORELEASER_GITHUB_TOKEN || github.token }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        run: goreleaser ${{ steps.gr.outputs.args }}
-
-      - name: Build the AppImage
-        shell: bash
-        run: |
           DISPLAY_NAME=Sable
           [ "$IS_NIGHTLY" = "true" ] && DISPLAY_NAME="Sable Nightly"
           mise run cef:package "$VERSION" \
-            src-tauri/target/x86_64-unknown-linux-gnu/release/sable "$DISPLAY_NAME"
+            src-tauri/target/release/sable "$DISPLAY_NAME"
+
+          RELEASE_DIR="src-tauri/target/release/cef-pkg/release"
+          mkdir -p "$RELEASE_DIR"
+          cp src-tauri/target/release/sable "$RELEASE_DIR/sable"
+          cp -a src-tauri/target/release/cef-pkg/stage/runtime \
+            src-tauri/target/release/cef-pkg/stage/share "$RELEASE_DIR/"
+          test -f "$RELEASE_DIR/runtime/CEF-LICENSE.txt"
+          tar -C "$RELEASE_DIR" -czf \
+            "src-tauri/target/release/bundle/Sable-${VERSION}-linux-x86_64.tar.gz" \
+            sable runtime share
 
       - name: Sign the AppImage for the updater
         if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
@@ -753,9 +738,9 @@ jobs:
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
-            .goreleaser-dist/*.deb
-            .goreleaser-dist/*.rpm
-            .goreleaser-dist/*.pkg.tar.zst
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/*.tar.gz
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/appimage/*.sig
 
@@ -764,10 +749,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for f in .goreleaser-dist/Sable-*.deb \
-                   .goreleaser-dist/Sable-*.rpm \
-                   .goreleaser-dist/Sable-*.pkg.tar.zst \
-                   .goreleaser-dist/Sable-*-linux-x86_64.tar.gz \
+          for f in src-tauri/target/release/bundle/deb/Sable-*.deb \
+                   src-tauri/target/release/bundle/rpm/Sable-*.rpm \
+                   src-tauri/target/release/bundle/Sable-*-linux-x86_64.tar.gz \
                    src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage \
                    src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage.sig; do
             [ -e "$f" ] || continue
@@ -779,10 +763,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sable-linux-deb
-          path: .goreleaser-dist/Sable-*.deb
+          path: src-tauri/target/release/bundle/deb/Sable-*.deb
+          if-no-files-found: error
           retention-days: 1
           include-hidden-files: true
-          if-no-files-found: error
 
   distribute-nightly-aur:
     name: Publish nightly to AUR
@@ -845,6 +829,7 @@ jobs:
           docker run --rm -v "$PWD:/src:ro" archlinux:base-devel bash -c '
             useradd -m build
             cp /src/PKGBUILD /home/build/
+            cp /src/sable-nightly-bin.install /home/build/
             su build -c "cd /home/build && makepkg --printsrcinfo"
           ' > .SRCINFO
 
@@ -858,36 +843,8 @@ jobs:
           git commit -m "nightly ${VERSION}"
           git push
 
-  distribute-obtainium:
-    name: Generate Obtainium import file
-    needs: [setup-release, android]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    env:
-      TAG: ${{ needs.setup-release.outputs.tag }}
-      VERSION: ${{ needs.setup-release.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Generate obtainium.json
-        shell: bash
-        run: node scripts/obtainium-generate.js "$VERSION" "$TAG" obtainium.json
-
-      - name: Upload to release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" obtainium.json --clobber
-
   distribute-homebrew:
     name: Publish Homebrew cask
-    # GoReleaser's homebrew_casks pipe would build the cask from our Linux
-    # archive, since it is the only one it produces. Tauri owns the .dmg and
-    # importing it needs the Pro-only `prebuilt` builder.
     needs: [setup-release, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10

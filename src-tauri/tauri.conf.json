@@ -24,10 +24,21 @@
     },
     "iOS": {
       "template": "src-tauri/ios-project.yml",
-      "frameworks": ["AudioToolbox", "Photos"]
+      "minimumSystemVersion": "16.0",
+      "frameworks": [
+        "AudioToolbox",
+        "Photos",
+        "Frameworks/LiveKitWebRTC.xcframework",
+        "Frameworks/RustLiveKitUniFFI.xcframework"
+      ]
     },
     "linux": {
       "deb": {
+        "files": {
+          "/etc/apparmor.d/sable": "packaging/deb/apparmor/sable"
+        },
+        "postInstallScript": "packaging/deb/postinst",
+        "postRemoveScript": "packaging/deb/postrm",
         "depends": [
           "xwayland",
           "gstreamer1.0-plugins-good",

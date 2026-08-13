@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './fixtures/test';
 import {
   createRoom,
   getRoomMessages,
@@ -9,46 +8,8 @@ import {
   sendText,
 } from './fixtures/continuwuity';
 import { AppShell } from './pages/AppShell';
-
-const PASSWORD = 'test-passw0rd';
+import { homeserverBaseUrl, loginAsFreshUser, PASSWORD } from './fixtures/session';
 const BURST_SIZE = 8;
-
-type InjectedSession = {
-  baseUrl: string;
-  userId: string;
-  deviceId: string;
-  accessToken: string;
-  slidingSyncOptIn?: boolean;
-};
-
-async function homeserverBaseUrl(storageStatePath: string): Promise<string> {
-  const state = JSON.parse(await readFile(storageStatePath, 'utf8')) as {
-    origins: { localStorage: { name: string; value: string }[] }[];
-  };
-  const entry = state.origins[0]!.localStorage.find((item) => item.name === 'matrixSessions')!;
-  return (JSON.parse(entry.value) as InjectedSession[])[0]!.baseUrl;
-}
-
-async function loginAsFreshUser(
-  page: Page,
-  baseUrl: string,
-  name: string
-): Promise<{ accessToken: string }> {
-  const user = await registerUser(baseUrl, name, PASSWORD);
-  const session: InjectedSession = {
-    baseUrl,
-    userId: user.userId,
-    deviceId: user.deviceId,
-    accessToken: user.accessToken,
-    slidingSyncOptIn: true,
-  };
-  await page.addInitScript((injected: InjectedSession) => {
-    localStorage.setItem('matrixSessions', JSON.stringify([injected]));
-    localStorage.setItem('matrixActiveSession', JSON.stringify(injected.userId));
-    localStorage.setItem('dismissNotice', 'true');
-  }, session);
-  return user;
-}
 
 test.describe('live timeline', () => {
   test('renders an editor-sent message as a single server-confirmed row', async ({
@@ -112,12 +73,14 @@ test.describe('live timeline', () => {
     });
     await inviteUser(hsBaseUrl, user.accessToken, room, remote.userId);
     await joinRoom(hsBaseUrl, remote.accessToken, room);
+    const readyEventId = await sendText(hsBaseUrl, user.accessToken, room, `${tag}-ready`, 1);
 
     await page.goto('/');
     await expect(page.getByText(`${tag} Room`).first()).toBeVisible({
       timeout: 180_000,
     });
     await app.openRoom(`${tag} Room`);
+    await expect(app.messageByEventId(readyEventId)).toBeVisible({ timeout: 120_000 });
 
     for (let i = 1; i <= BURST_SIZE; i += 1) {
       await sendText(hsBaseUrl, remote.accessToken, room, `${tag}-b${i}`, i);

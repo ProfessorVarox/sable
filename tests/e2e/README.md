@@ -1,6 +1,6 @@
 # End-to-end tests
 
-Playwright drives the real app (vite dev on `:8080`) against a throwaway
+Playwright drives a production build served by Vite preview on `:4175` against a throwaway
 [Continuwuity](https://continuwuity.org) homeserver started per run. The suite
 covers functional flows (login, sync, navigation, timeline) and captures
 screenshots for layout regression.
@@ -26,21 +26,26 @@ because font rendering differs between hosts. Regenerate them with
 
 ## How it works
 
-`global-setup.ts`:
+`global.setup.ts`:
 
 1. Starts a Continuwuity container with open registration.
-2. Registers a user and seeds deterministic rooms/messages over the client-server API.
-3. Injects the session into the app's `localStorage` (`matrixSessions` +
-   `matrixActiveSession`) and saves it as Playwright `storageState`, so specs
-   start already logged in without driving the login UI.
+2. Registers a bootstrap user and seeds deterministic rooms/messages over the client-server API.
+3. Gives each Playwright worker its own identically seeded user and `storageState`,
+   isolating sync and crypto state while specs run in parallel.
+4. Saves the container id for `global.teardown.ts`.
+5. Injects the session into the app's `localStorage` (`matrixSessions` +
+   `matrixActiveSession`), so specs start already logged in without driving the
+   login UI.
 
-The container is stopped in the returned teardown.
+`global.teardown.ts` removes the container after the dependent projects finish.
 
 ## Adding a test
 
 Specs live in `tests/e2e/*.spec.ts` and run against both a desktop and a mobile
-viewport. Assert behaviour with locators; add `toHaveScreenshot` where a layout
-baseline is useful. Screenshot baselines live in `tests/e2e/__screenshots__`.
+viewport. The touch project runs touch interactions and permalink navigation;
+the narrow mobile project covers the rest of the responsive flows. Assert
+behaviour with locators; add `toHaveScreenshot` where a layout baseline is
+useful. Screenshot baselines live in `tests/e2e/__screenshots__`.
 
 Notes when adding screenshots:
 

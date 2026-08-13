@@ -6,6 +6,8 @@ import {
   getPerMessageProfileById,
   ProfileCatalog,
 } from '$hooks/usePerMessageProfile';
+import { isPersonaAccountDataEvent } from '$app/persona/catalog';
+import { useAccountDataCallback } from '$hooks/useAccountDataCallback';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Button, color, config, Dialog, Header, Spinner, Switch, Text } from 'folds';
 import { generateShortId } from '$utils/shortIdGen';
@@ -54,6 +56,17 @@ export function PerMessageProfileOverview({
     };
     fetchProfiles();
   }, [mx]);
+
+  useAccountDataCallback(
+    mx,
+    useCallback(
+      (event) => {
+        if (!isPersonaAccountDataEvent(event.getType())) return;
+        void getAllPerMessageProfiles(mx).then(setProfiles);
+      },
+      [mx]
+    )
+  );
 
   const handleEdit = async (profileId: string) => {
     const profile = await getPerMessageProfileById(mx, profileId);
