@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #MISE description="Package the CEF build for Linux"
 #MISE tools={nfpm="2.47.0", "github:AppImage/appimagetool" = {version = "1.9.1", matching = ".AppImage"}}
-# Usage: scripts/cef/package.sh [version] [binary-path] [display-name]
+# Usage: scripts/cef/package.sh [version] [package-binary-path] [display-name] [appimage-binary-path]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -25,6 +25,7 @@ WORK="$STAGE/cef-pkg"
 
 BIN_PATH="${2:-}"
 DISPLAY_NAME="${3:-}"
+APPIMAGE_BIN_PATH="${4:-}"
 if [ -z "$BIN_PATH" ]; then
   for candidate in "$STAGE/Sable Nightly" "$STAGE/Sable" "$STAGE/sable" \
     "$ROOT/src-tauri/target/x86_64-unknown-linux-gnu/release/sable"; do
@@ -35,6 +36,11 @@ if [ -z "$BIN_PATH" ]; then
 fi
 [ -n "$BIN_PATH" ] && [ -x "$BIN_PATH" ] || {
   echo "no CEF binary found; build it first (pnpm tauri:cef build)" >&2
+  exit 1
+}
+[ -n "$APPIMAGE_BIN_PATH" ] || APPIMAGE_BIN_PATH="$BIN_PATH"
+[ -x "$APPIMAGE_BIN_PATH" ] || {
+  echo "AppImage binary is not executable: $APPIMAGE_BIN_PATH" >&2
   exit 1
 }
 if [ -z "$DISPLAY_NAME" ]; then
@@ -62,7 +68,7 @@ bash scripts/cef/stage.sh "$WORK/stage" "$DISPLAY_NAME"
 APPDIR="$WORK/Sable.AppDir"
 mkdir -p "$APPDIR/usr/bin"
 cp -a "$WORK/stage/runtime/." "$APPDIR/usr/bin/"
-cp -f "$BIN_PATH" "$APPDIR/usr/bin/sable"
+cp -f "$APPIMAGE_BIN_PATH" "$APPDIR/usr/bin/sable"
 chmod 755 "$APPDIR/usr/bin/sable"
 
 # Bundle the system-tray libraries (Tauri's linuxdeploy path normally does this,

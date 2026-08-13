@@ -18,16 +18,7 @@
       "tintColor": "#5CA399",
       "category": "social",
       "screenshots": [],
-      "versions": [
-        {
-          "version": "1.20.1786601173",
-          "buildVersion": "1.20.1786601173",
-          "date": "2026-08-13T06:14:19Z",
-          "size": 19848944,
-          "downloadURL": "https://github.com/SableClient/Sable/releases/download/nightly/Sable-1.20.1-nightly.260813060613-ios-arm64.ipa",
-          "localizedDescription": "Sable 1.20.1-nightly.260813060613"
-        }
-      ],
+      "versions": [],
       "appPermissions": {
         "entitlements": ["aps-environment"],
         "privacy": {

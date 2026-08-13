@@ -45,6 +45,7 @@ import { getMemberDisplayName } from '$utils/room/display';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { useSlidingSyncRoomLoading } from '$hooks/useSlidingSyncActiveRoom';
 import { useOpenUserRoomProfile } from '$state/hooks/userRoomProfile';
+import { showToast } from '$state/toast';
 import { useSpaceOptionally } from '$hooks/useSpace';
 import { useIgnoredUsers } from '$hooks/useIgnoredUsers';
 import { useImagePackRooms } from '$hooks/useImagePackRooms';
@@ -554,6 +555,7 @@ export function RoomTimeline({
   const handleJumpError = useCallback(() => {
     scrollAnchorRef.current = undefined;
     setAtBottom(true);
+    showToast('Unable to load this message.');
   }, [setAtBottom]);
   const handleReturnToLive = useCallback(() => {
     scrollAnchorRef.current = undefined;

@@ -88,9 +88,15 @@ const pickAndroidFiles = async (
     mimeTypes: pickerMode === 'media' ? MEDIA_MIME_TYPES : [],
     multiple: true,
   });
+  const seenUris = new Set<string>();
+  const uniqueUris = uris.filter(({ uri }) => {
+    if (seenUris.has(uri)) return false;
+    seenUris.add(uri);
+    return true;
+  });
 
   const files = await Promise.all(
-    uris.map(async (uri, index): Promise<File | undefined> => {
+    uniqueUris.map(async (uri, index): Promise<File | undefined> => {
       try {
         const metadata = await AndroidFs.getMetadata(uri);
         if (metadata.type !== 'File') return undefined;

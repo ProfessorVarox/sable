@@ -544,7 +544,7 @@ export const toggleReaction = (
   const reactions: MatrixEvent[] = reactionsSet ? Array.from(reactionsSet) : [];
   const myReaction = reactions.find(factoryEventSentBy(mx.getUserId()!));
 
-  if (myReaction && myReaction.isRelation?.()) {
+  if (myReaction) {
     const eventId = myReaction.getId();
     if (eventId) mx.redactEvent(room.roomId, eventId);
     return;

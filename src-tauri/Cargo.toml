@@ -91,12 +91,12 @@ windows = { version = "0.62", features = [
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "057d323862d815a0c7459a1f1acd5a3c08750a51" }
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "301e4ac43970525764eb2f0c787884129db2847f" }
 
 # default-features = false drops notify-rust so macOS uses the native
 # UNUserNotificationCenter backend (needs a signed .app to deliver).
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "057d323862d815a0c7459a1f1acd5a3c08750a51", default-features = false }
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "301e4ac43970525764eb2f0c787884129db2847f", default-features = false }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = { version = "2", optional = true }
@@ -120,13 +120,13 @@ libloading = "0.9"
 zbus = "5"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "057d323862d815a0c7459a1f1acd5a3c08750a51", features = [
+tauri-plugin-notifications = { git = "https://github.com/SableClient/tauri-plugin-notifications.git", rev = "301e4ac43970525764eb2f0c787884129db2847f", features = [
   "push-notifications",
 ] }
 tauri-plugin-edge-to-edge = { git = "https://github.com/SableClient/tauri-plugin-edge-to-edge.git", rev = "33c6116c27be28c06df5a9d02231ecc5fdeb93c5" }
 tauri-plugin-sharekit = { git = "https://github.com/Choochmeque/tauri-plugin-sharekit", rev = "9f2b4c5d8a4f0ab910d900ba234ed8bae0ab854b" }
 tauri-plugin-app-icon = { git = "https://github.com/SableClient/tauri-plugin-app-icon", rev = "6da508ab93ee8c791aa28112c8e171e42257cc3c" }
-tauri-plugin-livekit-mobile = { git = "https://github.com/SableClient/tauri-plugin-livekit-mobile.git", rev = "da2097e5ab6ef9d7519959d21f574db15663f75e" }
+tauri-plugin-livekit-mobile = { git = "https://github.com/SableClient/tauri-plugin-livekit-mobile.git", rev = "c6f0d02ab3da1174535bc1dc8e598a2e6873f977" }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"

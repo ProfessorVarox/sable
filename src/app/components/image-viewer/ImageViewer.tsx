@@ -265,6 +265,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
           menu={
             <Menu
               variant="Surface"
+              data-gestures="ignore"
               style={{
                 maxWidth: toRem(160),
                 width: isMobile ? 'auto' : '100vw',

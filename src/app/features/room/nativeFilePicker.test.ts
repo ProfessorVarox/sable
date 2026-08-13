@@ -170,6 +170,24 @@ describe('pickNativeFile', () => {
       ]);
     });
 
+    it('does not return the same gallery URI twice', async () => {
+      const uri = androidUri('content://media/external/images/media/1000000034');
+      mocks.androidFs.showOpenFilePicker.mockResolvedValue([uri, uri]);
+      mocks.androidFs.getMetadata.mockResolvedValue({
+        type: 'File',
+        name: '1000000034.png',
+        lastModified: new Date(1700000000000),
+        byteLength: 3,
+        mimeType: 'image/png',
+      });
+
+      const files = await pickNativeFile('media');
+
+      expect(files).toHaveLength(1);
+      expect(mocks.androidFs.getMetadata).toHaveBeenCalledOnce();
+      expect(mocks.androidFs.readFile).toHaveBeenCalledOnce();
+    });
+
     it('picks documents through the file picker', async () => {
       mocks.androidFs.showOpenFilePicker.mockResolvedValue([androidUri('content://docs/1')]);
       mocks.androidFs.getMetadata.mockResolvedValue({

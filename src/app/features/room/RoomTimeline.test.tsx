@@ -30,6 +30,7 @@ const {
   vListProps,
   timelineSyncOptions,
   timelineActionsOptions,
+  showToastMock,
 } = vi.hoisted(() => ({
   vListHandle: {
     scrollSize: 1000,
@@ -83,6 +84,7 @@ const {
   vListProps: { shift: false, shiftValues: [] as boolean[] },
   timelineSyncOptions: { current: undefined as Record<string, unknown> | undefined },
   timelineActionsOptions: { current: undefined as Record<string, unknown> | undefined },
+  showToastMock: vi.fn<(text: string) => void>(),
 }));
 
 let lastOnScroll: ((offset: number) => void) | undefined;
@@ -142,6 +144,8 @@ vi.mock('$hooks/useMessageEdit', () => ({
 vi.mock('$hooks/useRoomNavigate', () => ({
   useRoomNavigate: () => ({ navigateRoom: navigateRoomMock }),
 }));
+
+vi.mock('$state/toast', () => ({ showToast: showToastMock }));
 
 vi.mock('$hooks/useSpace', () => ({ useSpaceOptionally: () => undefined }));
 
@@ -387,6 +391,7 @@ beforeEach(() => {
   eventTimeline.current = liveTimeline;
   liveTimeline.getEvents = () => [{ getId: () => '$evt1' }];
   navigateRoomMock.mockReset();
+  showToastMock.mockReset();
   vListProps.shift = false;
   vListProps.shiftValues.length = 0;
   timelineSync.eventsLength = 1;
@@ -971,6 +976,15 @@ describe('jump reveal and focus-regain read receipts', () => {
     act(() => onJumpError?.());
 
     expect(queryByText('Jump to Latest')).toBeNull();
+  });
+
+  it('notifies the user when a jump target cannot be loaded', () => {
+    render(<RoomTimeline room={room} editor={{} as Editor} eventId="$missing:example.org" />);
+
+    const onJumpError = timelineSyncOptions.current?.onJumpError as (() => void) | undefined;
+    act(() => onJumpError?.());
+
+    expect(showToastMock).toHaveBeenCalledWith('Unable to load this message.');
   });
 
   it('clears a notification route when an own message returns to the live timeline', async () => {

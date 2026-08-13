@@ -6832,7 +6832,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-livekit-mobile"
 version = "0.2.0"
-source = "git+https://github.com/SableClient/tauri-plugin-livekit-mobile.git?rev=da2097e5ab6ef9d7519959d21f574db15663f75e#da2097e5ab6ef9d7519959d21f574db15663f75e"
+source = "git+https://github.com/SableClient/tauri-plugin-livekit-mobile.git?rev=c6f0d02ab3da1174535bc1dc8e598a2e6873f977#c6f0d02ab3da1174535bc1dc8e598a2e6873f977"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -6867,7 +6867,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-notifications"
 version = "0.5.0-rc.11"
-source = "git+https://github.com/SableClient/tauri-plugin-notifications.git?rev=057d323862d815a0c7459a1f1acd5a3c08750a51#057d323862d815a0c7459a1f1acd5a3c08750a51"
+source = "git+https://github.com/SableClient/tauri-plugin-notifications.git?rev=301e4ac43970525764eb2f0c787884129db2847f#301e4ac43970525764eb2f0c787884129db2847f"
 dependencies = [
  "log",
  "notify-rust",

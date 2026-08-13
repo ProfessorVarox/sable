@@ -158,6 +158,40 @@ describe('ImageViewer', () => {
     }
   });
 
+  it('keeps mobile overflow menu touches out of an enclosing message long-press handler', () => {
+    screenMocks.isMobile = true;
+    vi.useFakeTimers();
+    const messageLongPress = vi.fn<() => void>();
+    try {
+      render(
+        <div
+          onTouchStart={(evt) => {
+            const target = evt.target as Element;
+            if (target.closest('[data-gestures="ignore"]')) return;
+            setTimeout(messageLongPress, 500);
+          }}
+        >
+          <ImageViewer
+            alt="kitten.png"
+            src="https://example.org/kitten.png"
+            requestClose={() => {}}
+          />
+        </div>
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+      fireEvent.touchStart(screen.getByText('Turn pixelation on'), {
+        touches: [{ identifier: 1, clientX: 10, clientY: 10 }],
+      });
+      vi.advanceTimersByTime(600);
+
+      expect(messageLongPress).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      screenMocks.isMobile = false;
+    }
+  });
+
   it('hides the share control when the platform cannot share', () => {
     screenMocks.isMobile = true;
     try {

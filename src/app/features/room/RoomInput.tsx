@@ -393,6 +393,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [isSending, setIsSending] = useState(false);
     const [ingestingFiles, setIngestingFiles] = useState(false);
     const fileIngestionCountRef = useRef(0);
+    const submissionInFlightRef = useRef(false);
     const composerControllerRef = useRef<ComposerController>();
     composerControllerRef.current ??= createComposerController();
     // Bumped when this composer goes away, so async work started for a previous
@@ -1714,16 +1715,20 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     );
 
     const submit = useCallback(() => {
+      if (submissionInFlightRef.current) return Promise.resolve(undefined);
+      submissionInFlightRef.current = true;
       // A mobile edit replaces an existing event, so it owns neither the draft nor the reply.
       const isMobileEdit = Boolean(editingEvent && isMobile);
       const submission = takeSubmission({
         clearEditor: !isMobileEdit,
         claimReplyDraft: !isMobileEdit,
       });
-      return (
+      const queued =
         composerControllerRef.current?.enqueue((isLive) => executeSubmit(submission, isLive)) ??
-        Promise.resolve(undefined)
-      );
+        Promise.resolve(undefined);
+      return queued.finally(() => {
+        submissionInFlightRef.current = false;
+      });
     }, [editingEvent, executeSubmit, isMobile, takeSubmission]);
 
     const handleKeyDown: KeyboardEventHandler = useCallback(

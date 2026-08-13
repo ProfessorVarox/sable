@@ -13,10 +13,15 @@ const mediaTransport = vi.hoisted(() => ({
   getCurrentMediaSessionScope: vi.fn<() => string>(() => '@user:example.com'),
 }));
 
+const reactions = vi.hoisted(() => ({
+  getEventReactions: vi.fn<() => unknown>(),
+}));
+
 vi.mock('@tauri-apps/api/core', () => tauriApi);
 vi.mock('./mediaTransport', () => mediaTransport);
+vi.mock('./room/relations', () => reactions);
 
-const { mxcUrlToHttp, rewriteAuthenticatedMediaUrl } = await import('./matrix');
+const { mxcUrlToHttp, rewriteAuthenticatedMediaUrl, toggleReaction } = await import('./matrix');
 
 describe('rewriteAuthenticatedMediaUrl', () => {
   beforeEach(() => {
@@ -98,6 +103,32 @@ describe('rewriteAuthenticatedMediaUrl', () => {
       `${url}?__sable_media_cache=3&__sable_media_session=%40user%3Aexample.com`
     );
     expect(tauriApi.convertFileSrc).not.toHaveBeenCalled();
+  });
+});
+
+describe('toggleReaction', () => {
+  it('redacts the existing reaction from the current user', () => {
+    const reaction = {
+      getId: () => '$reaction',
+      getSender: () => '@me:example.org',
+    };
+    reactions.getEventReactions.mockReturnValue({
+      getSortedAnnotationsByKey: () => [['👍', new Set([reaction])]],
+    });
+    const mx = {
+      getUserId: () => '@me:example.org',
+      redactEvent: vi.fn<(roomId: string, eventId: string) => void>(),
+      sendEvent: vi.fn<(...args: unknown[]) => void>(),
+    } as unknown as MatrixClient;
+    const room = {
+      roomId: '!room:example.org',
+      getUnfilteredTimelineSet: vi.fn<() => unknown>(),
+    };
+
+    toggleReaction(mx, room as never, '$message', '👍');
+
+    expect(mx.redactEvent).toHaveBeenCalledWith('!room:example.org', '$reaction');
+    expect(mx.sendEvent).not.toHaveBeenCalled();
   });
 });
 

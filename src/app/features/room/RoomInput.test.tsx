@@ -781,6 +781,28 @@ describe('RoomInput submit regressions', () => {
     );
   });
 
+  it('sends a replied attachment once when a touch produces pointerup and click', async () => {
+    const send = deferred<{ event_id: string }>();
+    const file = new File(['attachment'], 'attachment.txt', { type: 'text/plain' });
+    testState.isMobile = true;
+    testState.sendIndividualAttachmentAsCaption = true;
+    testState.pendingUploads = [{ status: 'success', file, mxc: 'mxc://example/attachment' }];
+    testState.matrix.sendMessage.mockReturnValue(send.promise);
+    render(<RoomInputHarness initialReply />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare attachment' }));
+
+    const submit = sendButton();
+    fireEvent.pointerDown(submit, { pointerType: 'touch' });
+    fireEvent.pointerUp(submit, { pointerType: 'touch' });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(testState.matrix.sendMessage).toHaveBeenCalledOnce());
+    expect(testState.matrix.sendMessage.mock.calls[0]?.[2]?.['m.relates_to']).toEqual(
+      expect.objectContaining({ 'm.in_reply_to': expect.anything() })
+    );
+    send.resolve({ event_id: '$event' });
+  });
+
   it('sends on touch pointerup when the tap never produces a click', async () => {
     render(<RoomInputHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Compose text' }));

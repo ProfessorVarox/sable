@@ -24,7 +24,6 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
 
@@ -46,6 +45,8 @@
             };
           };
 
+          ### rust ###
+
           rust = (
             with inputs'.fenix.packages;
             combine [
@@ -57,9 +58,10 @@
             ]
           );
 
+          ### android ###
+
           platformVersion = "36";
           systemImageType = "default";
-          currentPath = builtins.getEnv "PWD";
           androidEnv = pkgs.androidenv.override { licenseAccepted = true; };
           androidComp = (
             androidEnv.composeAndroidPackages {
@@ -86,14 +88,18 @@
               cmakeVersions = [ "3.10.2" ];
             }
           );
-          android-sdk = pkgs.android-studio.withSdk androidComp.androidsdk;
+          android-sdk = androidComp.androidsdk;
 
-          self = inputs.self;
+          ### web ###
 
           packageJson = builtins.fromJSON (builtins.readFile ./package.json);
 
           nodejs = pkgs.nodejs_24;
           pnpm = pkgs.pnpm_10;
+          # Keep in sync with package.json; currently 0.57.0.
+          oxfmt =
+            (builtins.getFlake "github:NixOS/nixpkgs/ede57125e7b774b47b6f98855a5c150a4b87b67f?narHash=sha256-wpyvzzT8H%2B8hQ3W4EyQraEbOXolQm91FqbF7OywX3fQ%3D")
+            .legacyPackages.${system}.oxfmt;
           pnpmConfigHook = pkgs.pnpmConfigHook.override { inherit pnpm; };
 
           pnpmNativeBuildInputs = [
@@ -118,7 +124,7 @@
                 ;
               pname = "sable";
               fetcherVersion = 3;
-              hash = "sha256-l+XqV7rW1d58g4y0tcpJYvolOKS9bHT2dKg/QusyVfM=";
+              hash = "sha256-KINI5BAX8dKa8FLeWAems8Qn71SNeR+ndZNwA95T6a0=";
             };
 
           mkPnpmCheck =
@@ -151,69 +157,105 @@
               doCheck = false;
             });
 
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-            gobject-introspection
-            cargo
-            cargo-tauri
-            nodejs
-            xdg-utils
-            desktop-file-utils
-            wrapGAppsHook3
-          ];
+          ### CEF ###
 
-          buildInputs = with pkgs; [
-            at-spi2-atk
-            atkmm
-            cairo
-            gdk-pixbuf
-            glib
-            glib-networking
-            gtk3
-            gsettings-desktop-schemas
-            harfbuzz
-            librsvg
-            libsoup_3
-            pango
-            webkitgtk_4_1
-            openssl
-            dbus
-            dbus.dev
-            libayatana-appindicator
-            gst_all_1.gstreamer
-            gst_all_1.gst-plugins-base
-            gst_all_1.gst-plugins-good
-            gst_all_1.gst-plugins-bad
-            gst_all_1.gst-plugins-ugly
-            gst_all_1.gst-libav
-            android-sdk
-          ];
+          cef = pkgs.cef-binary.override {
+            version = "150.0.14";
+            gitRevision = "7c1aa68";
+            chromiumVersion = "150.0.7871.129";
+            srcHashes = {
+              x86_64-linux = "sha256-QO9hPkVcrNB6p8gfQl76qLb3frg/E8wo1HDuuk5h+Y8=";
+            };
+          };
 
-          defaultPackages = [
+          # fake archive json to prevent tauri from downloading cef again https://github.com/tauri-apps/cef-rs/issues/426
+          fakeArchiveJson = pkgs.writeText "archive.json" (
+            builtins.toJSON {
+              name = cef.src.name;
+              sha1 = "";
+              type = "minimal";
+            }
+          );
+
+          cefFlat = pkgs.symlinkJoin {
+            name = "cef-${cef.version}-flat";
+            paths = [
+              "${cef}/${cef.buildType}"
+              "${cef}/Resources"
+            ];
+            postBuild = ''
+              ln -s ${cef}/libcef_dll "$out/"
+              ln -s ${fakeArchiveJson} "$out/archive.json"
+            '';
+          };
+
+          ### shells ###
+
+          webPackages = [
             nodejs
             pnpm
-            rust
-            pkgs.cargo
-            pkgs.cargo-tauri
-            pkgs.corepack
-            pkgs.vitejs
             pkgs.oxlint
-            pkgs.oxfmt
+            oxfmt
             pkgs.knope
             pkgs.typescript
             pkgs.typescript-language-server
-            pkgs.nil
             pkgs.nixd
-            pkgs.jdk
             pkgs.mise
           ];
+
+          libayatana-appindicator = pkgs.libayatana-appindicator.overrideAttrs (old: {
+            postFixup = (old.postFixup or "") + ''
+              substituteInPlace "$dev/lib/pkgconfig/ayatana-appindicator3-0.1.pc" \
+                --replace-fail "Requires:" "Requires.private:"
+            '';
+          });
+
+          linuxDesktopBuildInputs = with pkgs; [
+            at-spi2-atk
+            atkmm
+            cairo
+            dbus
+            dbus.dev
+            gdk-pixbuf
+            glib
+            glib-networking
+            gsettings-desktop-schemas
+            gtk3
+            harfbuzz
+            libayatana-appindicator
+            librsvg
+            libsoup_3
+            openssl
+            pango
+            webkitgtk_4_1
+          ];
+
+          linuxRuntimeLibs = with pkgs; [
+            libGL
+            libpulseaudio
+            libxkbcommon
+            pipewire
+          ];
+
+          gstPlugins = with pkgs.gst_all_1; [
+            gstreamer
+            gst-plugins-base
+            gst-plugins-good
+            gst-plugins-bad
+            gst-plugins-ugly
+            gst-libav
+          ];
+
         in
         {
           treefmt = {
             projectRootFile = "flake.nix";
             programs = {
               nixfmt.enable = true;
-              oxfmt.enable = true;
+              oxfmt = {
+                enable = true;
+                package = oxfmt;
+              };
             };
             settings.global.excludes = [
               "dist"
@@ -233,44 +275,45 @@
             };
           };
 
-          packages.sable = pkgs.stdenv.mkDerivation (finalAttrs: {
-            pname = "sable";
-            inherit (packageJson) version;
-            src = lib.cleanSource ./.;
+          packages = {
+            sable = pkgs.stdenv.mkDerivation (finalAttrs: {
+              pname = "sable";
+              inherit (packageJson) version;
+              src = lib.cleanSource ./.;
 
-            # ignoring knope for building
-            pnpmInstallFlags = [ "--ignore-scripts" ];
+              pnpmInstallFlags = [ "--ignore-scripts" ];
 
-            pnpmDeps = mkPnpmDeps {
-              inherit (finalAttrs) src version pnpmInstallFlags;
+              pnpmDeps = mkPnpmDeps {
+                inherit (finalAttrs) src version pnpmInstallFlags;
+              };
+
+              nativeBuildInputs = pnpmNativeBuildInputs;
+
+              env.VITE_BUILD_HASH = inputs.self.shortRev or inputs.self.dirtyShortRev or "";
+              env.SABLE_BUILD_FLAVOR = "stable";
+
+              buildPhase = ''
+                runHook preBuild
+                pnpm run build
+                runHook postBuild
+              '';
+
+              installPhase = ''
+                runHook preInstall
+                cp -r dist $out
+                runHook postInstall
+              '';
+            });
+
+            default = config.packages.sable;
+
+            android-emulator = androidEnv.emulateApp {
+              name = "emulate-sable";
+              platformVersion = platformVersion;
+              abiVersion = "x86_64"; # arm64-v8a
+              systemImageType = systemImageType;
             };
-
-            nativeBuildInputs = pnpmNativeBuildInputs;
-
-            env.VITE_BUILD_HASH = self.shortRev or self.dirtyShortRev or "";
-            env.SABLE_BUILD_FLAVOR = "stable";
-
-            buildPhase = ''
-              runHook preBuild
-              pnpm run build
-              runHook postBuild
-            '';
-
-            installPhase = ''
-              runHook preInstall
-              cp -r dist $out
-              runHook postInstall
-            '';
-          });
-
-          packages.android-emulator = androidEnv.emulateApp {
-            name = "emulate-sable";
-            platformVersion = platformVersion;
-            abiVersion = "x86_64"; # arm64-v8a
-            systemImageType = systemImageType;
           };
-
-          packages.default = config.packages.sable;
 
           checks = {
             build = config.packages.sable;
@@ -283,33 +326,44 @@
 
           devShells = {
             default = pkgs.mkShell {
-              inherit buildInputs nativeBuildInputs;
+              packages = webPackages;
+            };
 
-              packages = defaultPackages;
+            desktop = pkgs.mkShell {
+              packages = webPackages ++ [
+                rust
+                pkgs.cargo-tauri
+                pkgs.desktop-file-utils
+                pkgs.pkg-config
+                pkgs.xdg-utils
+              ];
 
-              LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (nativeBuildInputs ++ buildInputs);
+              buildInputs = linuxDesktopBuildInputs;
 
+              CEF_PATH = "${cefFlat}";
               GIO_EXTRA_MODULES = "${pkgs.glib-networking}/lib/gio/modules";
-              GST_PLUGIN_SYSTEM_PATH = "${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0";
-
+              GDK_PIXBUF_MODULE_FILE = "${pkgs.librsvg}/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache";
+              GST_PLUGIN_SYSTEM_PATH_1_0 = lib.makeSearchPathOutput "lib" "lib/gstreamer-1.0" gstPlugins;
+              LD_LIBRARY_PATH = lib.concatStringsSep ":" [
+                (lib.makeLibraryPath (linuxRuntimeLibs ++ linuxDesktopBuildInputs))
+                "${pkgs.addDriverRunpath.driverLink}/lib"
+                "${cefFlat}"
+              ];
               RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
             };
 
             android = pkgs.mkShell rec {
-              inherit buildInputs nativeBuildInputs;
-
-              packages = defaultPackages ++ [
+              packages = webPackages ++ [
+                rust
+                pkgs.cargo-tauri
+                pkgs.pkg-config
                 android-sdk
+                pkgs.jdk
               ];
-
-              LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (nativeBuildInputs ++ buildInputs);
 
               ANDROID_HOME = "${androidComp.androidsdk}/libexec/android-sdk";
               ANDROID_SDK_ROOT = "${androidComp.androidsdk}/libexec/android-sdk";
               ANDROID_NDK_ROOT = "${androidComp.androidsdk}/libexec/android-sdk/ndk-bundle";
-
-              GIO_EXTRA_MODULES = "${pkgs.glib-networking}/lib/gio/modules";
-              GST_PLUGIN_SYSTEM_PATH = "${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0";
 
               GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${ANDROID_SDK_ROOT}/build-tools/35.0.0/aapt2";
 
