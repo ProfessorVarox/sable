@@ -43,6 +43,26 @@ type PollResponse = {
     answers: string[];
   };
 };
+
+export function getPollResponseAnswers(mEvent: MatrixEvent): string[] | undefined {
+  const response = M_POLL_RESPONSE.findIn<{ answers?: unknown } | undefined>(mEvent.getContent());
+  if (!Array.isArray(response?.answers)) return undefined;
+  return response.answers.filter((answer): answer is string => typeof answer === 'string');
+}
+
+const isPollEnd = (mEvent: MatrixEvent): boolean =>
+  M_POLL_END.includedIn(Object.keys(mEvent.getContent()));
+
+export function getCountedSelections(
+  mEvent: MatrixEvent,
+  answerIds: Set<string>,
+  maxSelections: number
+): string[] {
+  const selections = getPollResponseAnswers(mEvent)?.slice(0, maxSelections);
+  if (!selections?.length || selections.some((id) => !answerIds.has(id))) return [];
+  return [...new Set(selections)];
+}
+
 export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
   const eventId = mEvent.getId();
   const userId = mx.getUserId() ?? '';
@@ -52,9 +72,9 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
 
   const poll = content[M_POLL_START.name] as PollStartSubtype;
   const questionBody = (poll?.question as { body?: string })?.body ?? '';
-  const answers = (poll as { answers: PollAnswerItem[] })?.answers;
-  const maxSelections = (poll as { max_selections: number })?.max_selections;
-  const isDisclosed = (poll as { kind: string })?.kind === M_POLL_KIND_DISCLOSED.name;
+  const answers = (poll as { answers?: PollAnswerItem[] })?.answers ?? [];
+  const maxSelections = (poll as { max_selections?: number })?.max_selections ?? 1;
+  const isDisclosed = M_POLL_KIND_DISCLOSED.matches((poll as { kind?: string })?.kind ?? '');
   const canEnd =
     userId === mEvent.sender?.userId || roomState?.maySendRedactionForEvent(mEvent, userId);
 
@@ -70,7 +90,7 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
       events.findLastIndex((item) => {
         const itemSender = item.getSender();
         return (
-          M_POLL_END.name in item.getContent() &&
+          isPollEnd(item) &&
           typeof item.getSender() === 'string' &&
           pollSender &&
           itemSender &&
@@ -142,7 +162,7 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
   let filteredChildEvents: MatrixEvent[] = [];
   if (isDisclosed || isEnded)
     finalArray?.forEach((item) => {
-      if (M_POLL_END.name in item.getContent()) {
+      if (isPollEnd(item)) {
         return;
       }
       if (item.event.sender && !voters.has(item.event.sender)) {
@@ -151,30 +171,27 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
       }
     });
 
+  const answerIds = new Set(answers.map((item) => item.id));
+
   filteredChildEvents?.forEach((item) => {
-    const VoteContent = item.getContent();
-    const response = VoteContent[M_POLL_RESPONSE.name];
-    const selections = response?.answers;
-    if (selections.length > maxSelections || selections.length === 0) {
+    const counted = getCountedSelections(item, answerIds, maxSelections);
+    if (counted.length === 0) {
       if (item.event.sender) voters.delete(item.event.sender);
       return;
     }
 
-    selections.forEach((selection: string) => {
-      if (votes[selection] !== undefined) votes[selection] += 1;
+    counted.forEach((selection) => {
+      votes[selection] = (votes[selection] ?? 0) + 1;
     });
   });
-  const totalVotes = Object.values(votes).reduce((a, b) => a + b);
+  const totalVotes = Object.values(votes).reduce((a, b) => a + b, 0);
 
   const userSelectionEvent =
     filteredChildEvents.length > 0
       ? filteredChildEvents.find((item) => item.event.sender === userId)
       : finalArray.find((item) => item.event.sender === userId);
-  const userSelectionContent = userSelectionEvent?.getContent();
-  const userSelection: string[] = userSelectionContent
-    ? userSelectionContent[M_POLL_RESPONSE.name]?.answers
-    : undefined;
-  const hasVoted = userSelection?.length > 0;
+  const userSelection = userSelectionEvent ? getPollResponseAnswers(userSelectionEvent) : undefined;
+  const hasVoted = (userSelection?.length ?? 0) > 0;
   const showAnswers = (isDisclosed && (hasVoted || isSnooping)) || isEnded;
 
   function handleNewVote(id: string) {
@@ -339,6 +356,7 @@ export function PollEvent({ content, mEvent, mx, room }: PollEventProps) {
             <PollResponsesViewer
               room={room}
               answers={answers}
+              maxSelections={maxSelections}
               events={filteredChildEvents}
               initialSelection={ViewVotersAnswer}
               onClose={() => setViewVotersAnswer(undefined)}

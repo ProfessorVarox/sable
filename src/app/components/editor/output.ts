@@ -1,15 +1,16 @@
-import type { Descendant, Editor } from 'slate';
-import { Text } from 'slate';
+import type { EditorDocument, EditorParagraph, EditorText, InlineToken } from './model';
+import { editorDocumentText, isEditorText } from './model';
 import type { MatrixClient, Room } from '$types/matrix-sdk';
 import { sanitizeText } from '$utils/sanitize';
 import { markdownToHtml, injectDataMd } from '$plugins/markdown';
 import { sanitizeForRegex } from '$utils/regex';
 import { getMxIdLocalPart, isUserId } from '$utils/matrix';
 import { getMemberDisplayName } from '$utils/room/display';
-import type { CustomElement } from './slate';
 import { BlockType } from './types';
 import { getMarkdownCodeSpanRanges, isInsideMarkdownCodeSpan } from './utils';
 import { MATRIX_TO_BASE, testMatrixTo } from '$plugins/matrix-to';
+
+type EditorNode = EditorParagraph | InlineToken;
 
 export type OutputOptions = {
   /**
@@ -25,7 +26,7 @@ export type OutputOptions = {
   room?: Room;
 };
 
-const textToCustomHtml = (node: Text): string => sanitizeText(node.text);
+const textToCustomHtml = (node: EditorText): string => sanitizeText(node.text);
 
 const markdownInlineLinkLabel = (label: string, fallback: string): string => {
   const t = label.trim();
@@ -45,7 +46,7 @@ const userMentionMarkdownLinkLabel = (userId: string, room: Room | undefined): s
 };
 
 const elementToCustomHtml = (
-  node: CustomElement,
+  node: Exclude<EditorParagraph | InlineToken, EditorText>,
   children: string,
   opts: OutputOptions
 ): string => {
@@ -91,17 +92,17 @@ const elementToCustomHtml = (
 };
 
 /**
- * convert slate internal representation to a custom HTML string that can be sent to the server
- * @param node slate node
+ * Convert Sable's engine-neutral representation to Matrix custom HTML.
+ * @param node Sable editor document or token
  * @param opts options for output
  * @returns custom HTML string
  */
 export const toMatrixCustomHTML = (
-  node: Descendant | Descendant[],
+  node: EditorDocument | EditorParagraph | InlineToken,
   opts: OutputOptions
 ): string => {
   let markdownLines = '';
-  const parseNode = (n: Descendant, index: number, targetNodes: Descendant[]) => {
+  const parseNode = (n: EditorNode, index: number, targetNodes: readonly EditorNode[]) => {
     if ('type' in n && n.type === BlockType.Paragraph) {
       let line = toMatrixCustomHTML(n, opts);
 
@@ -129,15 +130,18 @@ export const toMatrixCustomHTML = (
   };
   if (Array.isArray(node))
     return node.map((element, index, array) => parseNode(element, index, array)).join('');
-  if (Text.isText(node)) return textToCustomHtml(node);
+  if (isEditorText(node)) return textToCustomHtml(node);
 
   const children = node.children
-    .map((element, index, array) => parseNode(element, index, array))
+    .map((element, index, array) => parseNode(element, index, array as readonly EditorNode[]))
     .join('');
   return elementToCustomHtml(node, children, opts);
 };
 
-const elementToPlainText = (node: CustomElement, children: string): string => {
+const elementToPlainText = (
+  node: Exclude<EditorParagraph | InlineToken, EditorText>,
+  children: string
+): string => {
   switch (node.type) {
     case BlockType.Paragraph:
       return `${children}\n`;
@@ -160,15 +164,15 @@ export const LINKINPUTREGEX = new RegExp(`\\(?(${LINK_URL})\\)?`, 'g');
 const SPOILEREDLINKINPUTREGEX = new RegExp(`<(${LINK_URL})>`, 'g');
 const SPOILEREDLINKDIRECTREGEX = new RegExp(`\\|\\|(${LINK_URL})\\|\\|`, 'g');
 /**
- * convert slate internal representation to a plain text string that can be sent to the server
- * @param node the slate node
+ * Convert Sable's engine-neutral representation to a plain text string that can be sent to the server.
+ * @param node the Sable editor document or token
  * @param isMarkdown set true if it's a markdown formatted text
  * @param stripNickname whether to strip nicknames
  * @param nickNameReplacement the nickname replacement
  * @returns the plain text we want to send
  */
 export const toPlainText = (
-  node: Descendant | Descendant[],
+  node: EditorDocument | EditorParagraph | InlineToken,
   stripNickname = false,
   stripSpoilers = true,
   nickNameReplacement?: Map<RegExp, string>
@@ -177,7 +181,7 @@ export const toPlainText = (
     return node
       .map((n) => toPlainText(n, stripNickname, stripSpoilers, nickNameReplacement))
       .join('');
-  if (Text.isText(node)) {
+  if (isEditorText(node)) {
     let { text } = node;
 
     if (stripSpoilers) {
@@ -197,31 +201,6 @@ export const toPlainText = (
     .map((n) => toPlainText(n, stripNickname, stripSpoilers, nickNameReplacement))
     .join('');
   return elementToPlainText(node, children);
-};
-
-/**
- * Convert slate internal representation to a raw plain text string without any replacements.
- * This is used for link extraction to ensure we have the full context for markdown blocks.
- */
-const toRawText = (node: Descendant | Descendant[]): string => {
-  if (Array.isArray(node)) return node.map(toRawText).join('');
-  if (Text.isText(node)) return node.text;
-
-  const children = node.children.map(toRawText).join('');
-  switch (node.type) {
-    case BlockType.Paragraph:
-      return `${children}\n`;
-    case BlockType.Link:
-      return `[${children}](${node.href})`;
-    case BlockType.Emoticon:
-      return node.key?.startsWith('mxc://') ? `:${node.shortcode}:` : (node.key ?? '');
-    case BlockType.Mention:
-      return node.name === '@room' ? node.name : node.id;
-    case BlockType.Command:
-      return `/${node.command}`;
-    default:
-      return children;
-  }
 };
 
 /**
@@ -266,17 +245,25 @@ export type MentionsData = {
  * get the mentions in a message
  * @param mx the matrix client
  * @param roomId the room id we will send the message in
- * @param editor the slate editor
+ * @param document the current Sable editor document
  * @returns the mentions in a message {@link MentionsData}
  */
-export const getMentions = (mx: MatrixClient, roomId: string, editor: Editor): MentionsData => {
+export const getMentions = (
+  mx: MatrixClient,
+  roomId: string,
+  document: { children: EditorDocument }
+): MentionsData => {
   const mentionData: MentionsData = {
     room: false,
     users: new Set(),
   };
 
-  const parseMentions = (node: Descendant): void => {
-    if (Text.isText(node)) return;
+  const parseMentions = (node: InlineToken | EditorDocument[number]): void => {
+    if (!('type' in node)) return;
+    if (node.type === BlockType.Paragraph) {
+      node.children.forEach(parseMentions);
+      return;
+    }
 
     if (node.type === BlockType.Mention) {
       if (node.name === '@room') {
@@ -293,13 +280,16 @@ export const getMentions = (mx: MatrixClient, roomId: string, editor: Editor): M
     node.children.forEach(parseMentions);
   };
 
-  editor.children.forEach(parseMentions);
+  document.children.forEach(parseMentions);
 
   return mentionData;
 };
 
-export const getLinks = (serialized: Descendant | Descendant[]): string[] | undefined => {
-  const text = toRawText(serialized);
+/** Link extraction for the engine-neutral document used by outgoing messages. */
+export const getDocumentLinks = (document: EditorDocument): string[] | undefined =>
+  linksFromText(editorDocumentText(document));
+
+const linksFromText = (text: string): string[] | undefined => {
   const finalList = new Set<string>();
 
   // 1. Find all potential URLs

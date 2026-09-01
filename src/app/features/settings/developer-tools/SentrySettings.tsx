@@ -12,6 +12,7 @@ const ALL_CATEGORIES: LogCategory[] = [
   'network',
   'notification',
   'message',
+  'media',
   'call',
   'ui',
   'timeline',

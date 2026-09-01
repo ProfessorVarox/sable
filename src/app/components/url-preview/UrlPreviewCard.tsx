@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Children, useCallback, useEffect, useRef, useState } from 'react';
 import type { MatrixClient } from '$types/matrix-sdk';
 import type { IPreviewUrlResponse } from '$types/matrix-sdk';
-import { Box, IconButton, Scroll, Spinner, Text, as, color, config, toRem } from 'folds';
+import { Box, IconButton, Scroll, Text, as, color, config, toRem } from 'folds';
 import { ArrowLeft, ArrowRight, sizedIcon } from '$components/icons/phosphor';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -12,6 +12,7 @@ import * as css from './UrlPreviewCard.css';
 import * as urlPreviewChrome from './UrlPreview.css';
 import { UrlPreview, UrlPreviewContent, UrlPreviewDescription } from './UrlPreview';
 import { AudioContent, ImageContent, VideoContent } from '../message';
+import { LinePlaceholder } from '../message/placeholder';
 import { Image, MediaControl, Video } from '../media';
 import { ImageViewer } from '../image-viewer';
 import { useSetting } from '$state/hooks/settings';
@@ -36,6 +37,61 @@ const getClientCache = (mx: MatrixClient): Map<string, Promise<IPreviewUrlRespon
     previewRequestCache.set(mx, clientCache);
   }
   return clientCache;
+};
+
+// Settled outcomes are kept so a row scrolled back into view renders at its final size.
+type SettledPreview = { data: IPreviewUrlResponse } | { failed: true };
+
+const PREVIEW_RESULT_LIMIT = 500;
+const previewResultCache = new WeakMap<MatrixClient, Map<string, SettledPreview>>();
+
+const getResultCache = (mx: MatrixClient): Map<string, SettledPreview> => {
+  let resultCache = previewResultCache.get(mx);
+  if (!resultCache) {
+    resultCache = new Map();
+    previewResultCache.set(mx, resultCache);
+  }
+  return resultCache;
+};
+
+const rememberPreview = (mx: MatrixClient, url: string, settled: SettledPreview): void => {
+  const resultCache = getResultCache(mx);
+  resultCache.set(url, settled);
+  const oldest = resultCache.keys().next();
+  if (resultCache.size > PREVIEW_RESULT_LIMIT && !oldest.done) resultCache.delete(oldest.value);
+};
+
+const requestUrlPreview = (
+  mx: MatrixClient,
+  url: string,
+  ts: number
+): Promise<IPreviewUrlResponse | null> => {
+  const remembered = getResultCache(mx).get(url);
+  if (remembered) {
+    return 'failed' in remembered
+      ? Promise.reject(new Error('preview previously refused'))
+      : Promise.resolve(remembered.data);
+  }
+  const clientCache = getClientCache(mx);
+  const cached = clientCache.get(url);
+  if (cached !== undefined) return cached;
+  const previewResult = mx?.getUrlPreview(url, ts);
+  if (!previewResult) return Promise.resolve(null);
+  clientCache.set(url, previewResult);
+  previewResult
+    .then((data) => rememberPreview(mx, url, { data }))
+    .catch(() => rememberPreview(mx, url, { failed: true }))
+    .finally(() => clientCache.delete(url));
+  return previewResult;
+};
+
+// A card whose result is already cached renders at its final height, so it never grows in place.
+export const prefetchUrlPreview = (mx: MatrixClient, url: string, ts: number): Promise<void> => {
+  if (getResultCache(mx).has(url) || getClientCache(mx).has(url)) return Promise.resolve();
+  return requestUrlPreview(mx, url, ts).then(
+    () => undefined,
+    () => undefined
+  );
 };
 
 const openMediaInNewTab = async (url: string | undefined) => {
@@ -99,19 +155,12 @@ export const UrlPreviewCard = as<
   const [linkPreviewImageMaxHeight] = useSetting(settingsAtom, 'linkPreviewImageMaxHeight');
   const [mediaAutoLoad] = useSetting(settingsAtom, 'mediaAutoLoad');
 
+  const settled = urlPreview && ts ? getResultCache(mx).get(url) : undefined;
+
   const [previewStatus, loadPreview] = useAsyncCallback(
     useCallback(() => {
       if (!ts && !bundle) return Promise.resolve(null);
-      if (urlPreview && ts) {
-        const clientCache = getClientCache(mx);
-        const cached = clientCache.get(url);
-        if (cached !== undefined) return cached;
-        const previewResult = mx?.getUrlPreview(url, ts);
-        if (!previewResult) return Promise.resolve(null);
-        clientCache.set(url, previewResult);
-        previewResult.finally(() => clientCache.delete(url)).catch(() => {});
-        return previewResult;
-      }
+      if (urlPreview && ts) return requestUrlPreview(mx, url, ts);
       return Promise.resolve(bundle);
     }, [ts, bundle, urlPreview, mx, url])
   );
@@ -122,7 +171,10 @@ export const UrlPreviewCard = as<
     loadPreview().catch(() => undefined);
   }, [url, loadPreview]);
 
-  if (previewStatus.status === AsyncStatus.Error) return null;
+  const failed = previewStatus.status === AsyncStatus.Error || (settled && 'failed' in settled);
+
+  // Holding space for a card that never arrives leaves a permanent hole in the message.
+  if (failed) return null;
 
   const renderContent = (prev: IPreviewUrlResponse) => {
     const siteName = prev['og:site_name'];
@@ -335,10 +387,17 @@ export const UrlPreviewCard = as<
     );
   };
 
+  const resolved: IPreviewUrlResponse | null | undefined =
+    settled && !('failed' in settled)
+      ? settled.data
+      : previewStatus.status === AsyncStatus.Success
+        ? (previewStatus.data as IPreviewUrlResponse | null)
+        : undefined;
+
   let previewContent;
-  if (previewStatus.status === AsyncStatus.Success) {
-    previewContent = previewStatus.data ? (
-      renderContent(previewStatus.data)
+  if (resolved !== undefined) {
+    previewContent = resolved ? (
+      renderContent(resolved)
     ) : (
       <UrlPreviewContent>
         <Text
@@ -356,26 +415,27 @@ export const UrlPreviewCard = as<
       </UrlPreviewContent>
     );
   } else {
+    // Kept midway between a refused preview and a text card: whichever lands, the height
+    // this was wrong by is as small as it can be.
     previewContent = (
-      <Box grow="Yes" alignItems="Center" justifyContent="Center">
-        <Spinner variant="Secondary" size="400" />
+      <Box grow="Yes" direction="Column" style={{ overflow: 'hidden', width: '100%' }}>
+        <UrlPreviewContent style={{ minWidth: 0 }}>
+          <LinePlaceholder style={{ maxWidth: toRem(160) }} />
+          <LinePlaceholder style={{ maxWidth: toRem(240) }} />
+        </UrlPreviewContent>
       </Box>
     );
   }
   return (
-    <UrlPreview
-      {...props}
-      ref={ref}
-      style={{
-        alignSelf: 'start',
-      }}
-    >
+    <UrlPreview {...props} ref={ref} style={{ alignSelf: 'start' }}>
       {previewContent}
     </UrlPreview>
   );
 });
 
 export const UrlPreviewHolder = as<'div'>(({ children, ...props }, ref) => {
+  // An empty holder still contributes its top margin, e.g. when every widget kind is disabled.
+  const hasCard = Children.toArray(children).length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerBoxRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -424,6 +484,8 @@ export const UrlPreviewHolder = as<'div'>(({ children, ...props }, ref) => {
       behavior: 'smooth',
     });
   };
+
+  if (!hasCard) return null;
 
   return (
     <Box

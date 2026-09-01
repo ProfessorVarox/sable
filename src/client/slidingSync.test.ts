@@ -459,6 +459,7 @@ describe('SlidingSyncManager initial request', () => {
     const room = {
       getMember: vi.fn<() => undefined>(),
       currentState: { setStateEvents: vi.fn<() => void>() },
+      getLiveTimeline: () => ({ getEvents: () => [] }),
     };
     const manager = makeManager(
       makeMockMx({
@@ -828,6 +829,27 @@ describe('SlidingSyncManager room subscription coordination', () => {
     await Promise.resolve();
     expect(mocks.slidingSyncInstance.modifyRoomSubscriptions).toHaveBeenLastCalledWith(
       new Set([roomId])
+    );
+  });
+
+  it('keeps the space subscription when a space is first hydrated in the sidebar', async () => {
+    const manager = makeManager(makeMockMx());
+    const roomId = '!space:example.com';
+    const internals = manager as unknown as {
+      listsFullyLoaded: boolean;
+      initialListHydrationCompleted: boolean;
+    };
+    internals.listsFullyLoaded = true;
+    internals.initialListHydrationCompleted = true;
+    manager.attach();
+
+    manager.setSpaceSubscriptions([roomId]);
+    fireRoomData(roomId, { initial: true });
+    await Promise.resolve();
+
+    expect(mocks.slidingSyncInstance.useCustomSubscription).toHaveBeenLastCalledWith(
+      roomId,
+      'space'
     );
   });
 
@@ -1791,6 +1813,111 @@ describe('SlidingSyncManager pause/resume', () => {
     manager.attach();
 
     await expect(manager.waitForResume()).resolves.toBeUndefined();
+  });
+
+  it('keeps draining when the first poll lands before the to-device message arrives', () => {
+    const manager = makeManager(makeMockMx());
+    manager.attach();
+    manager.pause();
+
+    manager.requestPushDrain();
+    expect(manager.isDrainingPush()).toBe(true);
+
+    fireLifecycle(SlidingSyncState.Complete, { extensions: { to_device: { events: [] } } });
+    expect(manager.isDrainingPush()).toBe(true);
+
+    fireLifecycle(SlidingSyncState.Complete, {
+      extensions: { to_device: { events: [{ type: 'm.room.key' }] } },
+    });
+    expect(manager.isDrainingPush()).toBe(true);
+
+    fireLifecycle(SlidingSyncState.Complete, { extensions: { to_device: { events: [] } } });
+    expect(manager.isDrainingPush()).toBe(false);
+  });
+
+  it('keeps draining while to-device still carries events', () => {
+    const manager = makeManager(makeMockMx());
+    manager.attach();
+    manager.requestPushDrain();
+
+    const withKeys = { extensions: { to_device: { events: [{ type: 'm.room.key' }] } } };
+    fireLifecycle(SlidingSyncState.Complete, withKeys);
+    expect(manager.isDrainingPush()).toBe(true);
+
+    fireLifecycle(SlidingSyncState.Complete, { extensions: { to_device: { events: [] } } });
+    expect(manager.isDrainingPush()).toBe(false);
+  });
+
+  it('gives up once the budget of empty polls runs out', () => {
+    const MAX_PUSH_DRAIN_POLLS = 5;
+    const manager = makeManager(makeMockMx());
+    manager.attach();
+    manager.requestPushDrain();
+
+    const empty = { extensions: { to_device: { events: [] } } };
+    for (let i = 0; i < MAX_PUSH_DRAIN_POLLS; i += 1) {
+      expect(manager.isDrainingPush()).toBe(true);
+      fireLifecycle(SlidingSyncState.Complete, empty);
+    }
+
+    expect(manager.isDrainingPush()).toBe(false);
+  });
+
+  it('does not spend the poll budget while to-device events keep arriving', () => {
+    const manager = makeManager(makeMockMx());
+    manager.attach();
+    manager.requestPushDrain();
+
+    const withKeys = { extensions: { to_device: { events: [{ type: 'm.room.key' }] } } };
+    for (let i = 0; i < 20; i += 1) {
+      fireLifecycle(SlidingSyncState.Complete, withKeys);
+      expect(manager.isDrainingPush()).toBe(true);
+    }
+
+    fireLifecycle(SlidingSyncState.Complete, { extensions: { to_device: { events: [] } } });
+    expect(manager.isDrainingPush()).toBe(false);
+  });
+
+  it('stops draining when no poll ever completes', () => {
+    vi.useFakeTimers();
+    try {
+      const manager = makeManager(makeMockMx());
+      manager.attach();
+      manager.requestPushDrain();
+      expect(manager.isDrainingPush()).toBe(true);
+
+      vi.advanceTimersByTime(120_000);
+
+      expect(manager.isDrainingPush()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not park the transport when a drain settles', () => {
+    const manager = makeManager(makeMockMx());
+    manager.attach();
+    manager.requestPushDrain();
+
+    fireLifecycle(SlidingSyncState.Complete, { extensions: { to_device: { events: [] } } });
+
+    expect(manager.isPaused()).toBe(false);
+  });
+
+  it('reports pause and drain transitions to transport-state listeners', () => {
+    const manager = makeManager(makeMockMx());
+    manager.attach();
+    const listener = vi.fn<() => void>();
+    const unsubscribe = manager.onTransportStateChange(listener);
+
+    manager.pause();
+    manager.resume();
+    manager.requestPushDrain();
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
+    manager.pause();
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it('silences the poll watchdog while paused', () => {

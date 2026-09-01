@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
@@ -16,7 +16,7 @@ import {
 import { TooltipProvider } from '$components/overlay-stack';
 import { Eye, EyeSlash, menuIcon, sizedIcon, Play, Warning } from '$components/icons/phosphor';
 import classNames from 'classnames';
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { isTauri } from '@tauri-apps/api/core';
 import { BlurhashCanvas } from 'react-blurhash';
 import type { EncryptedAttachmentInfo } from 'browser-encrypt-attachment';
 import type { IThumbnailContent, IVideoInfo } from '$types/matrix/common';
@@ -30,7 +30,11 @@ import {
   mxcUrlToHttp,
   rewriteAuthenticatedMediaUrl,
 } from '$utils/matrix';
-import { addTauriMediaRetryRevision, getTauriMediaRetryTarget } from '$utils/mediaUrl';
+import {
+  addTauriMediaRetryRevision,
+  getTauriMediaRetryTarget,
+  prepareLoopbackMedia,
+} from '$utils/mediaUrl';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useCreateObjectURL } from '$hooks/useObjectURL';
@@ -38,13 +42,27 @@ import { validBlurHash } from '$utils/blurHash';
 import * as css from './style.css';
 import { MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME } from '../../../../unstable/prefixes';
 import { probeSWMediaAuthSupport } from '$utils/swMediaAuth';
-import { isAndroidTauri } from '$utils/platform';
+import { createDebugLogger } from '$utils/debugLogger';
+
+const logger = createDebugLogger('videoContent');
+
+// Diagnostics bundles drop the `data` field, so details have to go in the message.
+// URLs are redacted there, hence the scheme only.
+const srcScheme = (src: string): string => src.split(':', 1)[0] ?? 'unknown';
+
+const MEDIA_ERROR_CODES: Record<number, string> = {
+  1: 'ABORTED',
+  2: 'NETWORK',
+  3: 'DECODE',
+  4: 'SRC_NOT_SUPPORTED',
+};
 
 type RenderVideoProps = {
   title: string;
   src: string;
-  onLoadedMetadata: () => void;
-  onError: () => void;
+  // Base SyntheticEvent because ClientPreview renders an <iframe> through this slot.
+  onLoadedMetadata: (event: SyntheticEvent) => void;
+  onError: (event: SyntheticEvent) => void;
   autoPlay: boolean;
   controls: boolean;
   crossOrigin?: 'anonymous';
@@ -105,14 +123,10 @@ export const VideoContent = as<'div', VideoContentProps>(
 
         const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
         if (!mediaUrl) throw new Error('Invalid media URL');
-        const prepareAndroidLoopback = (source: string) =>
-          isAndroidTauri()
-            ? invoke<string>('prepare_loopback_video', { url: source })
-            : Promise.resolve(source);
         if (!encInfo) {
           if (isTauri()) {
             const attemptedTarget = addTauriMediaRetryRevision(mediaUrl, retryRevisionRef.current);
-            return prepareAndroidLoopback(attemptedTarget);
+            return prepareLoopbackMedia(attemptedTarget);
           }
           // Stream through the service worker only after it proved media-auth
           // support; a stale SW build would otherwise serve the bare URL to
@@ -125,7 +139,7 @@ export const VideoContent = as<'div', VideoContentProps>(
             getTauriMediaRetryTarget(mediaUrl, retryRevisionRef.current) ?? mediaUrl;
           await setMediaEncryption(attemptedTarget, encInfo, mimeType);
           const source = rewriteAuthenticatedMediaUrl(attemptedTarget)!;
-          return prepareAndroidLoopback(source);
+          return prepareLoopbackMedia(source);
         }
         return createObjectURL(
           downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))
@@ -138,19 +152,54 @@ export const VideoContent = as<'div', VideoContentProps>(
     useEffect(() => {
       if (srcState.status === AsyncStatus.Success) {
         setError(false);
+        logger.info(
+          'media',
+          `Video source resolved: mime=${mimeType || 'unset'} scheme=${srcScheme(srcState.data)} ` +
+            `encrypted=${Boolean(encInfo)} size=${info.size ?? 'unknown'} ` +
+            `canPlayType=${document.createElement('video').canPlayType(mimeType) || 'no'} ` +
+            `attempt=${retryRevisionRef.current}`
+        );
       }
-    }, [srcState.status]);
+      if (srcState.status === AsyncStatus.Error) {
+        logger.error(
+          'media',
+          `Video source failed: mime=${mimeType || 'unset'} encrypted=${Boolean(encInfo)} ` +
+            `attempt=${retryRevisionRef.current}`,
+          srcState.error instanceof Error ? srcState.error : undefined
+        );
+      }
+    }, [srcState, mimeType, encInfo, info.size]);
 
     const streamsAuthenticatedMedia =
       srcState.status === AsyncStatus.Success &&
       !url.startsWith('http') &&
       !srcState.data.startsWith('blob:');
 
-    const handleLoad = () => {
+    const handleLoad = (event: SyntheticEvent) => {
+      const video = event.currentTarget;
+      if (video instanceof HTMLVideoElement) {
+        logger.info(
+          'media',
+          `Video metadata loaded: mime=${mimeType || 'unset'} ` +
+            `dimensions=${video.videoWidth}x${video.videoHeight} duration=${video.duration}`
+        );
+      }
       setLoad(true);
       setError(false);
     };
-    const handleError = () => {
+    const handleError = (event: SyntheticEvent) => {
+      const video = event.currentTarget;
+      if (video instanceof HTMLVideoElement) {
+        const code = video.error?.code;
+        logger.error(
+          'media',
+          `Video element error: code=${code ?? 'none'}(${(code && MEDIA_ERROR_CODES[code]) || 'unknown'}) ` +
+            `message=${video.error?.message || 'none'} mime=${mimeType || 'unset'} ` +
+            `scheme=${srcScheme(video.currentSrc || video.src)} encrypted=${Boolean(encInfo)} ` +
+            `readyState=${video.readyState} networkState=${video.networkState} ` +
+            `attempt=${retryRevisionRef.current} sourceStatus=${srcState.status}`
+        );
+      }
       // Only show the error if the source download already succeeded — if
       // it's still loading the video element may fire a transient error
       // before the blob URL is ready.

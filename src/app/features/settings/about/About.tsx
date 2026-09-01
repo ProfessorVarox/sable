@@ -10,7 +10,7 @@ import { useMatrixClient } from '$hooks/useMatrixClient';
 import { Method } from '$types/matrix-sdk';
 import { useOpenShallowRoute } from '$pages/client/useShallowRoute';
 import { getBugReportPath } from '$pages/pathUtils';
-import { isDesktopTauri } from '$utils/platform';
+import { isDesktopTauri, isDesktopUpdaterEnabled } from '$utils/platform';
 import {
   updatePhaseAtom,
   updateBannerVisibleAtom,
@@ -299,7 +299,7 @@ export function About({ requestBack, requestClose }: Readonly<AboutProps>) {
               </Box>
               <Box direction="Column" gap="100">
                 <Text size="L400">Options</Text>
-                {isDesktopTauri() && (
+                {isDesktopTauri() && isDesktopUpdaterEnabled() && (
                   <SequenceCard
                     className={SequenceCardStyle}
                     variant="SurfaceVariant"

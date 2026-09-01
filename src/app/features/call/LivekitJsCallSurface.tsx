@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom } from 'jotai';
 import { Box, Button, color, config, Text, toRem } from 'folds';
 import {
   CarouselLayout,
@@ -10,7 +10,6 @@ import {
   FocusLayoutContainer,
   GridLayout,
   ParticipantTile,
-  RoomAudioRenderer,
   RoomContext,
   TrackMutedIndicator,
   TrackToggle,
@@ -28,7 +27,6 @@ import { useCallMembers, useCallSession } from '$hooks/useCall';
 import { useRoom } from '$hooks/useRoom';
 import {
   livekitJsCallInitialMediaAppliedAtom,
-  livekitJsCallSoundAtom,
   type LivekitJsCallMedia,
 } from '$state/livekitJsCall';
 import { buildRtcIdentityMap, type UserIdByRtcIdentity } from '@sableclient/matrixrtc';
@@ -298,7 +296,6 @@ function LivekitJsCallContent({
   const [deviceError, setDeviceError] = useState<string | undefined>(undefined);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const { localParticipant } = useLocalParticipant();
-  const soundEnabled = useAtomValue(livekitJsCallSoundAtom);
   const [appliedInitialMedia, setAppliedInitialMedia] = useAtom(
     livekitJsCallInitialMediaAppliedAtom
   );
@@ -362,7 +359,6 @@ function LivekitJsCallContent({
       onPointerDown={revealControls}
       onFocusCapture={() => setControlsVisible(true)}
     >
-      <RoomAudioRenderer muted={!soundEnabled} />
       <Box style={{ position: 'absolute', inset: 0, padding: config.space.S200, minHeight: 0 }}>
         {hasVideo ? (
           <MediaLayout tracks={tracks} userIdByIdentity={userIdByIdentity} />
@@ -437,7 +433,9 @@ function LivekitJsCallContent({
               // itself.
               <TrackToggle
                 source={Track.Source.ScreenShare}
-                captureOptions={{ audio: true, selfBrowserSurface: 'exclude' }}
+                // PipeWire portals reliably provide the selected video surface;
+                // requesting system audio can reject the whole capture request.
+                captureOptions={{ audio: false, selfBrowserSurface: 'exclude' }}
                 showIcon
                 aria-label="Share screen"
                 onDeviceError={() => handleDeviceError({ source: Track.Source.ScreenShare })}

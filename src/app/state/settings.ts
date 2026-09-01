@@ -8,6 +8,7 @@ import type {
   PushTransportOverrides,
 } from '$features/settings/notifications/NotificationTransport';
 import type { IImageInfo } from '$types/matrix/common';
+import type { GifProviderSetting } from '$utils/gifProviders';
 import { isLocalImportTweakUrl } from '../theme/localImportUrls';
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from '../keyboard/shortcuts';
 
@@ -129,7 +130,9 @@ export interface Settings {
   editorMicButton: boolean;
   editorEmojiButton: boolean;
   editorGifButton: boolean;
+  gifProvider: GifProviderSetting;
   editorStickerButton: boolean;
+  editorTriggerButtonsMigrated: boolean;
   editorButtonOrder: EditorButtonId[];
   composerToolbarOpen: boolean;
   alwaysInlineEditor: boolean;
@@ -154,6 +157,7 @@ export interface Settings {
   encUrlPreview: boolean;
   clientUrlPreview: boolean;
   encClientUrlPreview: boolean;
+  externalGifAutoLoadEncrypted: boolean;
   clientPreviewYoutube: boolean;
   enableGifPicker: boolean;
   showInteractiveMap: boolean;
@@ -177,6 +181,7 @@ export interface Settings {
 
   hour24Clock: boolean;
   dateFormatString: string;
+  showAllTimestamps: boolean;
 
   developerTools: boolean;
   enableMSC4268CMD: boolean;
@@ -315,8 +320,10 @@ export const defaultSettings: Settings = {
   editorOldAddFile: false,
   editorMicButton: true,
   editorEmojiButton: true,
-  editorGifButton: false,
-  editorStickerButton: false,
+  editorGifButton: true,
+  gifProvider: 'default',
+  editorStickerButton: true,
+  editorTriggerButtonsMigrated: true,
   editorButtonOrder: [...EDITOR_BUTTON_ORDER_DEFAULT],
   composerToolbarOpen: false,
   alwaysInlineEditor: false,
@@ -331,6 +338,7 @@ export const defaultSettings: Settings = {
   encUrlPreview: false,
   clientUrlPreview: false,
   encClientUrlPreview: false,
+  externalGifAutoLoadEncrypted: false,
   clientPreviewYoutube: false,
   enableGifPicker: true,
   showInteractiveMap: true,
@@ -370,6 +378,7 @@ export const defaultSettings: Settings = {
 
   hour24Clock: false,
   dateFormatString: 'D MMM YYYY',
+  showAllTimestamps: false,
 
   developerTools: false,
   settingsSyncEnabled: false,
@@ -519,6 +528,12 @@ function migrateParsedLocalStorage(parsed: Record<string, unknown>): void {
     parsed.saturationLevel = 100;
   }
   delete parsed.monochromeMode;
+
+  if (parsed.editorTriggerButtonsMigrated !== true) {
+    delete parsed.editorGifButton;
+    delete parsed.editorStickerButton;
+    parsed.editorTriggerButtonsMigrated = true;
+  }
 
   if (parsed.nameColorLightnessCorrectionMigrated !== true) {
     delete parsed.nameColorLightnessCorrection;

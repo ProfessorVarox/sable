@@ -108,24 +108,28 @@ export const hydrateRoomMember = (
 // predates most joins keeps a short roster forever. Refill it from the server.
 const BULK_TTL_MS = 5 * 60_000;
 const bulkInFlight = new WeakMap<MatrixClient, Map<string, Promise<void>>>();
-const bulkAttemptedAt = new WeakMap<MatrixClient, Map<string, number>>();
+type BulkAttempt = { at: number; joinedCount: number };
+const bulkAttempts = new WeakMap<MatrixClient, Map<string, BulkAttempt>>();
 
 export const hydrateAllRoomMembers = (mx: MatrixClient, roomId: string): Promise<void> => {
   const room = mx.getRoom(roomId);
   if (!room) return Promise.resolve();
-  if (room.getJoinedMembers().length >= room.getJoinedMemberCount()) return Promise.resolve();
+  const joinedCount = room.getJoinedMemberCount();
+  if (room.getJoinedMembers().length >= joinedCount) return Promise.resolve();
 
-  const attemptedTs = bulkAttemptedAt.get(mx)?.get(roomId);
-  if (attemptedTs !== undefined && Date.now() - attemptedTs < BULK_TTL_MS) return Promise.resolve();
+  // An attempt made against a smaller joined count must not silence the refill.
+  const attempt = bulkAttempts.get(mx)?.get(roomId);
+  if (attempt && Date.now() - attempt.at < BULK_TTL_MS && joinedCount <= attempt.joinedCount)
+    return Promise.resolve();
 
   const pending = bulkInFlight.get(mx) ?? new Map<string, Promise<void>>();
   bulkInFlight.set(mx, pending);
   const existing = pending.get(roomId);
   if (existing) return existing;
 
-  const attempts = bulkAttemptedAt.get(mx) ?? new Map<string, number>();
-  bulkAttemptedAt.set(mx, attempts);
-  attempts.set(roomId, Date.now());
+  const attempts = bulkAttempts.get(mx) ?? new Map<string, BulkAttempt>();
+  bulkAttempts.set(mx, attempts);
+  attempts.set(roomId, { at: Date.now(), joinedCount });
 
   const request = mx
     .members(roomId, undefined, KnownMembership.Leave)

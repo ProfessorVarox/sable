@@ -36,14 +36,18 @@ import { useMenuAnchor } from '$hooks/useMenuAnchor';
 import { useDismissOnBack } from '$utils/androidBack';
 import { useSetting } from '$state/hooks/settings';
 import { isPixelatedRendering, settingsAtom } from '$state/settings';
-import { showToast } from '$state/toast';
+import { showErrorToast } from '$state/toast';
 import { downloadMedia } from '$utils/matrix';
 import * as css from './ImageViewer.css';
 import type { IImageInfo } from '$types/matrix/common';
 import { CheckerboardIcon, CopyIcon, ImagesIcon } from '@phosphor-icons/react';
 import { copyImageToClipboard } from '$utils/dom';
-import { getDownloadFilename, saveFileToDevice, saveMediaToGallery } from '$utils/download';
-import { getTauriMediaSourceUrl } from '$utils/mediaUrl';
+import {
+  getDownloadFilename,
+  reportDownloadFailure,
+  saveFileToDevice,
+  saveMediaToGallery,
+} from '$utils/download';
 import { ResponsiveMenu } from '$components/ResponsiveMenu';
 import { isAndroidTauri, iosApp } from '$utils/platform';
 import { setImmersiveMode } from '$generated/tauri/commands';
@@ -60,6 +64,7 @@ type ImageViewerProps = {
   sentAt?: string;
   onPrevious?: () => void;
   onNext?: () => void;
+  getDownloadBlob?: () => Promise<Blob>;
 };
 
 export const ImageViewer = as<'div', ImageViewerProps>(
@@ -75,6 +80,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
       sentAt,
       onPrevious,
       onNext,
+      getDownloadBlob,
       ...props
     },
     ref
@@ -85,9 +91,9 @@ export const ImageViewer = as<'div', ImageViewerProps>(
 
     useEffect(() => {
       if (!isMobile || !isAndroidTauri()) return undefined;
-      void setImmersiveMode({ enabled: true });
+      setImmersiveMode({ enabled: true }).catch(() => {});
       return () => {
-        void setImmersiveMode({ enabled: false });
+        setImmersiveMode({ enabled: false }).catch(() => {});
       };
     }, [isMobile]);
 
@@ -154,20 +160,37 @@ export const ImageViewer = as<'div', ImageViewerProps>(
     const downloadFilename = getDownloadFilename(filename, alt, 'image');
     const canSaveToGallery = isAndroidTauri() && (galleryMimeType?.startsWith('image/') ?? false);
 
+    const loadDownloadBlob = () => (getDownloadBlob ? getDownloadBlob() : downloadMedia(src));
+
+    const saveToGallery = async () => {
+      try {
+        await saveMediaToGallery(await loadDownloadBlob(), downloadFilename, galleryMimeType!);
+      } catch (error) {
+        reportDownloadFailure(error, 'fetch', downloadFilename, galleryMimeType);
+        const message = error instanceof Error ? error.message : 'unknown error';
+        showErrorToast(`Failed to save to gallery: ${message}`);
+      }
+    };
+
     const handleDownload = async () => {
       if (iosSaveToPhotos) {
-        await saveMediaToGallery(src, downloadFilename, galleryMimeType!);
+        await saveToGallery();
         return;
       }
       let fileContent: Blob;
       try {
-        fileContent = await downloadMedia(getTauriMediaSourceUrl(src) ?? src);
+        fileContent = await loadDownloadBlob();
       } catch (error) {
+        reportDownloadFailure(error, 'fetch', downloadFilename, galleryMimeType);
         const message = error instanceof Error ? error.message : 'unknown error';
-        showToast(`Failed to download file: ${message}`);
+        showErrorToast(`Failed to download file: ${message}`);
         return;
       }
-      await saveFileToDevice(fileContent, downloadFilename);
+      await saveFileToDevice(
+        fileContent,
+        downloadFilename,
+        galleryMimeType || fileContent.type || undefined
+      );
     };
 
     const menu = useMenuAnchor<HTMLElement>();
@@ -206,7 +229,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
     const shareActivation = useMobileTapActivation(isMobile, () => {
       void (async () => {
         try {
-          const blob = await downloadMedia(src);
+          const blob = await loadDownloadBlob();
           const file = new File([blob], downloadFilename, {
             type: blob.type || galleryMimeType || 'application/octet-stream',
           });
@@ -220,7 +243,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
     });
     const copyImageActivation = useMobileTapActivation(isMobile, () => {
       closeMenu();
-      void downloadMedia(src).then(copyImageToClipboard);
+      void loadDownloadBlob().then(copyImageToClipboard);
     });
     const pixelatedMenuActivation = useMobileTapActivation(isMobile, () => {
       setIsPixelated(!isPixelated);
@@ -234,11 +257,7 @@ export const ImageViewer = as<'div', ImageViewerProps>(
     const nextActivation = useMobileTapActivation(isMobile, () => onNext?.());
     const galleryActivation = useMobileTapActivation(isMobile, () => {
       closeMenu();
-      void saveMediaToGallery(
-        getTauriMediaSourceUrl(src) ?? src,
-        downloadFilename,
-        galleryMimeType!
-      );
+      void saveToGallery();
     });
     const resetZoomMenuActivation = useMobileTapActivation(isMobile, () => {
       resetTransforms();

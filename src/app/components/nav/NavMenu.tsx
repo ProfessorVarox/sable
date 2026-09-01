@@ -23,7 +23,7 @@ export const NavMenu = forwardRef<HTMLDivElement, NavMenuProps>(
 
     const handleMarkAsRead = () => {
       if (!unread) return;
-      rooms.forEach((rId) => markAsRead(mx, rId, hideReads));
+      rooms.forEach((rId) => markAsRead(mx, rId, hideReads, true));
       requestClose();
     };
 

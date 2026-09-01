@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import type { Room } from '$types/matrix-sdk';
 
@@ -13,7 +13,7 @@ import { usePowerLevels } from '$hooks/usePowerLevels';
 import { markAsRead } from '$utils/notifications';
 import { copyToClipboard } from '$utils/dom';
 import { confirm } from '$components/confirm/confirm';
-import { showToast } from '$state/toast';
+import { showErrorToast } from '$state/toast';
 import { useOpenRoomSettings } from '$state/hooks/roomSettings';
 import { getMatrixToRoom } from '$plugins/matrix-to';
 import { getViaServers } from '$plugins/via-servers';
@@ -42,6 +42,11 @@ export function useRoomMenuActions(room: Room) {
   const [invitePrompt, setInvitePrompt] = useState(false);
   const [directInvitePrompt, setDirectInvitePrompt] = useState(false);
 
+  // Direct prompt's focus trap re-fires onCancel when it unmounts.
+  const invitePromptRef = useRef(invitePrompt);
+  invitePromptRef.current = invitePrompt;
+  const cancelConsumedRef = useRef(false);
+
   const [convertState, convertToRoom] = useAsyncCallback<void, Error, []>(
     useCallback(async () => {
       await removeRoomIdFromMDirect(mx, room.roomId);
@@ -49,10 +54,11 @@ export function useRoomMenuActions(room: Room) {
   );
 
   const handleMarkAsRead = useCallback(() => {
-    markAsRead(mx, room.roomId, hideReads);
+    markAsRead(mx, room.roomId, hideReads, true);
   }, [mx, room.roomId, hideReads]);
 
   const handleInvite = useCallback(() => {
+    cancelConsumedRef.current = false;
     if (isDirectConversation) {
       setDirectInvitePrompt(true);
       return;
@@ -63,6 +69,14 @@ export function useRoomMenuActions(room: Room) {
   const handleInviteDirect = useCallback(() => {
     setDirectInvitePrompt(false);
     setInvitePrompt(true);
+  }, []);
+
+  const handleDirectInviteCancel = useCallback((closeMenu: () => void) => {
+    setDirectInvitePrompt(false);
+    if (!invitePromptRef.current && !cancelConsumedRef.current) {
+      cancelConsumedRef.current = true;
+      closeMenu();
+    }
   }, []);
 
   const handleConvertAndInvite = useCallback(() => {
@@ -100,7 +114,7 @@ export function useRoomMenuActions(room: Room) {
       await mx.leave(room.roomId);
       return true;
     } catch (e) {
-      showToast(`Failed to leave room: ${e instanceof Error ? e.message : 'unknown error'}`);
+      showErrorToast(`Failed to leave room: ${e instanceof Error ? e.message : 'unknown error'}`);
       return false;
     }
   }, [mx, room.roomId]);
@@ -118,6 +132,7 @@ export function useRoomMenuActions(room: Room) {
     directInvitePrompt,
     setDirectInvitePrompt,
     handleInviteDirect,
+    handleDirectInviteCancel,
     handleConvertAndInvite,
     convertState,
     navigateRoom,

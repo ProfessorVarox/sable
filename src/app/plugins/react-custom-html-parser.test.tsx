@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import type { JSX, ReactEventHandler } from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import parse from 'html-react-parser';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as customHtmlCss from '$styles/CustomHtml.css';
@@ -95,7 +96,7 @@ describe('getReactCustomHtmlParser code blocks', () => {
         language: 'rust',
         allowDetect: false,
       }),
-      expect.anything()
+      undefined
     );
   });
 
@@ -149,7 +150,7 @@ describe('react custom html parser', () => {
     const img = container.querySelector('img');
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute('height', '32');
-    expect(img).toHaveStyle({ width: 'auto', height: '1em' });
+    expect(img).toHaveStyle({ width: 'auto', height: '16px' });
   });
 
   it('clamps incoming inline image height to the configured max', () => {
@@ -493,7 +494,7 @@ describe('react custom html parser', () => {
 describe('matrix: URI mentions', () => {
   const roomMx = () =>
     createMatrixClient({
-      getRoom: () => ({ roomId: '!room:example.org', name: 'Lobby' }),
+      getRoom: () => ({ roomId: '!room:example.org', name: 'Lobby', getMember: () => undefined }),
       getRooms: () => [],
     });
 
@@ -512,6 +513,23 @@ describe('matrix: URI mentions', () => {
       'data-mention-id',
       '@bob:example.org'
     );
+  });
+
+  it.each([
+    ['matrix:u/bob:example.org', '@bob'],
+    ['matrix:roomid/room:example.org', '#Lobby'],
+  ])('routes a matrix: %s mention through the click handler', (href, label) => {
+    const handleMentionClick = vi.fn<ReactEventHandler<HTMLElement>>();
+    const parserOptions = getReactCustomHtmlParser(roomMx(), '!room:example.com', {
+      settingsLinkBaseUrl,
+      linkifyOpts: LINKIFY_OPTS,
+      handleMentionClick,
+    });
+
+    render(<div>{parse(`<a href="${href}">${href}</a>`, parserOptions)}</div>);
+
+    fireEvent.click(screen.getByRole('link', { name: label }));
+    expect(handleMentionClick).toHaveBeenCalledOnce();
   });
 
   it('renders a matrix: room URI with via servers and falls back to the room name', () => {

@@ -70,6 +70,10 @@ export function isDesktopTauri(): boolean {
   return getDesktopTauriPlatform() !== undefined;
 }
 
+export function isDesktopUpdaterEnabled(): boolean {
+  return DESKTOP_UPDATER_ENABLED;
+}
+
 export function isMobileTauri(): boolean {
   const tauriOS = getTauriOS();
   return tauriOS === 'ios' || tauriOS === 'android';
@@ -81,6 +85,14 @@ export function isAndroidTauri(): boolean {
 
 export function isWebKitGtk(): boolean {
   return getTauriOS() === 'linux' && !/Chrome\//.test(window.navigator.userAgent);
+}
+
+// wry forces no-store on Android custom-protocol responses (RustWebViewClient.kt) and CEF does
+// the same; WKWebView, WebView2 and WebKitGTK pass it through.
+export function webviewStripsCustomProtocolCache(): boolean {
+  const tauriOS = getTauriOS();
+  if (tauriOS === 'android') return true;
+  return tauriOS === 'linux' && !isWebKitGtk();
 }
 
 export function hasControllingServiceWorker(): boolean {

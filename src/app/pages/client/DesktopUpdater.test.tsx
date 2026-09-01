@@ -7,13 +7,16 @@ import { DesktopUpdatePill } from '$components/tauri/DesktopUpdatePill';
 import { getDebugLogger } from '$utils/debugLogger';
 import { DesktopUpdater } from './DesktopUpdater';
 
-const { checkFn } = vi.hoisted(() => ({ checkFn: vi.fn<() => Promise<unknown>>() }));
+const { checkFn, updaterEnabled } = vi.hoisted(() => ({
+  checkFn: vi.fn<() => Promise<unknown>>(),
+  updaterEnabled: vi.fn<() => boolean>(),
+}));
 
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: checkFn }));
 
 vi.mock('$utils/platform', async (importOriginal) => {
   const mod = (await importOriginal()) as Record<string, unknown>;
-  return { ...mod, isDesktopTauri: () => true };
+  return { ...mod, isDesktopTauri: () => true, isDesktopUpdaterEnabled: updaterEnabled };
 });
 
 vi.mock('$state/hooks/desktopSettings', async (importOriginal) => ({
@@ -73,6 +76,7 @@ function makeUpdate(version: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  updaterEnabled.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -80,6 +84,23 @@ afterEach(() => {
 });
 
 describe('DesktopUpdater', () => {
+  it('does not check for or display updates when the updater is disabled at build time', async () => {
+    updaterEnabled.mockReturnValue(false);
+    localStorage.setItem('sable_fake_desktop_update', '1');
+
+    render(
+      <Provider>
+        <DesktopUpdatePill />
+        <DesktopUpdater />
+        <BannersProbe />
+      </Provider>
+    );
+
+    await waitFor(() => expect(checkFn).not.toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'Update Available' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('banner-desktop-update-ready')).not.toBeInTheDocument();
+  });
+
   it('reopens the update banner from the pill after dismissing it', async () => {
     localStorage.setItem('sable_fake_desktop_update', '1');
 

@@ -1,7 +1,8 @@
 import { Box, Button, color, config, Menu, MenuItem, Scroll, Text, toRem } from 'folds';
-import type { CSSProperties, SyntheticEvent } from 'react';
-import { useCallback, useLayoutEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import type { Position, RectCords } from 'folds';
+import type { CSSProperties } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { useAtomValue } from 'jotai';
 import type { Opts as LinkifyOpts } from 'linkifyjs';
 import type { HTMLReactParserOptions } from 'html-react-parser';
@@ -61,6 +62,7 @@ import { IgnoredUserAlert, MutualRoomsChip, OptionsChip, ServerChip, ShareChip }
 import { UserHero, UserHeroName } from './UserHero';
 import { KnownMembership } from '$types/matrix-sdk';
 import { useRoomMemberHydration } from '$hooks/useRoomMemberHydration';
+import { useMentionClickHandler } from '$hooks/useMentionClickHandler';
 import * as css from './styles.css';
 import * as prefix from '$unstable/prefixes';
 import type { Persona } from '$app/persona';
@@ -74,6 +76,7 @@ const KNOWN_KEYS = new Set([
   prefix.MATRIX_UNSTABLE_PROFILE_PRONOUNS_PROPERTY_NAME,
   prefix.MATRIX_UNSTABLE_PROFILE_TIMEZONE_PROPERTY_NAME,
   prefix.MATRIX_STABLE_PROFILE_TIMEZONE_PROPERTY_NAME,
+  prefix.MATRIX_UNSTABLE_COLORS,
   prefix.MATRIX_SABLE_UNSTABLE_NAME_COLOR_PROPERTY_NAME,
   'avatar_url',
   'displayname',
@@ -415,12 +418,16 @@ type UserRoomProfileProps = {
   pmp?: Persona;
   initialProfile?: Partial<UserProfile>;
   onSurfaceColorChange?: (color: string) => void;
+  anchor: RectCords;
+  position?: Position;
 };
 export function UserRoomProfile({
   userId,
   pmp: initialPmp,
   initialProfile,
   onSurfaceColorChange,
+  anchor,
+  position,
 }: Readonly<UserRoomProfileProps>) {
   const theme = useTheme();
   const mx = useMatrixClient();
@@ -496,10 +503,7 @@ export function UserRoomProfile({
     navigate(withSearchParam(getDirectCreatePath(), directSearchParam));
   };
 
-  // Todo eventually maybe
-  const mentionClickHandler = useCallback((e: SyntheticEvent<HTMLElement>) => {
-    e.preventDefault();
-  }, []);
+  const mentionClickHandler = useMentionClickHandler(room.roomId, anchor, position);
   const settingsLinkBaseUrl = useSettingsLinkBaseUrl();
 
   const linkifyOpts = useMemo<LinkifyOpts>(
@@ -530,8 +534,17 @@ export function UserRoomProfile({
         linkifyOpts,
         useAuthentication,
         handleSpoilerClick: spoilerClickHandler,
+        handleMentionClick: mentionClickHandler,
       }),
-    [mx, room, linkifyOpts, settingsLinkBaseUrl, useAuthentication, spoilerClickHandler]
+    [
+      mx,
+      room,
+      linkifyOpts,
+      settingsLinkBaseUrl,
+      useAuthentication,
+      spoilerClickHandler,
+      mentionClickHandler,
+    ]
   );
 
   const backgroundColor = fetchedProfile.heroColor ?? color.Surface.Container;

@@ -11,6 +11,7 @@ import {
   useVerifierCancel,
   useVerifierShowSas,
 } from '$hooks/useVerificationRequest';
+import { useRefreshDeviceVerificationStatus } from '$hooks/useDeviceVerificationStatus';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { ContainerColor } from '$styles/ContainerColor.css';
 import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
@@ -92,7 +93,7 @@ type VerificationStartProps = {
 };
 function AutoVerificationStart({ onStart }: VerificationStartProps) {
   useEffect(() => {
-    onStart();
+    onStart().catch(() => undefined);
   }, [onStart]);
 
   return (
@@ -172,7 +173,7 @@ function SasVerification({ verifier, onCancel }: SasVerificationProps) {
   useVerifierCancel(verifier, onCancel);
 
   useEffect(() => {
-    verifier.verify();
+    verifier.verify().catch(() => undefined);
   }, [verifier]);
 
   if (sasData) {
@@ -225,7 +226,7 @@ export function DeviceVerification({ request, onExit }: DeviceVerificationProps)
 
   const handleCancel = useCallback(() => {
     if (request.phase !== VerificationPhase.Done && request.phase !== VerificationPhase.Cancelled) {
-      request.cancel();
+      request.cancel().catch(() => undefined);
     }
     onExit();
   }, [request, onExit]);
@@ -235,8 +236,11 @@ export function DeviceVerification({ request, onExit }: DeviceVerificationProps)
     await request.startVerification(VerificationMethod.Sas);
   }, [request]);
 
+  const refreshVerificationStatus = useRefreshDeviceVerificationStatus();
+
   useEffect(() => {
     if (phase === VerificationPhase.Done) {
+      refreshVerificationStatus();
       Sentry.metrics.count('sable.crypto.verification_outcome', 1, {
         attributes: { outcome: 'completed' },
       });
@@ -245,7 +249,7 @@ export function DeviceVerification({ request, onExit }: DeviceVerificationProps)
         attributes: { outcome: 'cancelled' },
       });
     }
-  }, [phase]);
+  }, [phase, refreshVerificationStatus]);
 
   return (
     <ModalOverlay

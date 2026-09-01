@@ -25,6 +25,7 @@ import type { IImageInfo, IThumbnailContent, IVideoInfo } from '$types/matrix/co
 import * as Sentry from '@sentry/react';
 import { encryptBlobInWorker } from '$utils/mediaWorker';
 import { encryptAttachmentStreaming } from '$utils/attachmentCrypto';
+import { factoryRoomIdByActivity } from './sort';
 import { getEventReactions } from './room/relations';
 import { getStateEvent } from './room/hierarchy';
 import { getReactionContent } from './messageReaction';
@@ -44,6 +45,8 @@ export const isUserId = (id: string): boolean => validMxId(id) && id.startsWith(
 export const isRoomId = (id: string): boolean => id.startsWith('!');
 
 export const isRoomAlias = (id: string): boolean => validMxId(id) && id.startsWith('#');
+
+export const isEventId = (id: string): boolean => id.startsWith('$');
 
 export const getCanonicalAliasRoomId = (mx: MatrixClient, alias: string): string | undefined =>
   mx
@@ -366,7 +369,30 @@ export const factoryEventSentBy = (senderId: string) => (ev: MatrixEvent) =>
 export const eventWithShortcode = (ev: MatrixEvent) =>
   typeof ev.getContent().shortcode === 'string';
 
+const PRESENT_MEMBERSHIPS = new Set<string>([KnownMembership.Join, KnownMembership.Invite]);
+
+/**
+ * "m.direct" is the reliable signal, the member count heuristic below is only a
+ * fallback: it misses direct rooms which are unencrypted or hold members who left.
+ */
 export const getDMRoomFor = (mx: MatrixClient, userId: string): Room | undefined => {
+  const mDirects = mx.getAccountData(
+    EventType.Direct as string as unknown as keyof AccountDataEvents
+  );
+  const directRoomIds: unknown = mDirects?.getContent()[userId];
+  const tagged = (Array.isArray(directRoomIds) ? (directRoomIds as string[]) : [])
+    .toSorted(factoryRoomIdByActivity(mx))
+    .map((roomId) => mx.getRoom(roomId))
+    .filter((room): room is Room => room?.getMyMembership() === (KnownMembership.Join as string));
+
+  if (tagged.length > 0) {
+    // Prefer a room the other user is still part of over an abandoned one.
+    return (
+      tagged.find((room) => PRESENT_MEMBERSHIPS.has(room.getMember(userId)?.membership ?? '')) ??
+      tagged[0]
+    );
+  }
+
   const dmLikeRooms = mx
     .getRooms()
     .filter(
@@ -545,8 +571,9 @@ export const toggleReaction = (
   const myReaction = reactions.find(factoryEventSentBy(mx.getUserId()!));
 
   if (myReaction) {
-    const eventId = myReaction.getId();
-    if (eventId) mx.redactEvent(room.roomId, eventId);
+    void optimisticallyRedactEvent(mx, room, myReaction, undefined, timelineSet).catch(
+      () => undefined
+    );
     return;
   }
   const rShortcode =
@@ -563,4 +590,30 @@ export const toggleReaction = (
       rShortcode
     ) as TimelineEvents[keyof TimelineEvents]
   );
+};
+
+export const optimisticallyRedactEvent = (
+  mx: MatrixClient,
+  room: Room,
+  target: MatrixEvent,
+  opts?: { reason?: string },
+  timelineSet = room.getUnfilteredTimelineSet()
+) => {
+  const eventId = target.getId();
+  if (!eventId) return Promise.reject(new Error('Cannot redact an event without an ID'));
+
+  const txnId = mx.makeTxnId();
+  const request = mx.redactEvent(room.roomId, eventId, txnId, opts);
+  const redaction = room.findEventById(`~${room.roomId}:${txnId}`);
+  if (!redaction || target.isRedacted()) return request;
+
+  target.markLocallyRedacted(redaction);
+  return request.catch(async (error) => {
+    target.unmarkLocallyRedacted();
+    const relation = target.getRelation();
+    if (relation?.event_id) {
+      await getEventReactions(timelineSet, relation.event_id)?.addEvent(target);
+    }
+    throw error;
+  });
 };

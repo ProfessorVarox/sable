@@ -86,13 +86,7 @@ export const autoDiscovery = async (
 
   const baseUrl = content['m.homeserver']?.base_url;
   if (typeof baseUrl !== 'string') {
-    return [
-      {
-        host,
-        action: AutoDiscoveryAction.FAIL_PROMPT,
-      },
-      undefined,
-    ];
+    return [undefined, { ...content, 'm.homeserver': { base_url: host } }];
   }
 
   if (!/^https?:\/\//.test(baseUrl)) {

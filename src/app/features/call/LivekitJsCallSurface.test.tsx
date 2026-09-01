@@ -2,8 +2,8 @@ import { type CSSProperties, type Context, type ReactNode } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Track, type Room } from 'livekit-client';
-import { createStore, getDefaultStore, Provider } from 'jotai';
-import { livekitJsCallInitialMediaAppliedAtom, livekitJsCallSoundAtom } from '$state/livekitJsCall';
+import { getDefaultStore } from 'jotai';
+import { livekitJsCallInitialMediaAppliedAtom } from '$state/livekitJsCall';
 import { LivekitJsCallSurface } from './LivekitJsCallSurface';
 
 const mocks = vi.hoisted(() => ({
@@ -311,22 +311,17 @@ describe('LiveKit JS call surface', () => {
     expect(mocks.setCameraEnabled).not.toHaveBeenCalled();
   });
 
-  it('mutes incoming audio while the shared sound toggle is off', () => {
-    const store = createStore();
-    store.set(livekitJsCallSoundAtom, false);
-
+  it('leaves the audio sink to the app-level renderer so it survives room navigation', () => {
     render(
-      <Provider store={store}>
-        <LivekitJsCallSurface
-          room={room}
-          mediaReady
-          initialMedia={initialMedia}
-          onHangup={() => {}}
-        />
-      </Provider>
+      <LivekitJsCallSurface
+        room={room}
+        mediaReady
+        initialMedia={initialMedia}
+        onHangup={() => {}}
+      />
     );
 
-    expect(screen.getByTestId('room-audio')).toHaveAttribute('data-muted', 'true');
+    expect(screen.queryByTestId('room-audio')).not.toBeInTheDocument();
   });
 
   it('lets LiveKit derive publish controls from the token grants', () => {
@@ -374,6 +369,7 @@ describe('LiveKit JS call surface', () => {
     const toggle = screen.getByTestId('track-toggle');
     expect(toggle).toHaveAttribute('data-source', Track.Source.ScreenShare);
     expect(JSON.parse(toggle.getAttribute('data-capture-options') ?? '{}')).toMatchObject({
+      audio: false,
       selfBrowserSurface: 'exclude',
     });
   });
@@ -438,7 +434,6 @@ describe('LiveKit JS call surface', () => {
       />
     );
 
-    expect(screen.getByTestId('room-audio')).toBeInTheDocument();
     expect(screen.getByText('Audio call')).toBeInTheDocument();
     expect(screen.getByTestId('control-bar')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'End call' })).toBeInTheDocument();
@@ -597,7 +592,6 @@ describe('LiveKit JS call surface', () => {
     );
 
     expect(screen.getByRole('status')).toHaveTextContent('Reconnecting…');
-    expect(screen.getByTestId('room-audio')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'End call' })).toBeInTheDocument();
   });
 

@@ -66,6 +66,8 @@ export type UnreadInfo = {
   roomId: string;
   total: number;
   highlight: number;
+  /** Count is a placeholder; read evidence is not loaded yet. */
+  estimated?: boolean;
 };
 
 export type MemberPowerTagIcon = {

@@ -12,13 +12,19 @@ PROFILE="${1:-debug}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEST="${2:-$ROOT/src-tauri/target/$PROFILE}"
 
+case "$(uname -m)" in
+  x86_64) CEF_ARCH=x86_64 ;;
+  aarch64 | arm64) CEF_ARCH=aarch64 ;;
+  *) echo "❌ unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
 # --target moves build-script output under target/<triple>/.
 CEF_DIR="$(
-  find "$ROOT/src-tauri/target" -type d -name cef_linux_x86_64 \
+  find "$ROOT/src-tauri/target" -type d -name "cef_linux_$CEF_ARCH" \
     -path "*/$PROFILE/build/*" -print -quit 2>/dev/null || true
 )"
 if [ -z "$CEF_DIR" ]; then
-  echo "❌ CEF dist not found under target/**/$PROFILE/build — build with --features cef first." >&2
+  echo "❌ cef_linux_$CEF_ARCH not found under target/**/$PROFILE/build — build with --features cef first." >&2
   exit 1
 fi
 

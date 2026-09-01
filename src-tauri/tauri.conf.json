@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Sable",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "identifier": "moe.sable.client",
   "build": {
     "frontendDist": "../dist",

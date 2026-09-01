@@ -31,8 +31,6 @@ import type {
 import { MatrixError } from '$types/matrix-sdk';
 import { EventType, RelationType } from '$types/matrix-sdk';
 import { M_POLL_START } from 'matrix-js-sdk';
-import { ReactEditor } from 'slate-react';
-import { Editor, Point, Range, Transforms } from 'slate';
 import type { RectCords } from 'folds';
 import {
   Box,
@@ -52,33 +50,27 @@ import {
 import { Overlay, PopOut } from '$components/overlay-stack';
 
 import { useMatrixClient } from '$hooks/useMatrixClient';
-import type { AutocompleteQuery } from '$components/editor';
+import type { ProseMirrorEditorController } from '$components/editor/prosemirrorController';
 import {
   AutocompletePrefix,
+  useAutocompleteQuery,
   createEmoticonElement,
   CustomEditor,
   customHtmlEqualsPlainText,
-  getAutocompleteQuery,
-  getPrevWorldRange,
-  resetEditor,
   RoomMentionAutocomplete,
   toMatrixCustomHTML,
   toPlainText,
   trimCustomHtml,
   UserMentionAutocomplete,
   EmoticonAutocomplete,
-  moveCursor,
-  resetEditorHistory,
-  isEmptyEditor,
   ANYWHERE_AUTOCOMPLETE_PREFIXES,
   BEGINNING_AUTOCOMPLETE_PREFIXES,
   MarkdownFormattingToolbarBottom,
   MarkdownFormattingToolbarToggle,
-  focusEditor,
-  replaceWithElement,
 } from '$components/editor';
 import { stripMarkdownEscapesForHiddenPreviews } from './message/hiddenLinkPreviews';
 import { plainToEditorInput } from '$components/editor/input';
+import type { EditorDocument } from '$components/editor/model';
 import type { GifData } from '$components/emoji-board';
 import { EmojiBoard, EmojiBoardTab } from '$components/emoji-board';
 import { UseStateProvider } from '$components/UseStateProvider';
@@ -202,7 +194,7 @@ import {
   buildGalleryContent,
   getGalleryItemContent,
 } from './msgContent';
-import { getSendableKlipyMxcUrl } from '$utils/klipy';
+import { useClientConfig } from '$hooks/useClientConfig';
 import { CommandAutocomplete } from './CommandAutocomplete';
 import type {
   AudioMessageRecorderHandle,
@@ -211,7 +203,6 @@ import type {
 import { AudioMessageRecorder } from './AudioMessageRecorder';
 import * as prefix from '$unstable/prefixes';
 import { PollDialog } from './poll-modals';
-import { useClientConfig } from '$hooks/useClientConfig';
 import { PersonaPicker, type PersonaPickerTab } from './persona-picker/PersonaPicker.tsx';
 import { createComposerController, type ComposerController } from './composerController';
 import { buildEditReplacement, buildOutgoingMessage } from './composerMessage';
@@ -287,7 +278,7 @@ interface ReplyClaim {
 }
 
 interface Submission {
-  children: Editor['children'];
+  children: EditorDocument;
   epoch: number;
   replyClaim: ReplyClaim | undefined;
 }
@@ -303,8 +294,8 @@ interface SendContentsOptions {
 }
 
 interface RoomInputProps {
-  editor: Editor;
-  fileDropContainerRef: RefObject<HTMLElement>;
+  editor: ProseMirrorEditorController;
+  fileDropContainerRef: RefObject<HTMLElement | null>;
   roomId: string;
   room: Room;
   threadRootId?: string;
@@ -331,7 +322,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     // don't clobber the main room draft (and vice versa).
     const draftKey = threadRootId ?? roomId;
     const mx = useMatrixClient();
-    const clientConfig = useClientConfig();
+    const gifProxyUrl = useClientConfig().gifs?.proxyUrl;
     const useAuthentication = useMediaAuthentication();
     const [enterForNewline] = useSetting(settingsAtom, 'enterForNewline');
     const [editorOldAddFile] = useSetting(settingsAtom, 'editorOldAddFile');
@@ -390,11 +381,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [uploadBoard, setUploadBoard] = useState(true);
     const [uploadSending, setUploadSending] = useState(false);
     const [uploadBusy, setUploadBusy] = useState(false);
-    const [isSending, setIsSending] = useState(false);
     const [ingestingFiles, setIngestingFiles] = useState(false);
     const fileIngestionCountRef = useRef(0);
     const submissionInFlightRef = useRef(false);
-    const composerControllerRef = useRef<ComposerController>();
+    const composerControllerRef = useRef<ComposerController | undefined>(undefined);
     composerControllerRef.current ??= createComposerController();
     // Bumped when this composer goes away, so async work started for a previous
     // room/thread stops writing to the current one.
@@ -406,12 +396,12 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const uploadItemOverridesRef = useRef(new Map<TUploadContent, Partial<TUploadItem>>());
     const removedUploadFilesRef = useRef(new WeakSet<TUploadContent>());
     const isEncrypting = selectedFiles.some((f) => f.encrypting);
-    const sendBusy = isSending || uploadSending || isEncrypting || uploadBusy || ingestingFiles;
+    const sendBusy = uploadSending || isEncrypting || uploadBusy || ingestingFiles;
     const uploadFamilyObserverAtom = createUploadFamilyObserverAtom(
       roomUploadAtomFamily,
       selectedFiles.map((f) => f.file)
     );
-    const uploadBoardHandlers = useRef<UploadBoardImperativeHandlers>();
+    const uploadBoardHandlers = useRef<UploadBoardImperativeHandlers | undefined>(undefined);
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isLongPress = useRef(false);
     const sentOnPointerUpRef = useRef(false);
@@ -444,8 +434,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const audioRecorderRef = useRef<AudioMessageRecorderHandle>(null);
     const micHoldStartRef = useRef(0);
     const micHoldReleaseRef = useRef<(() => void) | null>(null);
-    const recorderActionRef = useRef<'stop' | 'cancel'>();
-    const recorderTimerRef = useRef<ReturnType<typeof setTimeout>>();
+    const recorderActionRef = useRef<'stop' | 'cancel' | undefined>(undefined);
+    const recorderTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const scheduleRecorderTimer = useCallback((callback: () => void) => {
       recorderTimerRef.current = setTimeout(() => {
         recorderTimerRef.current = undefined;
@@ -467,8 +457,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       },
       []
     );
-    const [autocompleteQuery, setAutocompleteQuery] =
-      useState<AutocompleteQuery<AutocompletePrefix>>();
+    const [autocompleteQuery, setAutocompleteQuery, handleCloseAutocomplete] =
+      useAutocompleteQuery(editor);
     const [isQuickTextReact, setQuickTextReact] = useState(false);
 
     const replyDraftBase = useMemo(
@@ -497,7 +487,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       };
     }, [draftKey]);
 
-    const [inputKey, setInputKey] = useState(0);
     const getUploadItemKey = useCallback((fileItem: TUploadItem): string => {
       const existingKey = uploadItemKeysRef.current.get(fileItem.originalFile);
       if (existingKey) return existingKey;
@@ -634,15 +623,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [hasText, setHasText] = useState(false);
     const lastEncryptionPreparationAt = useRef(0);
     const detectAutocomplete = useCallback(() => {
-      const firstPosition = Editor.start(editor, []);
-      const secondChar = Editor.after(editor, firstPosition, {
-        distance: 2,
-        unit: 'character',
-      });
-      const quickReactPrefix = Editor.string(
-        editor,
-        Editor.range(editor, firstPosition, secondChar)
-      );
+      const quickReactPrefix = editor.getText().slice(0, 2);
       if (quickReactPrefix === '+#') {
         setQuickTextReact(true);
         setAutocompleteQuery(undefined);
@@ -650,24 +631,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       }
       setQuickTextReact(false);
 
-      const prevWordRange = getPrevWorldRange(editor);
-      if (!prevWordRange) {
-        setAutocompleteQuery(undefined);
-        return;
-      }
-
-      const isRangeAtBeginning = !Point.isAfter(Range.start(prevWordRange), firstPosition);
       const query =
-        (isRangeAtBeginning
-          ? getAutocompleteQuery(editor, prevWordRange, BEGINNING_AUTOCOMPLETE_PREFIXES)
-          : undefined) ??
-        getAutocompleteQuery(editor, prevWordRange, ANYWHERE_AUTOCOMPLETE_PREFIXES);
+        editor.getAutocompleteQuery(BEGINNING_AUTOCOMPLETE_PREFIXES, true) ??
+        editor.getAutocompleteQuery(ANYWHERE_AUTOCOMPLETE_PREFIXES);
 
       setAutocompleteQuery(query);
-    }, [editor]);
+    }, [editor, setAutocompleteQuery]);
 
     const handleEditorChange = useCallback(() => {
-      setHasText(!isEmptyEditor(editor));
+      setHasText(!editor.isEmpty());
       detectAutocomplete();
       if (!room.hasEncryptionStateEvent()) return;
 
@@ -707,6 +679,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [AddMenuAnchor, setAddMenuAnchor] = useState<RectCords>();
     const [showAttachmentSheet, setShowAttachmentSheet] = useState(false);
     const attachmentSkipReturnFocusRef = useRef(false);
+    const emojiBoardSkipReturnFocusRef = useRef(true);
     const [showPollPicker, setShowPollPicker] = useState(false);
     const [showLocationPicker, setShowLocationPicker] = useState(false);
     const [scheduleMenuAnchor, setScheduleMenuAnchor] = useState<RectCords>();
@@ -714,11 +687,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const [silentReply, setSilentReply] = useState(!mentionInReplies);
     // Clears the reply draft up front so it cannot be re-sent, keeping a snapshot to
     // restore if the send never lands.
+    const claimedReplyEventIdRef = useRef<string | undefined>(undefined);
     const claimReply = useCallback((): ReplyClaim | undefined => {
       const currentReply = replyDraftRef.current;
       if (!currentReply) return undefined;
 
       const epoch = draftEpochRef.current;
+      claimedReplyEventIdRef.current = currentReply.eventId;
       replyDraftRef.current = replyDraftBase;
       setReplyDraft(replyDraftBase);
       return { epoch, snapshot: structuredClone(currentReply), silentReply };
@@ -729,6 +704,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         if (replyDraftRef.current !== replyDraftBase) return;
         replyDraftRef.current = claim.snapshot;
         setReplyDraft(claim.snapshot);
+        claimedReplyEventIdRef.current = undefined;
       },
       [replyDraftBase, setReplyDraft]
     );
@@ -748,7 +724,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     }, []);
     const toggleEmojiBoardTab = useCallback((tab: EmojiBoardTab) => {
       setEmojiBoardTab((prev) => {
-        if (prev !== tab) return tab;
+        if (prev !== tab) {
+          if (prev === undefined && isMobileOrTablet()) {
+            const activeElement = document.activeElement;
+            if (activeElement instanceof HTMLElement) activeElement.blur();
+          }
+          return tab;
+        }
         if (isMobileOrTablet()) {
           const activeElement = document.activeElement;
           if (activeElement instanceof HTMLElement) activeElement.blur();
@@ -789,24 +771,28 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       });
     }, [threadRootId, setReplyDraft, mx]);
 
+    // Rewritten with equal content on unmount, and appending it again would duplicate it.
+    const appliedDraftRef = useRef<string | undefined>(undefined);
     useEffect(() => {
-      Transforms.insertFragment(editor, msgDraft);
+      const draft = JSON.stringify(msgDraft);
+      if (appliedDraftRef.current === draft) return;
+      appliedDraftRef.current = draft;
+      editor.appendDocument(msgDraft);
     }, [editor, msgDraft]);
 
     const editingStateRef = useRef(false);
-    const preEditDraftRef = useRef<Editor['children']>();
+    const preEditDraftRef = useRef<EditorDocument | undefined>(undefined);
     useEffect(
       () => () => {
         if (editingStateRef.current) {
-          setMsgDraft(structuredClone(preEditDraftRef.current ?? []));
-        } else if (isEmptyEditor(editor)) {
+          setMsgDraft(structuredClone(preEditDraftRef.current ?? []) as EditorDocument);
+        } else if (editor.isEmpty()) {
           setMsgDraft([]);
         } else {
           const parsedDraft = structuredClone(editor.children);
-          setMsgDraft(parsedDraft);
+          setMsgDraft(parsedDraft as EditorDocument);
         }
-        resetEditor(editor);
-        resetEditorHistory(editor);
+        editor.clear();
       },
       [draftKey, editor, setMsgDraft]
     );
@@ -828,7 +814,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       [room]
     );
 
-    const prevEditingEventId = useRef<string>();
+    const prevEditingEventId = useRef<string | undefined>(undefined);
     useEffect(() => {
       if (!isMobile) {
         editingStateRef.current = false;
@@ -891,14 +877,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
             mentionOptions
           );
 
-          resetEditor(editor);
-          resetEditorHistory(editor);
-          Transforms.insertFragment(editor, initialValue);
+          editor.setDocument(initialValue);
 
           scheduleEditorRaf(() => {
             try {
-              ReactEditor.focus(editor);
-              moveCursor(editor);
+              editor.focus();
             } catch {
               // Ignore focus error
             }
@@ -909,9 +892,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         editingStateRef.current = false;
         const previousDraft = preEditDraftRef.current;
         if (prevEditingEventId.current && previousDraft) {
-          resetEditor(editor);
-          resetEditorHistory(editor);
-          Transforms.insertFragment(editor, previousDraft);
+          editor.setDocument(previousDraft);
         }
         preEditDraftRef.current = undefined;
         if (
@@ -920,8 +901,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         ) {
           scheduleEditorRaf(() => {
             try {
-              const domNode = ReactEditor.toDOMNode(editor, editor);
-              domNode.blur();
+              editor.blur();
               (document.activeElement as HTMLElement)?.blur();
             } catch {
               // Ignore blur error
@@ -979,17 +959,22 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         if (newId && newId !== threadRootId) {
           scheduleEditorRaf(() => {
             try {
-              ReactEditor.focus(editor);
-              moveCursor(editor);
+              editor.focus();
             } catch {
               // Ignore focus errors
             }
           });
-        } else if (!newId && prevId && prevId !== threadRootId && !editId) {
+        } else if (
+          !newId &&
+          prevId &&
+          prevId !== threadRootId &&
+          !editId &&
+          prevId !== claimedReplyEventIdRef.current
+        ) {
+          if (!isMobile) return;
           scheduleEditorRaf(() => {
             try {
-              const domNode = ReactEditor.toDOMNode(editor, editor);
-              domNode.blur();
+              editor.blur();
               (document.activeElement as HTMLElement)?.blur();
             } catch {
               // Ignore blur errors
@@ -997,7 +982,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           });
         }
       }
-    }, [replyDraft?.eventId, threadRootId, editId, editor, scheduleEditorRaf]);
+    }, [replyDraft?.eventId, threadRootId, editId, isMobile, editor, scheduleEditorRaf]);
 
     const handleFileMetadata = useCallback(
       (fileItem: TUploadItem, metadata: TUploadMetadata) => {
@@ -1097,15 +1082,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           replyClaim: claimReplyDraft ? claimReply() : undefined,
         };
         if (clearEditor) {
-          resetEditor(editor);
-          resetEditorHistory(editor);
-          setInputKey((prev) => prev + 1);
+          editor.clear();
+          // The draft outlives this component, and a remount re-applies it.
+          setMsgDraft([]);
           imagePacksUsedRef.current.clear();
           sendTypingStatus(false);
         }
         return submission;
       },
-      [claimReply, editor, sendTypingStatus]
+      [claimReply, editor, sendTypingStatus, setMsgDraft]
     );
     const restoreSubmission = useCallback(
       (submission: Submission) => {
@@ -1113,11 +1098,11 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         if (
           !mountedRef.current ||
           submission.epoch !== draftEpochRef.current ||
-          !isEmptyEditor(editor)
+          !editor.isEmpty()
         ) {
           return;
         }
-        Transforms.insertFragment(editor, submission.children);
+        editor.appendDocument(submission.children);
       },
       [editor, restoreReplyClaim]
     );
@@ -1130,7 +1115,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       eventType,
       onContentSent,
     }: SendContentsOptions) => {
-      const plainText = toPlainText(submission.children).trim();
+      const plainText = toPlainText(submission.children as EditorDocument).trim();
       const submittedReplyDraft = submission.replyClaim?.snapshot;
       const submittedSilentReply = submission.replyClaim?.silentReply ?? silentReply;
 
@@ -1302,10 +1287,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       submission: Submission,
       isLive: () => boolean
     ): Promise<boolean> => {
-      const plainText = toPlainText(submission.children).trim();
+      const plainText = toPlainText(submission.children as EditorDocument).trim();
       const caption = plainText.length > 0 ? plainText : undefined;
       let customHtml = trimCustomHtml(
-        toMatrixCustomHTML(submission.children, {
+        toMatrixCustomHTML(submission.children as EditorDocument, {
           stripNickname: true,
           room,
         })
@@ -1406,15 +1391,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       });
     };
 
-    const handleCloseAutocomplete = useCallback(() => {
-      setAutocompleteQuery((prev) => {
-        if (prev !== undefined) {
-          focusEditor(editor);
-        }
-        return undefined;
-      });
-    }, [editor]);
-
     const handleQuickReact = useCallback(
       (key: string, shortcode?: string) => {
         if (key.length > 0) {
@@ -1437,8 +1413,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           }
         }
 
-        resetEditor(editor);
-        resetEditorHistory(editor);
+        editor.clear();
         sendTypingStatus(false);
         handleCloseAutocomplete();
       },
@@ -1456,224 +1431,222 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           return;
         }
 
-        setIsSending(true);
         const submittedReplyDraft = submission.replyClaim?.snapshot;
         const submittedSilentReply = submission.replyClaim?.silentReply ?? silentReply;
-        try {
-          if (editingEvent && isMobile) {
-            const content = buildEditReplacement(submission.children, {
-              mx,
-              room,
-              roomId,
-              editingEvent,
-              currentContent: getEditingContent(editingEvent),
-              pmpNoFallback,
-            });
-            if (!content) {
-              if (isLive()) onCancelEdit?.();
-              return;
-            }
-            await mx.sendMessage(roomId, content as RoomMessageEventContent);
-            if (isLive()) {
-              onCancelEdit?.();
-              sendTypingStatus(false);
-            }
-            return;
-          }
-
-          if (selectedFiles.some((f) => f.encrypting)) {
-            restoreSubmission(submission);
-            return;
-          }
-          if (selectedFiles.length > 0) {
-            const uploads = uploadBoardHandlers.current?.getSendableUploads() ?? [];
-            const sendUpload = handleSendUploadRef.current;
-            setUploadSending(true);
-            try {
-              if (await sendUpload(uploads, submission, isLive)) return;
-            } catch (error: unknown) {
-              log.error('failed to send attachments', { roomId }, error);
-              if (isLive()) {
-                setSendError('Failed to send attachments. Please try again.');
-              }
-              restoreSubmission(submission);
-              return;
-            } finally {
-              if (isLive()) setUploadSending(false);
-            }
-          }
-
-          const outgoing = await buildOutgoingMessage(submission.children, {
+        if (editingEvent && isMobile) {
+          const content = buildEditReplacement(submission.children as EditorDocument, {
             mx,
             room,
             roomId,
-            nicknames,
-            replyEvent,
-            replyDraft: submittedReplyDraft,
-            silentReply: submittedSilentReply,
-            settingsLinkBaseUrl,
-            canSendReaction,
-            pkCompatEnable,
-            pmpProxyingEnable,
-            pmpLatchingEnable,
+            editingEvent,
+            currentContent: getEditingContent(editingEvent),
             pmpNoFallback,
-            latchedPersona,
-            isPKCommand: (text) => PKitCommandMessageHandler.isPKCommand(text),
-            imagePacksUsed: imagePacksUsedRef.current,
           });
+          if (!content) {
+            if (isLive()) onCancelEdit?.();
+            return;
+          }
+          await mx.sendMessage(roomId, content as RoomMessageEventContent);
+          if (isLive()) {
+            onCancelEdit?.();
+            sendTypingStatus(false);
+          }
+          return;
+        }
 
-          if (outgoing.kind === 'empty') return;
-          if (outgoing.kind === 'quickReact') {
-            handleQuickReact(outgoing.key);
-            return;
-          }
-          if (outgoing.kind === 'pkCommand') {
-            await pluralkitCmdMessageHandler.handleMessage(outgoing.plainText);
-            return;
-          }
-          if (outgoing.kind === 'gifSearch') {
-            restoreReplyClaim(submission.replyClaim);
-            setInitialGifSearch(outgoing.query);
-            setEmojiBoardTab(EmojiBoardTab.Gif);
-            return;
-          }
-          if (outgoing.kind === 'command') {
-            const { command, plainText, customHtml } = outgoing;
-            if (command === Command.Poll) {
-              restoreReplyClaim(submission.replyClaim);
-              setShowPollPicker(true);
-            } else if (command === Command.Location && plainText.trim().length === 0) {
-              restoreReplyClaim(submission.replyClaim);
-              setShowLocationPicker(true);
-            } else commands[command as Command]?.exe(plainText, customHtml);
-            return;
-          }
-
-          const { content } = outgoing;
-          if (outgoing.latchPersona) {
-            await setCurrentlyUsedPerMessageProfileIdForRoom(mx, roomId, outgoing.latchPersona.id);
-            if (isLive()) setLatchedPersona(outgoing.latchPersona);
-          }
-          if (submittedReplyDraft) {
-            content['m.relates_to'] = getReplyContent(submittedReplyDraft, room);
-          }
-          const invalidate = () => {
+        if (selectedFiles.some((f) => f.encrypting)) {
+          restoreSubmission(submission);
+          return;
+        }
+        if (selectedFiles.length > 0) {
+          const uploads = uploadBoardHandlers.current?.getSendableUploads() ?? [];
+          const sendUpload = handleSendUploadRef.current;
+          setUploadSending(true);
+          try {
+            if (await sendUpload(uploads, submission, isLive)) return;
+          } catch (error: unknown) {
+            log.error('failed to send attachments', { roomId }, error);
             if (isLive()) {
-              queryClient.invalidateQueries({ queryKey: ['delayedEvents', roomId] });
+              setSendError('Failed to send attachments. Please try again.');
             }
-          };
+            restoreSubmission(submission);
+            return;
+          } finally {
+            if (isLive()) setUploadSending(false);
+          }
+        }
 
-          if (scheduledTime) {
-            try {
-              const delayMs = computeDelayMs(scheduledTime);
-              await roomScheduleCoordinator.run(mx, roomId, async () => {
-                if (editingScheduledDelayId) {
-                  await cancelDelayedEvent(mx, editingScheduledDelayId);
-                  if (isLive()) setEditingScheduledDelayId(null);
-                }
-                if (isEncrypted) {
-                  await sendDelayedMessageE2EE(mx, roomId, room, content, delayMs);
-                } else {
-                  await sendDelayedMessage(mx, roomId, content as RoomMessageEventContent, delayMs);
-                }
-              });
-              invalidate();
-              if (isLive()) {
-                setSendError(undefined);
-                setEditingScheduledDelayId(null);
-                setScheduledTime(null);
-              }
-            } catch (e: unknown) {
-              // A scheduled send leaves no local echo, so hand the message back.
-              restoreSubmission(submission);
-              if (!isLive()) return;
-              if (
-                e instanceof MatrixError &&
-                (e.errcode === ErrorCode.M_MAX_DELAY_EXCEEDED ||
-                  e.data?.['org.matrix.msc4140.errcode'] === 'M_MAX_DELAY_EXCEEDED')
-              ) {
-                const maxDelay =
-                  (e.data as { max_delay?: number })?.max_delay ??
-                  e.data?.['org.matrix.msc4140.max_delay'];
-                if (typeof maxDelay === 'number') setServerMaxDelayMs(maxDelay);
-                const maxDelayDays = maxDelay / daysToMs(1);
-                setSendError(
-                  `Scheduled time exceeds the maximum delay allowed by this server. Please choose an earlier time. The Maximum Delay is of ${maxDelayDays} day${maxDelayDays > 1 ? 's' : ''}.`
-                );
-              } else {
-                setSendError('Failed to schedule message. Please try again.');
-              }
-            }
-          } else if (editingScheduledDelayId) {
-            const scheduledDelayId = editingScheduledDelayId;
-            try {
-              await roomScheduleCoordinator.run(mx, roomId, async () => {
-                await cancelDelayedEvent(mx, scheduledDelayId);
+        const outgoing = await buildOutgoingMessage(submission.children as EditorDocument, {
+          mx,
+          room,
+          roomId,
+          nicknames,
+          replyEvent,
+          replyDraft: submittedReplyDraft,
+          silentReply: submittedSilentReply,
+          settingsLinkBaseUrl,
+          canSendReaction,
+          pkCompatEnable,
+          pmpProxyingEnable,
+          pmpLatchingEnable,
+          pmpNoFallback,
+          latchedPersona,
+          isPKCommand: (text) => PKitCommandMessageHandler.isPKCommand(text),
+          imagePacksUsed: imagePacksUsedRef.current,
+        });
+
+        if (outgoing.kind === 'empty') return;
+        if (outgoing.kind === 'quickReact') {
+          handleQuickReact(outgoing.key);
+          return;
+        }
+        if (outgoing.kind === 'pkCommand') {
+          await pluralkitCmdMessageHandler.handleMessage(outgoing.plainText);
+          return;
+        }
+        if (outgoing.kind === 'gifSearch') {
+          restoreReplyClaim(submission.replyClaim);
+          if (isMobileOrTablet()) {
+            const activeElement = document.activeElement;
+            if (activeElement instanceof HTMLElement) activeElement.blur();
+          }
+          setInitialGifSearch(outgoing.query);
+          setEmojiBoardTab(EmojiBoardTab.Gif);
+          return;
+        }
+        if (outgoing.kind === 'command') {
+          const { command, plainText, customHtml } = outgoing;
+          if (command === Command.Poll) {
+            restoreReplyClaim(submission.replyClaim);
+            setShowPollPicker(true);
+          } else if (command === Command.Location && plainText.trim().length === 0) {
+            restoreReplyClaim(submission.replyClaim);
+            setShowLocationPicker(true);
+          } else commands[command as Command]?.exe(plainText, customHtml);
+          return;
+        }
+
+        const { content } = outgoing;
+        if (outgoing.latchPersona) {
+          await setCurrentlyUsedPerMessageProfileIdForRoom(mx, roomId, outgoing.latchPersona.id);
+          if (isLive()) setLatchedPersona(outgoing.latchPersona);
+        }
+        if (submittedReplyDraft) {
+          content['m.relates_to'] = getReplyContent(submittedReplyDraft, room);
+        }
+        const invalidate = () => {
+          if (isLive()) {
+            queryClient.invalidateQueries({ queryKey: ['delayedEvents', roomId] });
+          }
+        };
+
+        if (scheduledTime) {
+          try {
+            const delayMs = computeDelayMs(scheduledTime);
+            await roomScheduleCoordinator.run(mx, roomId, async () => {
+              if (editingScheduledDelayId) {
+                await cancelDelayedEvent(mx, editingScheduledDelayId);
                 if (isLive()) setEditingScheduledDelayId(null);
-                debugLog.info('message', 'Sending message after cancelling scheduled event', {
-                  roomId,
-                  scheduledDelayId,
-                });
-                const res = await mx.sendMessage(
-                  roomId,
-                  threadRootId ?? null,
-                  content as RoomMessageEventContent
-                );
-                debugLog.info('message', 'Message sent successfully', {
-                  roomId,
-                  eventId: res.event_id,
-                });
-              });
-              invalidate();
-            } catch (error) {
-              debugLog.error('message', 'Failed to send message after cancelling scheduled event', {
-                roomId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              // The scheduled copy may still exist, so don't drop the user's text.
-              restoreSubmission(submission);
-              if (isLive()) setSendError('Failed to reschedule message. Please try again.');
-            }
-          } else {
-            const msgSendStart = performance.now();
-            debugLog.info('message', 'Sending message', {
-              roomId,
-              msgtype: content.msgtype,
+              }
+              if (isEncrypted) {
+                await sendDelayedMessageE2EE(mx, roomId, room, content, delayMs);
+              } else {
+                await sendDelayedMessage(mx, roomId, content as RoomMessageEventContent, delayMs);
+              }
             });
-            try {
-              const res = await Sentry.startSpan(
-                {
-                  name: 'message.send',
-                  op: 'matrix.message',
-                  attributes: { encrypted: String(isEncrypted) },
-                },
-                () =>
-                  mx.sendMessage(roomId, threadRootId ?? null, content as RoomMessageEventContent)
+            invalidate();
+            if (isLive()) {
+              setSendError(undefined);
+              setEditingScheduledDelayId(null);
+              setScheduledTime(null);
+            }
+          } catch (e: unknown) {
+            // A scheduled send leaves no local echo, so hand the message back.
+            restoreSubmission(submission);
+            if (!isLive()) return;
+            if (
+              e instanceof MatrixError &&
+              (e.errcode === ErrorCode.M_MAX_DELAY_EXCEEDED ||
+                e.data?.['org.matrix.msc4140.errcode'] === 'M_MAX_DELAY_EXCEEDED')
+            ) {
+              const maxDelay =
+                (e.data as { max_delay?: number })?.max_delay ??
+                e.data?.['org.matrix.msc4140.max_delay'];
+              if (typeof maxDelay === 'number') setServerMaxDelayMs(maxDelay);
+              const maxDelayDays = maxDelay / daysToMs(1);
+              setSendError(
+                `Scheduled time exceeds the maximum delay allowed by this server. Please choose an earlier time. The Maximum Delay is of ${maxDelayDays} day${maxDelayDays > 1 ? 's' : ''}.`
+              );
+            } else {
+              setSendError('Failed to schedule message. Please try again.');
+            }
+          }
+        } else if (editingScheduledDelayId) {
+          const scheduledDelayId = editingScheduledDelayId;
+          try {
+            await roomScheduleCoordinator.run(mx, roomId, async () => {
+              await cancelDelayedEvent(mx, scheduledDelayId);
+              if (isLive()) setEditingScheduledDelayId(null);
+              debugLog.info('message', 'Sending message after cancelling scheduled event', {
+                roomId,
+                scheduledDelayId,
+              });
+              const res = await mx.sendMessage(
+                roomId,
+                threadRootId ?? null,
+                content as RoomMessageEventContent
               );
               debugLog.info('message', 'Message sent successfully', {
                 roomId,
                 eventId: res.event_id,
               });
-              Sentry.metrics.distribution(
-                'sable.message.send_latency_ms',
-                performance.now() - msgSendStart,
-                { attributes: { encrypted: String(isEncrypted) } }
-              );
-            } catch (error: unknown) {
-              debugLog.error('message', 'Failed to send message', {
-                roomId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              Sentry.metrics.count('sable.message.send_error', 1, {
-                attributes: { encrypted: String(isEncrypted) },
-              });
-              log.error('failed to send message', { roomId }, error);
-              // The failed send stays in the timeline as a local echo the user can retry,
-              // so the composer is intentionally left empty here.
-            }
+            });
+            invalidate();
+          } catch (error) {
+            debugLog.error('message', 'Failed to send message after cancelling scheduled event', {
+              roomId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            // The scheduled copy may still exist, so don't drop the user's text.
+            restoreSubmission(submission);
+            if (isLive()) setSendError('Failed to reschedule message. Please try again.');
           }
-        } finally {
-          if (isLive()) setIsSending(false);
+        } else {
+          const msgSendStart = performance.now();
+          debugLog.info('message', 'Sending message', {
+            roomId,
+            msgtype: content.msgtype,
+          });
+          try {
+            const res = await Sentry.startSpan(
+              {
+                name: 'message.send',
+                op: 'matrix.message',
+                attributes: { encrypted: String(isEncrypted) },
+              },
+              () => mx.sendMessage(roomId, threadRootId ?? null, content as RoomMessageEventContent)
+            );
+            debugLog.info('message', 'Message sent successfully', {
+              roomId,
+              eventId: res.event_id,
+            });
+            Sentry.metrics.distribution(
+              'sable.message.send_latency_ms',
+              performance.now() - msgSendStart,
+              { attributes: { encrypted: String(isEncrypted) } }
+            );
+          } catch (error: unknown) {
+            debugLog.error('message', 'Failed to send message', {
+              roomId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            Sentry.metrics.count('sable.message.send_error', 1, {
+              attributes: { encrypted: String(isEncrypted) },
+            });
+            log.error('failed to send message', { roomId }, error);
+            // The failed send stays in the timeline as a local echo the user can retry,
+            // so the composer is intentionally left empty here.
+          }
         }
       },
       [
@@ -1715,10 +1688,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     );
 
     const submit = useCallback(() => {
-      if (submissionInFlightRef.current) return Promise.resolve(undefined);
-      submissionInFlightRef.current = true;
       // A mobile edit replaces an existing event, so it owns neither the draft nor the reply.
       const isMobileEdit = Boolean(editingEvent && isMobile);
+      const duplicateTapWouldResend = selectedFilesRef.current.length > 0 || isMobileEdit;
+      if (duplicateTapWouldResend) {
+        if (submissionInFlightRef.current) return Promise.resolve(undefined);
+        submissionInFlightRef.current = true;
+      }
       const submission = takeSubmission({
         clearEditor: !isMobileEdit,
         claimReplyDraft: !isMobileEdit,
@@ -1727,7 +1703,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         composerControllerRef.current?.enqueue((isLive) => executeSubmit(submission, isLive)) ??
         Promise.resolve(undefined);
       return queued.finally(() => {
-        submissionInFlightRef.current = false;
+        if (duplicateTapWouldResend) submissionInFlightRef.current = false;
       });
     }, [editingEvent, executeSubmit, isMobile, takeSubmission]);
 
@@ -1765,9 +1741,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           }
         }
 
-        if (isKeyHotkey('arrowup', evt) && isEmptyEditor(editor)) {
-          const { selection } = editor;
-          if (selection && Editor.isStart(editor, selection.anchor, [])) {
+        if (isKeyHotkey('arrowup', evt) && editor.isEmpty()) {
+          if (editor.isSelectionAtStart()) {
             evt.preventDefault();
             onEditLastMessage?.();
             return;
@@ -1788,8 +1763,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
           evt.preventDefault();
           if (editingEvent && isMobileOrTablet()) {
             onCancelEdit?.();
-            resetEditor(editor);
-            resetEditorHistory(editor);
+            editor.clear();
             return;
           }
           if (showAudioRecorder) {
@@ -1814,6 +1788,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         setReplyDraft,
         enterForNewline,
         autocompleteQuery,
+        setAutocompleteQuery,
         isComposing,
         showAudioRecorder,
         editor,
@@ -1833,7 +1808,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         }
 
         if (!hideActivity) {
-          sendTypingStatus(!isEmptyEditor(editor));
+          sendTypingStatus(!editor.isEmpty());
         }
 
         detectAutocomplete();
@@ -1844,15 +1819,15 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
     const handleEmoticonSelect = (key: string, shortcode: string) => {
       const emoticonEl = createEmoticonElement(key, shortcode);
       if (autocompleteQuery) {
-        replaceWithElement(editor, autocompleteQuery.range, emoticonEl);
+        editor.insertInline(emoticonEl, autocompleteQuery.from, autocompleteQuery.to);
       } else {
-        editor.insertNode(emoticonEl);
+        editor.insertInline(emoticonEl);
       }
       if (!imagePacksUsedRef.current.has(key)) {
         const imgPkRef = getImagePackReferencesForMxc(key, mx, ImageUsage.Emoticon, room);
         if (imgPkRef?.room_id && imgPkRef?.shortcode) imagePacksUsedRef.current.set(key, imgPkRef);
       }
-      moveCursor(editor);
+      editor.insertText(' ');
       handleCloseAutocomplete();
     };
 
@@ -1927,16 +1902,20 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
       const submission = takeSubmission({ clearEditor: false });
       return composerControllerRef.current?.enqueue(async (isLive) => {
         try {
-          const url = getSendableKlipyMxcUrl(gif.url, clientConfig.gifs?.proxyUrl);
-          if (!url) throw new Error('Unsendable GIF url');
-
-          const content = await getGifMsgContent(mx, gif, url, spoiler);
+          const content = await getGifMsgContent(gif, {
+            proxyUrl: gifProxyUrl,
+            spoiler,
+          });
           if (!content) throw new Error('Unsendable GIF content');
 
           const sent = await handleSendContents({ contents: [content], submission, isLive });
           // When the editor has text, the reply is not attached to the GIF, so hand the
           // claim back for the follow-up message to carry it.
-          if (sent && submission.replyClaim && toPlainText(submission.children).trim().length > 0)
+          if (
+            sent &&
+            submission.replyClaim &&
+            toPlainText(submission.children as EditorDocument).trim().length > 0
+          )
             restoreReplyClaim(submission.replyClaim);
           return sent;
         } catch (error) {
@@ -1975,24 +1954,24 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         {autocompleteQuery?.prefix === AutocompletePrefix.RoomMention && (
           <RoomMentionAutocomplete
             roomId={roomId}
-            editor={editor}
-            query={autocompleteQuery}
+            controller={editor}
+            query={autocompleteQuery!}
             requestClose={handleCloseAutocomplete}
           />
         )}
         {autocompleteQuery?.prefix === AutocompletePrefix.UserMention && (
           <UserMentionAutocomplete
             room={room}
-            editor={editor}
-            query={autocompleteQuery}
+            controller={editor}
+            query={autocompleteQuery!}
             requestClose={handleCloseAutocomplete}
           />
         )}
         {autocompleteQuery?.prefix === AutocompletePrefix.Emoticon && (
           <EmoticonAutocomplete
             imagePackRooms={imagePackRooms}
-            editor={editor}
-            query={autocompleteQuery}
+            controller={editor}
+            query={autocompleteQuery!}
             requestClose={handleCloseAutocomplete}
             onEmoticonSelected={handleEmoticonSelect}
           />
@@ -2000,10 +1979,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         {autocompleteQuery?.prefix === AutocompletePrefix.Reaction &&
           (canSendReaction ? (
             <EmoticonAutocomplete
-              title={`React with :${autocompleteQuery.text}`}
+              title={`React with :${autocompleteQuery!.text}`}
               imagePackRooms={imagePackRooms}
-              editor={editor}
-              query={autocompleteQuery}
+              controller={editor}
+              query={autocompleteQuery!}
               requestClose={handleCloseAutocomplete}
               onEmoticonSelected={handleQuickReact}
             />
@@ -2015,8 +1994,8 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         {autocompleteQuery?.prefix === AutocompletePrefix.Command && (
           <CommandAutocomplete
             room={room}
-            editor={editor}
-            query={autocompleteQuery}
+            controller={editor}
+            query={autocompleteQuery!}
             requestClose={handleCloseAutocomplete}
           />
         )}
@@ -2031,7 +2010,6 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
         <CustomEditor
           editableName="RoomInput"
           editor={editor}
-          key={inputKey}
           placeholder="Send a message..."
           enterKeyHint={enterForNewline ? 'enter' : 'send'}
           suppressBlurRefocusRef={suppressBlurRefocusRef}
@@ -2143,8 +2121,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     <IconButton
                       onClick={() => {
                         onCancelEdit?.();
-                        resetEditor(editor);
-                        resetEditorHistory(editor);
+                        editor.clear();
                       }}
                       variant="SurfaceVariant"
                       style={{ background: 'transparent' }}
@@ -2252,7 +2229,9 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                 <>
                   <IconButton
                     onClick={() => {
-                      attachmentSkipReturnFocusRef.current = false;
+                      attachmentSkipReturnFocusRef.current = true;
+                      const activeElement = document.activeElement;
+                      if (activeElement instanceof HTMLElement) activeElement.blur();
                       setShowAttachmentSheet(true);
                     }}
                     onPointerDown={suppressEditorRefocus}
@@ -2399,11 +2378,13 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       requestClose={closeEmojiBoard}
                     />
                   );
+                  // Mobile has no room for three triggers next to text.
+                  const onlyEmojiTrigger = isMobile && hasText;
                   const triggers = (
                     <>
                       {editorButtonOrder.map((id) => {
                         let button: ReactElement | null = null;
-                        if (id === 'gif' && editorGifButton) {
+                        if (id === 'gif' && editorGifButton && !onlyEmojiTrigger) {
                           button = (
                             <IconButton
                               ref={gifBtnRef}
@@ -2422,7 +2403,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                               })}
                             </IconButton>
                           );
-                        } else if (id === 'sticker' && editorStickerButton) {
+                        } else if (id === 'sticker' && editorStickerButton && !onlyEmojiTrigger) {
                           button = (
                             <IconButton
                               ref={stickerBtnRef}
@@ -2476,7 +2457,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                             focusTrap
                             dialogLabel="Emoji picker"
                             sheetClassName={messageCss.MessageMobileOptionsContainerPicker}
-                            keyboardAware
+                            skipReturnFocusRef={emojiBoardSkipReturnFocusRef}
                           >
                             {() => emojiBoard}
                           </MobileSwipeDownModal>
@@ -2492,7 +2473,10 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       align="End"
                       anchor={(() => {
                         if (emojiBoardTab === undefined) return undefined;
-                        const buttonRefs: Record<EditorButtonId, RefObject<HTMLButtonElement>> = {
+                        const buttonRefs: Record<
+                          EditorButtonId,
+                          RefObject<HTMLButtonElement | null>
+                        > = {
                           gif: gifBtnRef,
                           sticker: stickerBtnRef,
                           emoji: emojiBtnRef,
@@ -2551,7 +2535,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                       return;
                     }
                     if (sentOnPointerUpRef.current) return;
-                    submit();
+                    submit().catch((error) => log.error('submit failed', { roomId }, error));
                     return;
                   }
                   if (!editorMicButton) return;
@@ -2630,7 +2614,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
                     return;
                   }
                   sentOnPointerUpRef.current = true;
-                  submit();
+                  submit().catch((error) => log.error('submit failed', { roomId }, error));
                 }}
                 onPointerCancel={() => {
                   if (longPressTimer.current !== null) {
@@ -2724,7 +2708,7 @@ export const RoomInput = forwardRef<HTMLDivElement, RoomInputProps>(
               )}
             </>
           }
-          bottom={<MarkdownFormattingToolbarBottom />}
+          bottom={<MarkdownFormattingToolbarBottom controller={editor} />}
         />
         {showSchedulePicker && !threadRootId && (
           <SchedulePickerDialog

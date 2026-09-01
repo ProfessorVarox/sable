@@ -1,12 +1,11 @@
-import type { Editor } from 'slate';
 import type { IContent, MatrixEvent, Room } from '$types/matrix-sdk';
+import { getDocumentBeginCommand, type EditorDocument } from '$components/editor/model';
 import { MsgType } from '$types/matrix-sdk';
 import type { MatrixClient, RoomMessageEventContent } from '$types/matrix-sdk';
 import {
   BlockType,
   customHtmlEqualsPlainText,
-  getBeginCommand,
-  getLinks,
+  getDocumentLinks,
   getMentions,
   plainToEditorInput,
   toMatrixCustomHTML,
@@ -77,7 +76,7 @@ const resolveNickname = (
 // Nicknames are local-only, so they are swapped back to real display names before the
 // body goes out, keeping server-side mention processing correct.
 const buildNicknameReplacement = (
-  children: Editor['children'],
+  children: EditorDocument,
   { mx, room, roomId, nicknames, replyEvent }: BuildOutgoingMessageDeps
 ): Map<RegExp, string> => {
   const replacement = new Map<RegExp, string>();
@@ -89,20 +88,23 @@ const buildNicknameReplacement = (
 
   const senderId = replyEvent?.getSender();
   if (senderId) add(senderId);
-  getMentions(mx, roomId, { children } as Editor)?.users?.forEach(add);
+  getMentions(mx, roomId, { children })?.users?.forEach(add);
 
   return replacement;
 };
 
-const stripCommandNode = (children: Editor['children']): Editor['children'] => {
+const stripCommandNode = (children: EditorDocument): EditorDocument => {
   const firstPara = children[0];
-  if (
-    firstPara &&
-    'type' in firstPara &&
-    firstPara.type === BlockType.Paragraph &&
-    firstPara.children.length >= 2
-  ) {
-    return [{ ...firstPara, children: firstPara.children.slice(2) }, ...children.slice(1)];
+  if (firstPara?.type === BlockType.Paragraph) {
+    const commandIndex = firstPara.children.findIndex(
+      (token) => !('text' in token) && token.type === BlockType.Command
+    );
+    if (commandIndex !== -1) {
+      return [
+        { ...firstPara, children: firstPara.children.slice(commandIndex + 1) },
+        ...children.slice(1),
+      ];
+    }
   }
   return children;
 };
@@ -137,7 +139,7 @@ const applyPerMessageProfileFallback = (
 };
 
 export async function buildOutgoingMessage(
-  children: Editor['children'],
+  children: EditorDocument,
   deps: BuildOutgoingMessageDeps
 ): Promise<OutgoingMessage> {
   const {
@@ -157,11 +159,11 @@ export async function buildOutgoingMessage(
     imagePacksUsed,
   } = deps;
 
-  const commandName = getBeginCommand({ children } as Editor);
+  const commandName = getDocumentBeginCommand(children);
   const nicknameReplacement = buildNicknameReplacement(children, deps);
   const transformContext = { isMarkdown: true, settingsLinkBaseUrl };
 
-  const runTransforms = (input: Editor['children']): Editor['children'] => {
+  const runTransforms = (input: EditorDocument): EditorDocument => {
     let output = input;
     outgoingMessageTransforms.forEach((transform) => {
       if (!transform.shouldApply(output, transformContext)) return;
@@ -170,7 +172,7 @@ export async function buildOutgoingMessage(
     return output;
   };
   const forEmote = commandName === Command.Me || commandName === Command.RainbowMe;
-  const serializeHtml = (input: Editor['children']) =>
+  const serializeHtml = (input: EditorDocument) =>
     trimCustomHtml(
       toMatrixCustomHTML(input, {
         stripNickname: true,
@@ -180,7 +182,9 @@ export async function buildOutgoingMessage(
       })
     );
 
-  let serializedChildren = runTransforms(commandName ? stripCommandNode(children) : children);
+  let serializedChildren = runTransforms(
+    (commandName ? stripCommandNode(children) : children) as EditorDocument
+  );
   let plainText = toPlainText(serializedChildren, true, true, nicknameReplacement).trim();
   let customHtml = serializeHtml(serializedChildren);
   let msgType = MsgType.Text;
@@ -242,14 +246,14 @@ export async function buildOutgoingMessage(
     }
   }
 
-  const mentionData = getMentions(mx, roomId, { children } as Editor);
+  const mentionData = getMentions(mx, roomId, { children });
   if (replyDraft && !silentReply) mentionData.users.add(replyDraft.userId);
 
   const content: MessageContent = { msgtype: msgType, body: plainText };
   content['m.mentions'] = getMentionContent(Array.from(mentionData.users), mentionData.room);
   content[prefix.MATRIX_UNSTABLE_IMAGE_SOURCE_PACK_PROPERTY_NAME] = imagePacksUsed.toJSON();
   content[prefix.MATRIX_UNSTABLE_EMBEDDED_LINK_PREVIEW_PROPERTY_NAME] = (
-    getLinks(serializedChildren) ?? []
+    getDocumentLinks(serializedChildren) ?? []
   ).map((matched_url) => ({ matched_url }));
 
   if (replyDraft || !customHtmlEqualsPlainText(customHtml, plainText)) {
@@ -291,7 +295,7 @@ export interface BuildEditReplacementDeps {
 
 /** Returns undefined when there is nothing to send, which cancels the edit. */
 export function buildEditReplacement(
-  children: Editor['children'],
+  children: EditorDocument,
   { mx, room, roomId, editingEvent, currentContent, pmpNoFallback }: BuildEditReplacementDeps
 ): IContent | undefined {
   const plainText = toPlainText(children).trim();
@@ -308,7 +312,7 @@ export function buildEditReplacement(
     })
   );
 
-  const mentionData = getMentions(mx, roomId, { children } as Editor);
+  const mentionData = getMentions(mx, roomId, { children });
   const previousMentions = currentContent['m.mentions'];
   if (
     previousMentions &&
@@ -327,7 +331,7 @@ export function buildEditReplacement(
     customHtml,
     eventId,
     getMentionContent(Array.from(mentionData.users), mentionData.room),
-    (getLinks(children) ?? []).map((matched_url) => ({ matched_url })),
+    (getDocumentLinks(children) ?? []).map((matched_url) => ({ matched_url })),
     // An edit belongs to the identity used for the original event, not the currently selected one.
     currentContent['com.beeper.per_message_profile'] ??
       oldContent['com.beeper.per_message_profile'],

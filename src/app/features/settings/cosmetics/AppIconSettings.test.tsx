@@ -73,7 +73,17 @@ describe('AppIconSettings', () => {
   it('changes the icon only after an explicit selection', async () => {
     isMobileTauri.mockReturnValue(true);
     invoke
-      .mockResolvedValueOnce(['propeler'])
+      .mockResolvedValueOnce([
+        'propeller',
+        'agender',
+        'bisexual',
+        'trans',
+        'transgradient',
+        'intersex',
+        'lesbian',
+        'mlm',
+        'pride',
+      ])
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(undefined);
 
@@ -81,20 +91,28 @@ describe('AppIconSettings', () => {
 
     await screen.findByText('App Icon');
     expect(screen.getByTestId('app-icon-preview-primary')).toBeInTheDocument();
-    expect(screen.getByTestId('app-icon-preview-propeler')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-propeller')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-agender')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-bisexual')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-trans')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-transgradient')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-intersex')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-lesbian')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-mlm')).toBeInTheDocument();
+    expect(screen.getByTestId('app-icon-preview-pride')).toBeInTheDocument();
     expect(screen.getByTestId('app-icon-preview-primary')).toHaveStyle({ borderRadius: '22.5%' });
-    fireEvent.click(screen.getByRole('button', { name: 'Propeler' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Propeller' }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenLastCalledWith('plugin:app-icon|set_icon', {
-        request: { icon: 'propeler' },
+        request: { icon: 'propeller' },
       });
     });
   });
 
   it('reads the current selection from the native plugin', async () => {
     isMobileTauri.mockReturnValue(true);
-    invoke.mockResolvedValueOnce(['propeler']).mockResolvedValueOnce('propeler');
+    invoke.mockResolvedValueOnce(['propeller']).mockResolvedValueOnce('propeller');
 
     render(<AppIconSettings />);
 
@@ -107,11 +125,11 @@ describe('AppIconSettings', () => {
   it('renders circular previews on Android', async () => {
     isMobileTauri.mockReturnValue(true);
     isAndroidTauri.mockReturnValue(true);
-    invoke.mockResolvedValueOnce(['propeler']).mockResolvedValueOnce(null);
+    invoke.mockResolvedValueOnce(['propeller']).mockResolvedValueOnce(null);
 
     render(<AppIconSettings />);
 
-    expect(await screen.findByTestId('app-icon-preview-propeler')).toHaveStyle({
+    expect(await screen.findByTestId('app-icon-preview-propeller')).toHaveStyle({
       borderRadius: '50%',
     });
   });

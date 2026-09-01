@@ -171,7 +171,7 @@ describe('htmlToMarkdown', () => {
     expect(htmlToMarkdown('<p><test></p>')).toContain('\\<test\\>');
   });
 
-  it('plainToEditorInput expands emoticon placeholders into Slate emoticon elements', () => {
+  it('plainToEditorInput expands emoticon placeholders into editor emoticon tokens', () => {
     const src = 'mxc://matrix.org/emote';
     const md = `before${MX_EMOTICON_MD_START}${src}${MX_EMOTICON_MD_SEP}blobcat${MX_EMOTICON_MD_END}after`;
     const doc = plainToEditorInput(md);

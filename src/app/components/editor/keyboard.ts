@@ -1,6 +1,5 @@
 import type { KeyboardEvent } from 'react';
-import { Editor, Range, Transforms } from 'slate';
-import { HistoryEditor } from 'slate-history';
+import type { ProseMirrorEditorController } from './prosemirrorController';
 import type { ShortcutId, ShortcutOverrides } from '../../keyboard/shortcuts';
 import { matchesShortcut } from '../../keyboard/shortcuts';
 
@@ -26,60 +25,29 @@ export const BLOCK_PREFIXES = {
 const INLINE_ACTIONS = Object.entries(INLINE_MARKERS) as [ShortcutId, string][];
 const BLOCK_ACTIONS = Object.entries(BLOCK_PREFIXES) as [ShortcutId, string][];
 
-export const applyMarkdownInline = (editor: Editor, marker: string) => {
-  if (editor.selection && Range.isExpanded(editor.selection)) {
-    const text = Editor.string(editor, editor.selection);
-    Transforms.insertText(editor, `${marker}${text}${marker}`);
-  } else {
-    Transforms.insertText(editor, `${marker}${marker}`);
-    Transforms.move(editor, { distance: marker.length, reverse: true });
-  }
-};
-
-export const applyMarkdownBlockPrefix = (editor: Editor, prefix: string) => {
-  if (editor.selection) {
-    const path = editor.selection.anchor.path;
-    const startPoint = Editor.start(editor, path);
-    Transforms.insertText(editor, prefix, { at: startPoint });
-  }
-};
-
-/**
- * @return boolean true if shortcut is toggled.
- */
-export const toggleKeyboardShortcut = (
-  editor: Editor,
+/** Same user-configurable Markdown shortcut policy for the ProseMirror adapter. */
+export const toggleProseMirrorKeyboardShortcut = (
+  controller: ProseMirrorEditorController,
   event: KeyboardEvent,
   overrides: ShortcutOverrides
 ): boolean => {
   if (matchesShortcut('composer.undo', event, overrides)) {
-    event.preventDefault();
-    HistoryEditor.undo(editor as HistoryEditor);
+    controller.undo();
     return true;
   }
   if (matchesShortcut('composer.redo', event, overrides)) {
-    event.preventDefault();
-    HistoryEditor.redo(editor as HistoryEditor);
+    controller.redo();
     return true;
   }
-
-  const blockToggled = BLOCK_ACTIONS.find(([id, prefix]) => {
-    if (matchesShortcut(id, event, overrides)) {
-      event.preventDefault();
-      applyMarkdownBlockPrefix(editor, prefix);
-      return true;
-    }
-    return false;
-  });
-  if (blockToggled) return true;
-
-  const inlineToggled = INLINE_ACTIONS.find(([id, marker]) => {
-    if (matchesShortcut(id, event, overrides)) {
-      event.preventDefault();
-      applyMarkdownInline(editor, marker);
-      return true;
-    }
-    return false;
-  });
-  return !!inlineToggled;
+  const block = BLOCK_ACTIONS.find(([id]) => matchesShortcut(id, event, overrides));
+  if (block) {
+    controller.applyMarkdownBlockPrefix(block[1]);
+    return true;
+  }
+  const inline = INLINE_ACTIONS.find(([id]) => matchesShortcut(id, event, overrides));
+  if (inline) {
+    controller.applyMarkdownInline(inline[1]);
+    return true;
+  }
+  return false;
 };

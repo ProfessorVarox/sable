@@ -7,18 +7,20 @@ import FocusTrap from 'focus-trap-react';
 import type { MouseEventHandler, ReactNode } from 'react';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import * as Sentry from '@sentry/react';
-import { matchPath, useLocation, useNavigate } from 'react-router-dom';
+import { matchPath, useLocation, useNavigate } from 'react-router';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   clearCacheAndReload,
   clearLoginData,
+  discardSessionStores,
   initClient,
   logoutClient,
   startClient,
   stopClient,
 } from '$client/initMatrix';
-import { clearSecretStorageKeys } from '$client/secretStorageKeys';
-import { resetBackupRestoreAtom } from '$state/backupRestore';
+import { isLegacyWasmCryptoStoreError } from '$app/crypto/install';
+import { LegacyKeyExport } from './LegacyKeyExport';
+import { AsyncError } from '$components/AsyncError';
 import { SplashScreen } from '$components/splash-screen';
 import { ServerConfigsLoader } from '$components/ServerConfigsLoader';
 import { CapabilitiesProvider } from '$hooks/useCapabilities';
@@ -27,13 +29,13 @@ import { MatrixClientProvider } from '$hooks/useMatrixClient';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useSyncState } from '$hooks/useSyncState';
 import { useCrossSigningResetDetect } from '$hooks/useCrossSigningResetDetect';
-import { useDeviceDisplayName } from '$hooks/useDeviceDisplayName';
 import { useMatrixEvent } from '$hooks/useMatrixEvent';
 import { stopPropagation } from '$utils/keyboard';
 import { AuthMetadataProvider, getSessionAuthMetadata } from '$hooks/useAuthMetadata';
 import {
   sessionsAtom,
   activeSessionIdAtom,
+  getSessionStoreName,
   type Session,
   type SessionsAction,
 } from '$state/sessions';
@@ -41,7 +43,9 @@ import { createLogger } from '$utils/debug';
 import { useSyncNicknames } from '$hooks/useNickname';
 import { useAppVisibility } from '$hooks/useAppVisibility';
 import { useNetworkRecovery } from '$hooks/useNetworkRecovery';
-import { useBackgroundSyncPause } from '$hooks/useBackgroundSyncPause';
+import { useLoopbackMediaRecovery } from '$hooks/useLoopbackMediaRecovery';
+import { useSyncOrchestrator } from '$hooks/useSyncOrchestrator';
+import { usePushDiagnosticsReport } from '$hooks/usePushDiagnosticsReport';
 import { composerIcon, DotsThreeOutlineVerticalIcon } from '$components/icons/phosphor';
 import { getHomePath } from '$pages/pathUtils';
 import { DIRECT_ROOM_PATH, HOME_ROOM_PATH, SPACE_ROOM_PATH } from '$pages/paths';
@@ -55,6 +59,11 @@ import { settingsAtom } from '$state/settings';
 import { SYSTEM_BAR_REFRESH_EVENT } from '$components/app-shell/SystemBarShell';
 
 const log = createLogger('ClientRoot');
+
+const SESSION_SWITCH_KEY = 'sable-session-switch';
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 const isClientReady = (syncState: string | null): boolean =>
   syncState === 'PREPARED' || syncState === 'SYNCING' || syncState === 'CATCHUP';
@@ -216,18 +225,21 @@ function ClientRootOptions({ mx, onLogout }: ClientRootOptionsProps) {
   );
 }
 
-const useLogoutListener = (mx?: MatrixClient) => {
+const useLogoutListener = (mx?: MatrixClient, session?: Session) => {
   const handleLogout = useCallback(async () => {
     Sentry.addBreadcrumb({
       category: 'auth',
       message: 'Session forcibly logged out by server',
       level: 'warning',
     });
+    Sentry.metrics.count('sable.auth.forced_logout', 1);
     if (mx) stopClient(mx);
-    await mx?.clearStores();
+    await mx?.clearStores(
+      session ? { cryptoDatabasePrefix: getSessionStoreName(session).rustCryptoPrefix } : undefined
+    );
     window.localStorage.clear();
     window.location.reload();
-  }, [mx]);
+  }, [mx, session]);
 
   useMatrixEvent(mx, HttpApiEvent.SessionLoggedOut, handleLogout);
 };
@@ -246,7 +258,6 @@ export function ClientRoot({ children }: ClientRootProps) {
   const sessions = useAtomValue(sessionsAtom);
   const [activeSessionId, setActiveSessionId] = useAtom(activeSessionIdAtom);
   const setSessions = useSetAtom(sessionsAtom);
-  const resetBackupRestore = useSetAtom(resetBackupRestoreAtom);
 
   const activeSession: Session | undefined =
     sessions.find((s) => s.userId === activeSessionId) ?? sessions[0];
@@ -258,7 +269,7 @@ export function ClientRoot({ children }: ClientRootProps) {
   const firstSyncReadyRef = useRef(false);
   const [syncReadyClient, setSyncReadyClient] = useState<MatrixClient>();
 
-  const [loadState, loadMatrix, setLoadState] = useAsyncCallback<MatrixClient, Error, []>(
+  const [loadState, loadMatrix] = useAsyncCallback<MatrixClient, Error, []>(
     useCallback(async () => {
       if (!activeSession) {
         log.error('no session found');
@@ -279,6 +290,12 @@ export function ClientRoot({ children }: ClientRootProps) {
   );
 
   const mx = loadState.status === AsyncStatus.Success ? loadState.data : undefined;
+
+  const legacyCryptoError =
+    loadState.status === AsyncStatus.Error && isLegacyWasmCryptoStoreError(loadState.error)
+      ? loadState.error
+      : undefined;
+  const legacyCryptoClient = legacyCryptoError?.client;
 
   const roomMatch =
     matchPath(HOME_ROOM_PATH, location.pathname) ??
@@ -302,33 +319,33 @@ export function ClientRoot({ children }: ClientRootProps) {
     )
   );
 
+  // Closing the OlmMachine with calls still in flight corrupts the page-wide crypto
+  // WASM heap, so reload instead to give the next account a fresh instance.
   useEffect(() => {
     if (!activeSession) return;
-    if (loadedUserIdRef.current && loadedUserIdRef.current !== activeSession.userId) {
-      log.log(
-        'session changed from',
-        loadedUserIdRef.current,
-        '→',
-        activeSession.userId,
-        '— reloading client'
-      );
-      void pushSessionToSW(activeSession.baseUrl, activeSession.accessToken, activeSession.userId);
-      // Unconditional: stopClient is what stops the crypto backend, and a client
-      // that never reached clientRunning still holds an open crypto store.
-      if (mx) {
-        stopClient(mx);
-      }
-      // The cache is keyed by 4S key id only, so the previous account's key
-      // would otherwise stay in memory for the next one.
-      clearSecretStorageKeys();
-      // Jotai atoms live in the default store for the tab's lifetime, so the
-      // previous account's restore state would be read as this one's.
-      resetBackupRestore();
-      loadedUserIdRef.current = undefined;
-      setLoadState({ status: AsyncStatus.Idle });
-      navigate(getHomePath(), { replace: true });
-    }
-  }, [activeSession, mx, navigate, setLoadState, resetBackupRestore]);
+    if (!loadedUserIdRef.current || loadedUserIdRef.current === activeSession.userId) return;
+
+    log.log(
+      'session changed from',
+      loadedUserIdRef.current,
+      '→',
+      activeSession.userId,
+      '— reloading page'
+    );
+    loadedUserIdRef.current = undefined;
+    window.sessionStorage.setItem(SESSION_SWITCH_KEY, activeSession.userId);
+
+    pushSessionToSW(activeSession.baseUrl, activeSession.accessToken, activeSession.userId).finally(
+      () => window.location.reload()
+    );
+  }, [activeSession]);
+
+  // The reload keeps the previous account's route, which the new one cannot resolve.
+  useEffect(() => {
+    if (!window.sessionStorage.getItem(SESSION_SWITCH_KEY)) return;
+    window.sessionStorage.removeItem(SESSION_SWITCH_KEY);
+    navigate(getHomePath(), { replace: true });
+  }, [navigate]);
 
   const handleLogout = useCallback(async () => {
     if (!mx || !activeSession) return;
@@ -340,13 +357,27 @@ export function ClientRoot({ children }: ClientRootProps) {
     window.location.reload();
   }, [mx, activeSession, sessions, setSessions, setActiveSessionId]);
 
+  const [upgradeState, signOutForCryptoUpgrade] = useAsyncCallback<void, Error, []>(
+    useCallback(async () => {
+      if (!activeSession) return;
+      if (legacyCryptoClient) stopClient(legacyCryptoClient);
+      await discardSessionStores(activeSession);
+      setSessions({ type: 'DELETE', session: activeSession } as SessionsAction);
+      setActiveSessionId(
+        sessions.find((session) => session.userId !== activeSession.userId)?.userId ?? undefined
+      );
+      window.location.reload();
+    }, [activeSession, legacyCryptoClient, sessions, setSessions, setActiveSessionId])
+  );
+
   useSyncNicknames(mx);
-  useLogoutListener(mx);
+  useLogoutListener(mx, activeSession);
   useAppVisibility(mx);
   useNetworkRecovery(mx);
-  useBackgroundSyncPause(mx);
+  useSyncOrchestrator(startState.status === AsyncStatus.Success ? mx : undefined);
+  usePushDiagnosticsReport();
+  useLoopbackMediaRecovery();
   useCrossSigningResetDetect(mx);
-  useDeviceDisplayName(mx);
 
   useEffect(
     () => () => {
@@ -405,6 +436,7 @@ export function ClientRoot({ children }: ClientRootProps) {
   );
 
   const isError = loadState.status === AsyncStatus.Error || startState.status === AsyncStatus.Error;
+  const legacyCryptoUpgradeRequired = legacyCryptoError !== undefined;
 
   // Set matrix client context: homeserver and sync type (not PII)
   useEffect(() => {
@@ -445,7 +477,7 @@ export function ClientRoot({ children }: ClientRootProps) {
   // Capture fatal client failures — useAsyncCallback swallows these into state so
   // they never reach the React ErrorBoundary; explicit capture is required.
   useEffect(() => {
-    if (loadState.status === AsyncStatus.Error) {
+    if (loadState.status === AsyncStatus.Error && !isLegacyWasmCryptoStoreError(loadState.error)) {
       Sentry.captureException(loadState.error, { tags: { phase: 'load' } });
     }
   }, [loadState]);
@@ -465,17 +497,43 @@ export function ClientRoot({ children }: ClientRootProps) {
           <Box direction="Column" grow="Yes" alignItems="Center" justifyContent="Center" gap="400">
             <Dialog>
               <Box direction="Column" gap="400" style={{ padding: config.space.S400 }}>
-                {loadState.status === AsyncStatus.Error && (
-                  <Text>{`Failed to load. ${loadState.error.message}`}</Text>
-                )}
+                {loadState.status === AsyncStatus.Error &&
+                  (legacyCryptoUpgradeRequired ? (
+                    <>
+                      <Text>Encrypted chat needs a one-time upgrade.</Text>
+                      <Text>
+                        Sign out and sign in again to use native crypto. Local encrypted-message
+                        keys from this installation must be restored from backup.
+                      </Text>
+                      {legacyCryptoClient && <LegacyKeyExport client={legacyCryptoClient} />}
+                      <AsyncError
+                        state={upgradeState}
+                        prefix="Failed to sign out for the crypto upgrade"
+                        size="T300"
+                      />
+                      <Button
+                        variant="Critical"
+                        onClick={signOutForCryptoUpgrade}
+                        disabled={upgradeState.status === AsyncStatus.Loading}
+                      >
+                        <Text as="span" size="B400">
+                          Sign out and upgrade
+                        </Text>
+                      </Button>
+                    </>
+                  ) : (
+                    <Text>{`Failed to load. ${errorMessage(loadState.error)}`}</Text>
+                  ))}
                 {startState.status === AsyncStatus.Error && (
-                  <Text>{`Failed to start. ${startState.error.message}`}</Text>
+                  <Text>{`Failed to start. ${errorMessage(startState.error)}`}</Text>
                 )}
-                <Button variant="Critical" onClick={mx ? () => startMatrix(mx) : loadMatrix}>
-                  <Text as="span" size="B400">
-                    Retry
-                  </Text>
-                </Button>
+                {!legacyCryptoUpgradeRequired && (
+                  <Button variant="Critical" onClick={mx ? () => startMatrix(mx) : loadMatrix}>
+                    <Text as="span" size="B400">
+                      Retry
+                    </Text>
+                  </Button>
+                )}
               </Box>
             </Dialog>
           </Box>

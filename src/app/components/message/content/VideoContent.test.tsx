@@ -1,13 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { VideoContent } from './VideoContent';
+import { getDebugLogger } from '$utils/debugLogger';
 
-const mocks = vi.hoisted(() => ({ tauri: true }));
+const mocks = vi.hoisted(() => ({ tauri: true, loopbackTargets: [] as string[] }));
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => mocks.tauri,
   // Real convertFileSrc percent-encodes the target into the URI path.
   convertFileSrc: (url: string, protocol: string) =>
     `${protocol}://localhost/${encodeURIComponent(url)}`,
+  invoke: async (_command: string, { url }: { url: string }) => {
+    mocks.loopbackTargets.push(url);
+    return `http://127.0.0.1:45678/${mocks.loopbackTargets.length}`;
+  },
 }));
 
 vi.mock('$hooks/useMatrixClient', () => ({
@@ -34,7 +39,8 @@ vi.mock('$utils/swMediaAuth', () => ({
 }));
 
 describe('VideoContent', () => {
-  it('renders a distinct sable-media src on retry in Tauri', async () => {
+  it('requests a distinct sable-media target from the loopback on retry in Tauri', async () => {
+    mocks.loopbackTargets.length = 0;
     const srcs: string[] = [];
     render(
       <VideoContent
@@ -56,14 +62,17 @@ describe('VideoContent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Watch' }));
 
     const video = await screen.findByTestId('video');
-    const initialSrc = srcs[srcs.length - 1];
-    expect(initialSrc).toBe(SABLE_MEDIA_URL);
+    await waitFor(() => {
+      expect(srcs[srcs.length - 1]).toMatch(/^http:\/\/127\.0\.0\.1:45678\//);
+      expect(mocks.loopbackTargets[mocks.loopbackTargets.length - 1]).toBe(SABLE_MEDIA_URL);
+    });
+    const initialSrc = mocks.loopbackTargets[mocks.loopbackTargets.length - 1];
 
     fireEvent.error(video);
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
 
     await waitFor(() => {
-      const retriedSrc = srcs[srcs.length - 1] ?? '';
+      const retriedSrc = mocks.loopbackTargets[mocks.loopbackTargets.length - 1] ?? '';
       expect(retriedSrc).not.toBe(initialSrc);
       // The decoded scheme path is the `target` Rust feeds into cache_key.
       const schemePath = retriedSrc.replace(/^sable-media:\/\/localhost\//, '').split('?')[0]!;
@@ -72,5 +81,34 @@ describe('VideoContent', () => {
       );
       expect(retriedSrc).toContain('__sable_media_cache=3');
     });
+  });
+
+  it('records the video element failure in the diagnostics buffer', async () => {
+    mocks.loopbackTargets.length = 0;
+    getDebugLogger().clear();
+    render(
+      <VideoContent
+        body="clip"
+        mimeType="video/webm"
+        url="mxc://example.org/vid123"
+        info={{ w: 640, h: 360, duration: 1000 }}
+        renderVideo={(props) => (
+          <video data-testid="video" src={props.src} onError={props.onError}>
+            <track kind="captions" />
+          </video>
+        )}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Watch' }));
+    fireEvent.error(await screen.findByTestId('video'));
+
+    // Error-level entries are buffered without debug logging enabled.
+    const entry = getDebugLogger()
+      .getLogs()
+      .find((log) => log.category === 'media' && log.level === 'error');
+    expect(entry?.message).toContain('Video element error');
+    expect(entry?.message).toContain('mime=video/webm');
+    expect(entry?.message).toContain('scheme=http');
   });
 });

@@ -1,7 +1,7 @@
 import type { FormEventHandler, MouseEventHandler, ReactNode, RefObject, ChangeEvent } from 'react';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Box,
   Button,
@@ -128,7 +128,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(
     const unread = useRoomsUnread(allChild, roomToUnreadAtom);
 
     const handleMarkAsRead = () => {
-      allChild.forEach((childRoomId) => markAsRead(mx, childRoomId, hideReads));
+      allChild.forEach((childRoomId) => markAsRead(mx, childRoomId, hideReads, true));
       requestClose();
     };
 

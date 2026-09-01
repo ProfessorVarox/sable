@@ -158,9 +158,11 @@ export function RoomSearchModal({
   const spaces = useSpaces(mx, allRoomsAtom);
   const directs = useDirects(mx, allRoomsAtom, mDirects);
 
+  // keyed on the ids, not on pickRoom, whose callbacks change on every host render
+  const eligibleRoomIds = pickRoom?.eligibleRoomIds;
   const eligibleSet = useMemo(
-    () => (pickRoom ? new Set(pickRoom.eligibleRoomIds) : null),
-    [pickRoom]
+    () => (eligibleRoomIds ? new Set(eligibleRoomIds) : null),
+    [eligibleRoomIds]
   );
 
   const rawTopActiveRooms = useTopActiveRooms(searchRoomType, rooms, directs, spaces);

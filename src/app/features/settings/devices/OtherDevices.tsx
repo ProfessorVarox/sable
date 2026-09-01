@@ -186,8 +186,7 @@ export function OtherDevices({ devices, refreshDeviceList, showVerification }: O
         )}
         {devices
           .toSorted((d1, d2) => {
-            if (!d1.last_seen_ts || !d2.last_seen_ts) return 0;
-            return d1.last_seen_ts < d2.last_seen_ts ? 1 : -1;
+            return (d1.last_seen_ts ?? 0) < (d2.last_seen_ts ?? 0) ? 1 : -1;
           })
           .map((device) => (
             <SequenceCard

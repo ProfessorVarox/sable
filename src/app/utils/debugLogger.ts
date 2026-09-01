@@ -16,6 +16,7 @@ export type LogCategory =
   | 'network'
   | 'notification'
   | 'message'
+  | 'media'
   | 'call'
   | 'ui'
   | 'timeline'
@@ -194,6 +195,7 @@ class DebugLoggerService {
       category === 'sync' ||
       category === 'network' ||
       category === 'notification' ||
+      category === 'media' ||
       category === 'call' ||
       category === 'error';
     if (

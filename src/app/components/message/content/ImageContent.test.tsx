@@ -2,8 +2,20 @@ import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ImageContent } from './ImageContent';
+import { downloadEncryptedMedia, mxcUrlToHttp } from '$utils/matrix';
+import type * as PlatformModule from '$utils/platform';
 
-const screenMocks = vi.hoisted(() => ({ isMobile: true, tauri: false }));
+const screenMocks = vi.hoisted(() => ({
+  isMobile: true,
+  tauri: false,
+  loopbackUrl: undefined as string | undefined,
+  stripsCache: true,
+}));
+
+vi.mock('$utils/platform', async (importOriginal) => ({
+  ...(await importOriginal<typeof PlatformModule>()),
+  webviewStripsCustomProtocolCache: () => screenMocks.stripsCache,
+}));
 vi.mock('$hooks/useScreenSize', () => ({
   ScreenSize: { Desktop: 'Desktop', Tablet: 'Tablet', Mobile: 'Mobile' },
   useScreenSizeOptionally: () => (screenMocks.isMobile ? 'Mobile' : 'Desktop'),
@@ -12,6 +24,10 @@ vi.mock('$hooks/useScreenSize', () => ({
 
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => screenMocks.tauri,
+  invoke: async () => {
+    if (!screenMocks.loopbackUrl) throw new Error('loopback media server unavailable');
+    return screenMocks.loopbackUrl;
+  },
   // Real convertFileSrc percent-encodes the target into the URI path.
   convertFileSrc: (url: string, protocol: string) =>
     `${protocol}://localhost/${encodeURIComponent(url)}`,
@@ -20,7 +36,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 const SABLE_MEDIA_URL =
   'sable-media://https://hs.example/_matrix/client/v1/media/download/example.org/abc123?__sable_media_cache=3';
 vi.mock('$utils/matrix', () => ({
-  mxcUrlToHttp: () => SABLE_MEDIA_URL,
+  mxcUrlToHttp: vi.fn<(...args: unknown[]) => string>(() => SABLE_MEDIA_URL),
   rewriteAuthenticatedMediaUrl: (url: string | null) => url,
   downloadEncryptedMedia: vi.fn<() => Promise<ArrayBuffer>>(),
   decryptFile: vi.fn<() => Promise<ArrayBuffer>>(),
@@ -198,6 +214,125 @@ describe('ImageContent', () => {
     } finally {
       screenMocks.tauri = false;
     }
+  });
+
+  it('loads a Tauri image once, from the loopback origin', async () => {
+    screenMocks.tauri = true;
+    screenMocks.loopbackUrl = 'http://127.0.0.1:45678/capability';
+    try {
+      const srcs: string[] = [];
+      render(
+        <ImageContent
+          url="mxc://example.org/abc123"
+          renderImage={(props) => {
+            srcs.push(props.src);
+            return <img alt="preview" src={props.src} onError={props.onError} />;
+          }}
+          renderViewer={() => <div>viewer</div>}
+        />
+      );
+
+      touchTap(screen.getByRole('button', { name: 'View' }));
+      await screen.findByAltText('preview');
+
+      await waitFor(() => expect(srcs.length).toBeGreaterThan(0));
+      expect(Array.from(new Set(srcs))).toEqual(['http://127.0.0.1:45678/capability']);
+    } finally {
+      screenMocks.tauri = false;
+      screenMocks.loopbackUrl = undefined;
+    }
+  });
+
+  it('loads a Tauri image from the custom protocol where its cache headers survive', async () => {
+    screenMocks.tauri = true;
+    screenMocks.stripsCache = false;
+    screenMocks.loopbackUrl = 'http://127.0.0.1:45678/capability';
+    try {
+      const srcs: string[] = [];
+      render(
+        <ImageContent
+          url="mxc://example.org/abc123"
+          renderImage={(props) => {
+            srcs.push(props.src);
+            return <img alt="preview" src={props.src} onError={props.onError} />;
+          }}
+          renderViewer={() => <div>viewer</div>}
+        />
+      );
+
+      touchTap(screen.getByRole('button', { name: 'View' }));
+      await screen.findByAltText('preview');
+
+      await waitFor(() => expect(srcs.length).toBeGreaterThan(0));
+      expect(Array.from(new Set(srcs))).toEqual([SABLE_MEDIA_URL]);
+    } finally {
+      screenMocks.tauri = false;
+      screenMocks.stripsCache = true;
+      screenMocks.loopbackUrl = undefined;
+    }
+  });
+
+  it('passes the Tauri media URL straight to the encrypted download', async () => {
+    screenMocks.tauri = true;
+    const renderViewer = vi.fn<(props: { getDownloadBlob?: () => Promise<Blob> }) => ReactNode>(
+      () => <div>viewer</div>
+    );
+    vi.mocked(downloadEncryptedMedia).mockResolvedValue(new Blob(['encrypted']));
+    try {
+      render(
+        <ImageContent
+          url="mxc://example.org/abc123"
+          encInfo={{ key: {}, iv: 'iv', hashes: {} } as never}
+          renderImage={() => <img alt="preview" />}
+          renderViewer={renderViewer}
+        />
+      );
+
+      touchTap(screen.getByRole('button', { name: 'View' }));
+      await waitFor(() => expect(renderViewer).toHaveBeenCalledOnce());
+      await renderViewer.mock.calls[0]?.[0].getDownloadBlob?.();
+
+      expect(downloadEncryptedMedia).toHaveBeenCalledWith(
+        'sable-media://https://hs.example/_matrix/client/v1/media/download/example.org/abc123?__sable_media_cache=3',
+        expect.any(Function)
+      );
+    } finally {
+      screenMocks.tauri = false;
+    }
+  });
+
+  it('falls back to the original when the homeserver thumbnail is transposed', async () => {
+    vi.mocked(mxcUrlToHttp).mockClear();
+    render(
+      <ImageContent
+        url="mxc://example.org/abc123"
+        info={{ w: 1500, h: 2000, size: 4 * 1024 * 1024, mimetype: 'image/jpeg' }}
+        renderImage={(props) => <img alt="preview" src={props.src} onLoad={props.onLoad} />}
+        renderViewer={() => <div>viewer</div>}
+      />
+    );
+
+    touchTap(screen.getByRole('button', { name: 'View' }));
+    const img = await screen.findByAltText('preview');
+    expect(vi.mocked(mxcUrlToHttp)).toHaveBeenCalledWith(
+      {},
+      'mxc://example.org/abc123',
+      false,
+      800,
+      600,
+      'scale'
+    );
+    Object.defineProperty(img, 'naturalWidth', { value: 800, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 600, configurable: true });
+    fireEvent.load(img);
+
+    await waitFor(() =>
+      expect(vi.mocked(mxcUrlToHttp).mock.calls.at(-1)).toEqual([
+        {},
+        'mxc://example.org/abc123',
+        false,
+      ])
+    );
   });
 
   it('still allows ordinary message touches to start long press', () => {

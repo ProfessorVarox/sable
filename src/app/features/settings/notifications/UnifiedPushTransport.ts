@@ -1,3 +1,4 @@
+import type { PushAccount } from './pushAccount';
 import { getUnifiedPushTransportApi } from './UnifiedPushTransportApiClient';
 
 export type UnifiedPushPermissionState = 'granted' | 'denied' | 'default';
@@ -149,7 +150,7 @@ export async function loadUnifiedPushDistributorState(): Promise<UnifiedPushDist
     return { distributors, selectedDistributor: savedDistributor };
   }
 
-  if (distributors.length === 1) {
+  if (!savedDistributor && distributors.length === 1) {
     const [onlyDistributor] = distributors;
     if (onlyDistributor) {
       await saveUnifiedPushDistributor(onlyDistributor);
@@ -164,11 +165,13 @@ export async function ensureUnifiedPushDistributorSelection(
   distributors: string[],
   selectedDistributor: string
 ): Promise<string> {
-  const distributor =
-    selectedDistributor && distributors.includes(selectedDistributor)
-      ? selectedDistributor
-      : distributors[0];
+  if (selectedDistributor) {
+    if (!distributors.includes(selectedDistributor)) return '';
+    await saveUnifiedPushDistributor(selectedDistributor);
+    return selectedDistributor;
+  }
 
+  const distributor = distributors[0];
   if (!distributor) return '';
 
   await saveUnifiedPushDistributor(distributor);
@@ -199,7 +202,9 @@ export async function switchUnifiedPushDistributorSelection<T>(
 }
 
 export async function registerUnifiedPushTransport(
-  vapid?: string
+  vapid?: string,
+  embeddedGatewayUrl?: string,
+  account?: PushAccount
 ): Promise<UnifiedPushRegistrationResult> {
   let permissionState: UnifiedPushPermissionState = 'default';
   let selectedDistributor: string | undefined;
@@ -220,7 +225,9 @@ export async function registerUnifiedPushTransport(
     const { distributors, selectedDistributor: distributor } =
       await loadUnifiedPushDistributorState();
     selectedDistributor = distributor || undefined;
-    if (!distributor) {
+    // With a gateway configured the app is its own distributor, so an empty list is
+    // no longer a dead end.
+    if (!distributor && !embeddedGatewayUrl?.trim()) {
       return {
         status: 'missing-distributor',
         permissionState: 'granted',
@@ -233,7 +240,11 @@ export async function registerUnifiedPushTransport(
     }
 
     const api = await getUnifiedPushTransportApi();
-    const registration = await api.registerForPushNotifications(vapid);
+    const registration = await api.registerForPushNotifications(
+      vapid,
+      embeddedGatewayUrl?.trim(),
+      account
+    );
     const endpoint = registration?.deviceToken;
     if (!endpoint || !endpoint.trim()) {
       return {
@@ -248,7 +259,7 @@ export async function registerUnifiedPushTransport(
       status: 'registered',
       permissionState: 'granted',
       endpoint,
-      distributor,
+      distributor: registration.distributor ?? distributor,
       p256dh: registration.p256dh,
       auth: registration.auth,
     };

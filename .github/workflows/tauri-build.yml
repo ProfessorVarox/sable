@@ -140,7 +140,7 @@ jobs:
         run: rustup target add ${{ matrix.rust-targets }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
 
@@ -170,20 +170,7 @@ jobs:
 
       - name: Build desktop bundles
         shell: bash
-        run: pnpm tauri build ${{ matrix.args }} $TAURI_BUILD_ARGS
-
-      - name: Package macOS .app for updater
-        if: ${{ matrix.name == 'macOS' }}
-        shell: bash
-        run: |
-          macos_dir="${{ matrix.bundle_path }}/macos"
-          if [ -d "$macos_dir" ]; then
-            for app in "$macos_dir"/*.app; do
-              [ -e "$app" ] || continue
-              echo "Packaging $(basename "$app") into .tar.gz"
-              tar czf "$app.tar.gz" -C "$macos_dir" "$(basename "$app")"
-            done
-          fi
+        run: pnpm tauri:wry build ${{ matrix.args }} $TAURI_BUILD_ARGS
 
       - name: Normalize desktop artifact names
         shell: bash
@@ -212,7 +199,7 @@ jobs:
 
       - name: Attest Windows bundles
         if: ${{ matrix.name == 'Windows' }}
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             src-tauri/target/release/bundle/msi/*.msi
@@ -292,7 +279,7 @@ jobs:
         run: rustup target add $RUST_TARGETS
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
 
@@ -307,6 +294,24 @@ jobs:
       - name: Stamp release version into tauri.conf.json
         shell: bash
         run: node .github/scripts/set-tauri-version.mjs "$VERSION"
+
+      - name: Generate nightly Android project
+        if: ${{ needs.setup-release.outputs.nightly == 'true' }}
+        shell: bash
+        run: |
+          # Tauri requires source files at the configured package path. Overlay the
+          # nightly package rather than regenerating and losing tracked customizations.
+          APP_DIR=src-tauri/gen/android/app
+          NIGHTLY_PACKAGE_DIR="$APP_DIR/src/main/java/moe/sable/client/nightly"
+          NIGHTLY_SOURCE_DIR="$RUNNER_TEMP/android-nightly-package"
+          cp -a "$APP_DIR/src/main/java/moe/sable/client" "$NIGHTLY_SOURCE_DIR"
+          find "$NIGHTLY_SOURCE_DIR" -type f -exec sed -i \
+            's/moe\.sable\.client/moe.sable.client.nightly/g' {} +
+          find "$APP_DIR/src/main/java/moe/sable/client" -mindepth 1 -maxdepth 1 \
+            ! -name nightly -exec rm -rf {} +
+          mv "$NIGHTLY_SOURCE_DIR" "$NIGHTLY_PACKAGE_DIR"
+          sed -i 's/moe\.sable\.client/moe.sable.client.nightly/g' \
+            "$APP_DIR/build.gradle.kts" "$APP_DIR/src/main/AndroidManifest.xml"
 
       - name: Setup Android signing
         if: ${{ env.ANDROID_KEY_BASE64 != '' }}
@@ -325,8 +330,11 @@ jobs:
         run: |
           if [ "$IS_NIGHTLY" = "true" ]; then
             export SABLE_BUILD_FLAVOR=dev
+            export SABLE_LAUNCHER_ICON=nightly
           fi
-          pnpm tauri android build --apk --aab --target aarch64 armv7
+          CONFIG_ARGS=""
+          [ "$IS_NIGHTLY" = "true" ] && CONFIG_ARGS="--config src-tauri/tauri.nightly.conf.json"
+          pnpm tauri android build $CONFIG_ARGS --apk --aab --target aarch64 armv7 -- --features matrix-crypto
           OUT='src-tauri/gen/android/app/build/outputs'
           APK=$(find "$OUT/apk/universal/release" -name '*.apk' -type f | head -1)
           AAB=$(find "$OUT/bundle/universalRelease" -name '*.aab' -type f | head -1)
@@ -336,7 +344,7 @@ jobs:
           mv "$AAB" "$OUT/bundle/universalRelease/Sable-${VERSION}-android-universal.aab"
 
       - name: Attest Android bundles
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
@@ -420,7 +428,7 @@ jobs:
         run: rustup target add $RUST_TARGETS
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
 
@@ -437,7 +445,16 @@ jobs:
 
       - name: Set up iOS
         shell: bash
-        run: mise -y run tauri:setup:ios
+        env:
+          IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
+        run: |
+          if [ "$IS_NIGHTLY" = "true" ]; then
+            rm -rf src-tauri/gen/apple
+            command -v pod >/dev/null 2>&1 || brew install cocoapods
+            pnpm tauri ios init --ci --config src-tauri/tauri.nightly.conf.json
+          else
+            mise -y run tauri:setup:ios
+          fi
 
       - name: Download iOS frameworks
         shell: bash
@@ -455,8 +472,11 @@ jobs:
         run: |
           if [ "$IS_NIGHTLY" = "true" ]; then
             export SABLE_BUILD_FLAVOR=dev
+            export SABLE_LAUNCHER_ICON=nightly
           fi
-          pnpm tauri ios build --no-sign --ci
+          CONFIG_ARGS=""
+          [ "$IS_NIGHTLY" = "true" ] && CONFIG_ARGS="--config src-tauri/tauri.nightly.conf.json"
+          pnpm tauri ios build $CONFIG_ARGS --no-sign --ci -- --features matrix-crypto
           IPA=$(find src-tauri/gen/apple/build -name '*.ipa' -type f | head -1)
           [ -n "$IPA" ] || { echo "IPA not found"; ls -R src-tauri/gen/apple/build 2>/dev/null || true; exit 1; }
           NORMALIZED_IPA="$(dirname "$IPA")/Sable-${VERSION}-ios-arm64.ipa"
@@ -473,7 +493,7 @@ jobs:
           echo "ipa_build=${IPA_BUILD:-$VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Attest iOS bundle
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ steps.ipa.outputs.path }}
 
@@ -540,7 +560,8 @@ jobs:
 
   updater-manifest:
     name: Publish updater manifest
-    needs: [setup-release, build, linux]
+    needs: [setup-release, build, linux, android, ios, obtainium]
+    if: ${{ always() && needs.setup-release.result == 'success' && needs.build.result == 'success' && needs.linux.result == 'success' && needs.android.result == 'success' && needs.ios.result == 'success' && needs.obtainium.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -567,18 +588,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          NEEDS_SETUP_RELEASE_OUTPUTS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
+          IS_NIGHTLY: ${{ needs.setup-release.outputs.nightly }}
         run: |
-          if [ "${NEEDS_SETUP_RELEASE_OUTPUTS_NIGHTLY}" = "true" ]; then
-            gh release view "$TAG" --json assets \
-              | jq -r --arg cutoff "$STARTED_AT" \
-                  '.assets[] | select(.updatedAt <= $cutoff and (.name | endswith(".sig"))) | .name' \
-              | while read -r name; do
-                  [ -n "$name" ] || continue
-                  echo "Removing superseded nightly signature: $name"
-                  gh release delete-asset "$TAG" "$name" --yes
-                done
-          fi
           node .github/scripts/build-updater-manifest.mjs
           if [ -f latest.json ]; then
             echo "produced=true" >> "$GITHUB_OUTPUT"
@@ -589,16 +600,9 @@ jobs:
 
       - name: Attest updater manifest
         if: steps.manifest.outputs.produced == 'true'
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: latest.json
-
-      - name: Upload updater manifest
-        if: steps.manifest.outputs.produced == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" latest.json --clobber
 
       - name: Finalize nightly release
         if: ${{ needs.setup-release.outputs.nightly == 'true' && steps.manifest.outputs.produced == 'true' }}
@@ -615,28 +619,61 @@ jobs:
             --title "Nightly (dev)" \
             --notes "Rolling nightly build $VERSION from dev — $GIT_SHA"
 
+      - name: Upload updater manifest
+        if: steps.manifest.outputs.produced == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" latest.json --clobber
+
+      - name: Remove superseded nightly assets
+        if: ${{ needs.setup-release.outputs.nightly == 'true' && steps.manifest.outputs.produced == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view nightly --json assets > nightly-assets.json
+
+          # extra-data URLs in the published Flatpak repo point at these.
+          jq -r '[.assets[] | select(.name | test("-linux-(x86_64|aarch64)\\.tar\\.gz$"))]
+                 | sort_by(.updatedAt) | reverse | .[0:3] | .[].name' \
+            nightly-assets.json > flatpak-keep.txt
+
           # .json manifests are overwritten in place, not accumulated.
-          gh release view nightly --json assets \
-            | jq -r --arg cutoff "$STARTED_AT" \
-                '.assets[] | select(.updatedAt <= $cutoff and (.name | endswith(".json") | not)) | .name' \
+          jq -r --arg cutoff "$STARTED_AT" \
+              '.assets[] | select(.updatedAt <= $cutoff and (.name | endswith(".json") | not)) | .name' \
+            nightly-assets.json \
             | while read -r name; do
                 [ -n "$name" ] || continue
+                if grep -Fxq "$name" flatpak-keep.txt; then
+                  echo "Keeping $name for the nightly Flatpak"
+                  continue
+                fi
                 echo "Removing superseded nightly asset: $name"
                 gh release delete-asset nightly "$name" --yes
               done
 
   # Nightlies use `--snapshot`, which packages without publishing.
   linux:
-    name: Build Linux (CEF)
+    name: Build Linux ${{ matrix.arch }} (CEF)
     needs: setup-release
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
     permissions:
       contents: write
       id-token: write
       attestations: write
       artifact-metadata: write
     env:
+      ARCH: ${{ matrix.arch }}
       TAG: ${{ needs.setup-release.outputs.tag }}
       VERSION: ${{ needs.setup-release.outputs.version }}
       VITE_APP_VERSION: ${{ needs.setup-release.outputs.version }}
@@ -662,9 +699,10 @@ jobs:
           tauri: 'true'
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.arch }}
 
       - name: Stamp release version into tauri.conf.json
         shell: bash
@@ -686,7 +724,7 @@ jobs:
             src-tauri/target/release/sable "$DISPLAY_NAME" \
             src-tauri/target/release/sable-updater
 
-          DEB="src-tauri/target/release/bundle/deb/Sable-${VERSION}-linux-x86_64.deb"
+          DEB="src-tauri/target/release/bundle/deb/Sable-${VERSION}-linux-${ARCH}.deb"
           dpkg-deb --contents "$DEB" | grep 'etc/apparmor.d/sable$' >/dev/null
           dpkg-deb --ctrl-tarfile "$DEB" | tar -t | grep -x './postinst' >/dev/null
           dpkg-deb --ctrl-tarfile "$DEB" | tar -t | grep -x './prerm' >/dev/null
@@ -698,20 +736,20 @@ jobs:
             src-tauri/target/release/cef-pkg/stage/share "$RELEASE_DIR/"
           test -f "$RELEASE_DIR/runtime/CEF-LICENSE.txt"
           tar -C "$RELEASE_DIR" -czf \
-            "src-tauri/target/release/bundle/Sable-${VERSION}-linux-x86_64.tar.gz" \
+            "src-tauri/target/release/bundle/Sable-${VERSION}-linux-${ARCH}.tar.gz" \
             sable runtime share
 
       - name: Sign the AppImage for the updater
         if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
         shell: bash
         run: |
-          for f in src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage; do
+          for f in src-tauri/target/release/bundle/appimage/Sable-*-linux-${ARCH}.AppImage; do
             [ -e "$f" ] || continue
             pnpm tauri signer sign "$f"
           done
 
       - name: Attest Linux bundles
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             src-tauri/target/release/bundle/deb/*.deb
@@ -727,9 +765,9 @@ jobs:
         run: |
           for f in src-tauri/target/release/bundle/deb/Sable-*.deb \
                    src-tauri/target/release/bundle/rpm/Sable-*.rpm \
-                   src-tauri/target/release/bundle/Sable-*-linux-x86_64.tar.gz \
-                   src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage \
-                   src-tauri/target/release/bundle/appimage/Sable-*-linux-x86_64.AppImage.sig; do
+                   src-tauri/target/release/bundle/Sable-*-linux-${ARCH}.tar.gz \
+                   src-tauri/target/release/bundle/appimage/Sable-*-linux-${ARCH}.AppImage \
+                   src-tauri/target/release/bundle/appimage/Sable-*-linux-${ARCH}.AppImage.sig; do
             [ -e "$f" ] || continue
             echo "Uploading $f"
             gh release upload "$TAG" "$f" --clobber
@@ -738,7 +776,7 @@ jobs:
       - name: Upload .deb as workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sable-linux-deb
+          name: sable-linux-deb-${{ matrix.arch }}
           path: src-tauri/target/release/bundle/deb/Sable-*.deb
           if-no-files-found: error
           retention-days: 1
@@ -763,7 +801,7 @@ jobs:
       - name: Download .deb artifact and compute checksum
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: sable-linux-deb
+          name: sable-linux-deb-x86_64
           path: deb-artifact
 
       - name: Compute checksum
@@ -818,6 +856,272 @@ jobs:
           fi
           git commit -m "nightly ${VERSION}"
           git push
+
+  distribute-aur:
+    name: Publish stable to AUR
+    needs: [setup-release, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ needs.setup-release.outputs.nightly != 'true' }}
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.setup-release.outputs.tag }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download .deb artifact and compute checksum
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sable-linux-deb-x86_64
+          path: deb-artifact
+
+      - name: Compute checksum
+        shell: bash
+        run: |
+          set -- deb-artifact/Sable-*-linux-x86_64.deb
+          [ "$#" -eq 1 ] && [ -e "$1" ] || { echo "Expected exactly one .deb, got $*" >&2; exit 1; }
+          echo "SHA256=$(sha256sum "$1" | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      - name: Push to AUR sable-bin
+        shell: bash
+        env:
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+        run: |
+          if [ -z "${AUR_KEY:-}" ]; then
+            echo "::notice::AUR_KEY is not set; skipping the AUR publish."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur_key -o IdentitiesOnly=yes"
+
+          git clone "ssh://aur@aur.archlinux.org/sable-bin.git" aur-repo
+          cp packaging/aur/sable-bin.PKGBUILD aur-repo/PKGBUILD
+          cp packaging/aur/sable-bin.install aur-repo/sable-bin.install
+
+          cd aur-repo
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${VERSION}/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${SHA256}')/" \
+            PKGBUILD
+
+          docker run --rm -v "$PWD:/src:ro" archlinux:base-devel bash -c '
+            useradd -m build
+            cp /src/PKGBUILD /home/build/
+            cp /src/sable-bin.install /home/build/
+            su build -c "cd /home/build && makepkg --printsrcinfo"
+          ' > .SRCINFO
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD sable-bin.install .SRCINFO
+          if git diff --cached --quiet; then
+            echo "Nothing changed; skipping the push."
+            exit 0
+          fi
+          git commit -m "sable ${VERSION}"
+          git push
+
+  build-nightly-flatpak:
+    name: Build nightly Flatpak ${{ matrix.arch }}
+    needs: [setup-release, linux]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    if: ${{ needs.setup-release.outputs.nightly == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 only, matching packaging/flatpak/flathub.json.
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      ARCH: ${{ matrix.arch }}
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install flatpak-builder
+        shell: bash
+        run: |
+          sudo apt-get update
+          # elfutils supplies eu-strip, which flatpak-builder needs.
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder elfutils
+          flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Measure the release tarball
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TARBALL="Sable-${VERSION}-linux-${ARCH}.tar.gz"
+          gh release download nightly --repo "$GITHUB_REPOSITORY" \
+            --pattern "$TARBALL" --dir tarball
+          echo "SHA256=$(sha256sum "tarball/$TARBALL" | awk '{print $1}')" >> "$GITHUB_ENV"
+          echo "SIZE=$(stat -c %s "tarball/$TARBALL")" >> "$GITHUB_ENV"
+
+      - name: Render the manifest
+        shell: bash
+        run: |
+          if [ "$ARCH" = "x86_64" ]; then
+            node .github/scripts/render-flatpak-nightly.mjs "$VERSION" "$SHA256:$SIZE" -
+          else
+            node .github/scripts/render-flatpak-nightly.mjs "$VERSION" - "$SHA256:$SIZE"
+          fi
+
+      - name: Build the Flatpak
+        shell: bash
+        run: |
+          # rofiles-fuse is unavailable on hosted runners.
+          flatpak-builder \
+            --user \
+            --install-deps-from=flathub \
+            --force-clean \
+            --disable-rofiles-fuse \
+            --default-branch=master \
+            --repo=repo \
+            builddir packaging/flatpak/nightly/moe.sable.client.Nightly.yml
+
+      - name: Upload the exported repo
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flatpak-nightly-repo-${{ matrix.arch }}
+          path: repo
+          if-no-files-found: error
+          retention-days: 1
+          include-hidden-files: true
+
+  publish-nightly-flatpak:
+    name: Publish the nightly Flatpak repo
+    needs: [setup-release, build-nightly-flatpak]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: ${{ needs.setup-release.outputs.nightly == 'true' }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      VERSION: ${{ needs.setup-release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check for the signing key
+        id: gate
+        shell: bash
+        env:
+          FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+          FLATPAK_GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+        run: |
+          if [ -z "${FLATPAK_GPG_KEY:-}" ] || [ -z "${FLATPAK_GPG_KEY_ID:-}" ]; then
+            echo "::notice::FLATPAK_GPG_KEY/FLATPAK_GPG_KEY_ID are not set; skipping the Flatpak publish."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install flatpak
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak ostree
+
+      - name: Download the exported repos
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: flatpak-nightly-repo-*
+          path: arch-repos
+
+      - name: Import the signing key
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          printf '%s\n' "$FLATPAK_GPG_KEY" | gpg --batch --import
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+
+      - name: Assemble and sign the repo
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          FLATPAK_GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+        run: |
+          # A fresh repo each night: older commits point at pruned assets.
+          mkdir -p site/repo
+          ostree --repo=site/repo init --mode=archive-z2
+          # download-artifact extracts a solo pattern match directly into the
+          # path; multiple matches land in per-artifact subdirectories.
+          if [ -e arch-repos/config ]; then
+            repos=(arch-repos/)
+          else
+            repos=(arch-repos/*/)
+          fi
+          for src in "${repos[@]}"; do
+            # Zip artifacts drop empty directories; ostree needs refs/remotes
+            # to exist when listing the source repo's refs.
+            mkdir -p "$src/refs/remotes"
+            echo "Pulling $src"
+            ostree --repo=site/repo pull-local "$src"
+          done
+          flatpak build-update-repo \
+            --title="Sable Nightly" \
+            --default-branch=master \
+            --gpg-sign="$FLATPAK_GPG_KEY_ID" \
+            --gpg-homedir="$GNUPGHOME" \
+            site/repo
+          ostree --repo=site/repo refs
+
+      - name: Write the .flatpakrepo and landing page
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          FLATPAK_GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+        run: |
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          NAME="${GITHUB_REPOSITORY##*/}"
+          BASE="https://$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]').github.io/$NAME"
+          GPGKEY="$(gpg --homedir "$GNUPGHOME" --export "$FLATPAK_GPG_KEY_ID" | base64 -w0)"
+
+          sed -e "s|@REPO_URL@|$BASE/repo/|" -e "s|@GPGKEY@|$GPGKEY|" \
+            packaging/flatpak/nightly/sable-nightly.flatpakrepo.in \
+            > site/sable-nightly.flatpakrepo
+
+          sed -e "s|@BASE_URL@|$BASE|g" -e "s|@VERSION@|$VERSION|g" \
+            packaging/flatpak/nightly/index.html.in > site/index.html
+
+      - name: Upload the Pages artifact
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
 
   distribute-homebrew:
     name: Publish Homebrew cask

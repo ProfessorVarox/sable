@@ -68,7 +68,11 @@ async function main() {
     logger.info('Building without the auto-updater (--no-updater)');
   }
 
-  const features = noUpdater ? platform : `${platform},updater`;
+  // The frontend is built before Cargo, so mirror the updater feature into Vite.
+  process.env.VITE_DESKTOP_UPDATER_ENABLED = String(!noUpdater);
+
+  const base = noUpdater ? platform : `${platform},updater`;
+  const features = `${base},matrix-crypto`;
   const args = [cmd, '--features', features, ...tauriArgs];
   if (!tauriArgs.includes('--')) {
     args.push('--');

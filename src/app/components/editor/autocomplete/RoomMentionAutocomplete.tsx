@@ -1,6 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useMemo } from 'react';
-import type { Editor } from 'slate';
 import { Avatar, MenuItem, Text } from 'folds';
 import { Hash, sizedIcon } from '$components/icons/phosphor';
 import type { MatrixClient } from '$types/matrix-sdk';
@@ -19,10 +18,13 @@ import { allRoomsAtom } from '$state/room-list/roomList';
 import { factoryRoomIdByActivity } from '$utils/sort';
 import { RoomAvatar, RoomIcon } from '$components/room-avatar';
 import { getViaServers } from '$plugins/via-servers';
-import { createMentionElement, moveCursor, replaceWithElement } from '$components/editor/utils';
+import { createMentionElement } from '$components/editor/utils';
 import { getMxIdServer } from '$utils/mxIdHelper';
 import { AutocompleteMenu } from './AutocompleteMenu';
-import type { AutocompleteQuery } from './autocompleteQuery';
+import type {
+  EditorAutocompleteQuery,
+  ProseMirrorEditorController,
+} from '../prosemirrorController';
 
 type MentionAutoCompleteHandler = (roomAliasOrId: string, name: string) => void;
 
@@ -35,7 +37,7 @@ function UnknownRoomMentionItem({
   query,
   handleAutocomplete,
 }: {
-  query: AutocompleteQuery<string>;
+  query: EditorAutocompleteQuery<string>;
   handleAutocomplete: MentionAutoCompleteHandler;
 }) {
   const mx = useMatrixClient();
@@ -61,8 +63,8 @@ function UnknownRoomMentionItem({
 
 type RoomMentionAutocompleteProps = {
   roomId: string;
-  editor: Editor;
-  query: AutocompleteQuery<string>;
+  controller: ProseMirrorEditorController;
+  query: EditorAutocompleteQuery<string>;
   requestClose: () => void;
 };
 
@@ -74,7 +76,7 @@ const SEARCH_OPTIONS: UseAsyncSearchOptions = {
 
 export function RoomMentionAutocomplete({
   roomId,
-  editor,
+  controller,
   query,
   requestClose,
 }: RoomMentionAutocompleteProps) {
@@ -119,8 +121,8 @@ export function RoomMentionAutocomplete({
       undefined,
       viaServers
     );
-    replaceWithElement(editor, query.range, mentionEl);
-    moveCursor(editor, true);
+    controller.insertInline(mentionEl, query.from, query.to);
+    controller.insertText(' ');
     requestClose();
   };
 
@@ -139,11 +141,7 @@ export function RoomMentionAutocomplete({
   });
 
   return (
-    <AutocompleteMenu
-      headerContent={<Text size="L400">Rooms</Text>}
-      requestClose={requestClose}
-      editor={editor}
-    >
+    <AutocompleteMenu headerContent={<Text size="L400">Rooms</Text>} requestClose={requestClose}>
       {autoCompleteRoomIds.length === 0 ? (
         <UnknownRoomMentionItem query={query} handleAutocomplete={handleAutocomplete} />
       ) : (

@@ -358,6 +358,17 @@ export function DebugLogViewer() {
                   size="300"
                   radii="300"
                   onClick={() => {
+                    setFilterCategory('media');
+                    setCategoryAnchor(undefined);
+                  }}
+                  disabled={filterCategory === 'media'}
+                >
+                  <Text size="T300">Media</Text>
+                </MenuItem>
+                <MenuItem
+                  size="300"
+                  radii="300"
+                  onClick={() => {
                     setFilterCategory('call');
                     setCategoryAnchor(undefined);
                   }}

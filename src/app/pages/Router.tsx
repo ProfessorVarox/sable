@@ -6,14 +6,12 @@ import {
   createHashRouter,
   createRoutesFromElements,
   redirect,
-} from 'react-router-dom';
+} from 'react-router';
 import * as Sentry from '@sentry/react';
 
 import type { ClientConfig } from '$hooks/useClientConfig';
 import { ErrorPage } from '$components/DefaultErrorPage';
-import { Room } from '$features/room';
 import { Lobby } from '$features/lobby';
-import { ForumView } from '$features/forum';
 import { PageRoot } from '$components/page';
 import { ScreenSize } from '$hooks/useScreenSize';
 import { ReceiveSelfDeviceVerification } from '$components/DeviceVerification';
@@ -71,6 +69,7 @@ import {
 import { ClientBindAtoms, ClientLayout, ClientRoot, ClientRouteOutlet } from './client';
 import { ShallowRouteRenderer } from './client/ShallowRouteRenderer';
 import { HandleNotificationClick, ClientNonUIFeatures } from './client/ClientNonUIFeatures';
+import { RoomRoute } from './client/RoomRoute';
 import { Home, HomeRouteRoomProvider, HomeSearch } from './client/home';
 import { Direct, DirectCreate, DirectRouteRoomProvider } from './client/direct';
 import { RouteSpaceProvider, Space, SpaceRouteRoomProvider, SpaceSearch } from './client/space';
@@ -108,6 +107,7 @@ const PublicRooms = lazy(() =>
 );
 import { setAfterLoginRedirectPath } from './afterLoginRedirectPath';
 import { legacyAuthLoader } from './legacyAuthRedirect';
+import { ensureTauriHistoryRoot } from './tauriHistoryRoot';
 import { WelcomePage } from './client/WelcomePage';
 import { SidebarNav } from './client/SidebarNav';
 import { MobileFriendlySidebarNav, MobileFriendlyBottomNav } from './MobileFriendly';
@@ -118,6 +118,7 @@ import { ClientRoomsNotificationPreferences } from './client/ClientRoomsNotifica
 import { Create } from './client/create';
 import { ToRoomEvent } from './client/ToRoomEvent';
 import { CallStatusRenderer } from './CallStatusRenderer';
+import { LivekitJsCallAudio } from '$features/call/LivekitJsCallAudio';
 import { UserQuickToolsProvider } from '$components/UserQuickToolsProvider';
 import { Navigate } from './client/navigate';
 import { ProfileMobile } from './client/profile';
@@ -151,8 +152,13 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
   const { hashRouter } = clientConfig;
   const mobile = screenSize === ScreenSize.Mobile;
 
+  // Before the router reads the initial location, give webview-level back
+  // navigation somewhere to land on a fresh deep-linked load.
+  ensureTauriHistoryRoot(hashRouter);
+
   const routes = createRoutesFromElements(
     <Route
+      HydrateFallback={() => <SplashScreen>{null}</SplashScreen>}
       element={
         <>
           <TauriDeepLinkBridge />
@@ -256,6 +262,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
                             <ClientRouteOutlet />
                           </ClientLayout>
                           <CallStatusRenderer />
+                          <LivekitJsCallAudio />
                         </CallEmbedProvider>
                         <MobileFriendlyBottomNav>
                           <UserQuickToolsProvider />
@@ -313,7 +320,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             path={ROOM_PATH_SEGMENT}
             element={
               <HomeRouteRoomProvider>
-                <Room />
+                <RoomRoute section="home" forum={false} />
               </HomeRouteRoomProvider>
             }
           />
@@ -321,7 +328,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             path={ROOM_FORUM_PATH_SEGMENT}
             element={
               <HomeRouteRoomProvider>
-                <ForumView />
+                <RoomRoute section="home" forum />
               </HomeRouteRoomProvider>
             }
           />
@@ -340,7 +347,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             path={ROOM_PATH_SEGMENT}
             element={
               <DirectRouteRoomProvider>
-                <Room />
+                <RoomRoute section="direct" forum={false} />
               </DirectRouteRoomProvider>
             }
           />
@@ -348,7 +355,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             path={ROOM_FORUM_PATH_SEGMENT}
             element={
               <DirectRouteRoomProvider>
-                <ForumView />
+                <RoomRoute section="direct" forum />
               </DirectRouteRoomProvider>
             }
           />
@@ -389,7 +396,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             path={ROOM_PATH_SEGMENT}
             element={
               <SpaceRouteRoomProvider>
-                <Room />
+                <RoomRoute section="space" forum={false} />
               </SpaceRouteRoomProvider>
             }
           />
@@ -397,7 +404,7 @@ export const createRouter = (clientConfig: ClientConfig, screenSize: ScreenSize)
             path={ROOM_FORUM_PATH_SEGMENT}
             element={
               <SpaceRouteRoomProvider>
-                <ForumView />
+                <RoomRoute section="space" forum />
               </SpaceRouteRoomProvider>
             }
           />

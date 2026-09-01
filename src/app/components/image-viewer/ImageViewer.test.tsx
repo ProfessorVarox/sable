@@ -3,16 +3,20 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import FileSaver from 'file-saver';
 import { ImageViewer } from './ImageViewer';
-import { showToast } from '$state/toast';
+import { showErrorToast } from '$state/toast';
 import type { IImageInfo } from '$types/matrix/common';
 
 const downloadMedia = vi.fn<(src: string) => Promise<Blob>>();
 const saveMediaToGallery =
-  vi.fn<(input: string, filename: string, mimeType: string) => Promise<void>>();
+  vi.fn<(input: Blob | string, filename: string, mimeType: string) => Promise<void>>();
 const toastMocks = vi.hoisted(() => ({
   showToast: vi.fn<(text: string, durationMs?: number) => void>(),
+  showErrorToast: vi.fn<(text: string, durationMs?: number) => void>(),
 }));
-vi.mock('$state/toast', () => ({ showToast: toastMocks.showToast }));
+vi.mock('$state/toast', () => ({
+  showToast: toastMocks.showToast,
+  showErrorToast: toastMocks.showErrorToast,
+}));
 const platformMocks = vi.hoisted(() => ({
   isAndroidTauri: vi.fn<() => boolean>(() => false),
   iosApp: vi.fn<() => boolean>(() => false),
@@ -50,7 +54,7 @@ vi.mock('$utils/matrix', () => ({
 }));
 vi.mock('$utils/download', async (importOriginal) => ({
   ...(await importOriginal()),
-  saveMediaToGallery: (...args: [string, string, string]) => saveMediaToGallery(...args),
+  saveMediaToGallery: (...args: [Blob | string, string, string]) => saveMediaToGallery(...args),
 }));
 
 vi.mock('file-saver', () => ({
@@ -66,7 +70,14 @@ vi.mock('$hooks/useScreenSize', () => ({
   useCompactLayout: () => screenMocks.isMobile,
 }));
 
-const renderViewer = (props: { alt?: string; src?: string; info?: IImageInfo } = {}) =>
+const renderViewer = (
+  props: {
+    alt?: string;
+    src?: string;
+    info?: IImageInfo;
+    getDownloadBlob?: () => Promise<Blob>;
+  } = {}
+) =>
   render(
     <ImageViewer
       alt="kitten.png"
@@ -95,7 +106,7 @@ describe('ImageViewer', () => {
     expect(FileSaver.saveAs).toHaveBeenCalledWith(expect.any(Blob), 'kitten.png');
   });
 
-  it("downloads the Matrix source behind Android's sable-media URL", async () => {
+  it("forwards Android's sable-media URL to the media transport unchanged", async () => {
     const source = 'https://matrix.example.org/_matrix/client/v1/media/download/example.org/kitten';
     const src = `https://sable-media.localhost/${encodeURIComponent(source)}?__sable_media_cache=3`;
     downloadMedia.mockResolvedValue(new Blob(['image']));
@@ -104,8 +115,24 @@ describe('ImageViewer', () => {
     fireEvent.click(screen.getByText('Download'));
 
     await waitFor(() => {
-      expect(downloadMedia).toHaveBeenCalledWith(source);
+      expect(downloadMedia).toHaveBeenCalledWith(src);
     });
+  });
+
+  it('uses the supplied decrypted blob when downloading encrypted media', async () => {
+    const decryptedBlob = new Blob(['decrypted image'], { type: 'image/jpeg' });
+    const getDownloadBlob = vi.fn<() => Promise<Blob>>().mockResolvedValue(decryptedBlob);
+    downloadMedia.mockClear();
+
+    renderViewer({
+      src: 'sable-media://https://matrix.example.org/_matrix/client/v1/media/download/example.org/kitten',
+      getDownloadBlob,
+    });
+    fireEvent.click(screen.getByText('Download'));
+
+    await waitFor(() => expect(getDownloadBlob).toHaveBeenCalledOnce());
+    expect(downloadMedia).not.toHaveBeenCalled();
+    expect(FileSaver.saveAs).toHaveBeenCalledWith(decryptedBlob, 'kitten.png');
   });
 
   it('activates the download control on the first touch sequence', async () => {
@@ -206,14 +233,14 @@ describe('ImageViewer', () => {
   it('shows an error toast when downloading media fails', async () => {
     const error = new Error('network unavailable');
     downloadMedia.mockRejectedValue(error);
-    vi.mocked(showToast).mockClear();
+    vi.mocked(showErrorToast).mockClear();
 
     renderViewer();
 
     fireEvent.click(screen.getByText('Download'));
 
     await waitFor(() => {
-      expect(showToast).toHaveBeenCalledWith('Failed to download file: network unavailable');
+      expect(showErrorToast).toHaveBeenCalledWith('Failed to download file: network unavailable');
     });
   });
 
@@ -227,19 +254,23 @@ describe('ImageViewer', () => {
     expect(screen.getByText('Save to Gallery')).toBeInTheDocument();
   });
 
-  it("saves the Matrix source behind Android's sable-media URL to the gallery", async () => {
+  it("saves media behind Android's sable-media URL to the gallery", async () => {
     mockPlatform('android');
     const source = 'https://matrix.example.org/_matrix/client/v1/media/download/example.org/kitten';
     const src = `https://sable-media.localhost/${encodeURIComponent(source)}?__sable_media_cache=3`;
+    const blob = new Blob(['image'], { type: 'image/png' });
     saveMediaToGallery.mockClear();
+    downloadMedia.mockClear();
+    downloadMedia.mockResolvedValue(blob);
 
     renderViewer({ src, info: { mimetype: 'image/png' } });
     fireEvent.contextMenu(screen.getByAltText('kitten.png'));
     fireEvent.click(screen.getByText('Save to Gallery'));
 
     await waitFor(() =>
-      expect(saveMediaToGallery).toHaveBeenCalledWith(source, 'kitten.png', 'image/png')
+      expect(saveMediaToGallery).toHaveBeenCalledWith(blob, 'kitten.png', 'image/png')
     );
+    expect(downloadMedia).toHaveBeenCalledWith(src);
   });
 
   it('labels the primary action Save to Photos on iOS without duplicating it in the overflow menu', () => {
@@ -254,8 +285,10 @@ describe('ImageViewer', () => {
 
   it('routes the primary iOS action for trusted images straight to Photos', async () => {
     mockPlatform('ios');
+    const blob = new Blob(['image'], { type: 'image/png' });
     saveMediaToGallery.mockClear();
     downloadMedia.mockClear();
+    downloadMedia.mockResolvedValue(blob);
     vi.mocked(FileSaver.saveAs).mockClear();
 
     renderViewer({ info: { mimetype: 'image/png' } });
@@ -263,13 +296,9 @@ describe('ImageViewer', () => {
     fireEvent.click(screen.getByText('Save to Photos'));
 
     await waitFor(() =>
-      expect(saveMediaToGallery).toHaveBeenCalledWith(
-        'https://example.org/kitten.png',
-        'kitten.png',
-        'image/png'
-      )
+      expect(saveMediaToGallery).toHaveBeenCalledWith(blob, 'kitten.png', 'image/png')
     );
-    expect(downloadMedia).not.toHaveBeenCalled();
+    expect(downloadMedia).toHaveBeenCalledWith('https://example.org/kitten.png');
     expect(FileSaver.saveAs).not.toHaveBeenCalled();
   });
 

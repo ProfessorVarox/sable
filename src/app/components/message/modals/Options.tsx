@@ -46,7 +46,7 @@ import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { MessageDeleteItem } from './MessageDelete';
 import FocusTrap from 'focus-trap-react';
 import { stopPropagation } from '$utils/keyboard';
-import { modalAtom, ModalType } from '$state/modal';
+import { modalAtom, ModalType, pushModalAtom } from '$state/modal';
 import { copyToClipboard } from '$utils/dom';
 import { getMatrixToRoomEvent } from '$plugins/matrix-to';
 import { getViaServers } from '$plugins/via-servers';
@@ -68,8 +68,7 @@ import {
   MATRIX_UNSTABLE_PER_MESSAGE_PROFILE_PROPERTY_NAME,
 } from '$unstable/prefixes';
 import { useFavoriteGifs } from '$hooks/useFavoriteGifs';
-import type { IImageInfo } from '$types/matrix/common';
-import { getIncomingMediaMxcUrl } from '../MsgTypeRenderers';
+import { getFavoriteGifFromMessageContent } from '$utils/favoriteGif';
 import { TemporaryPersonaPicker } from '$features/room/persona-picker/PersonaPicker';
 import { type PerMessageProfileMsc4461 } from '$hooks/usePerMessageProfile';
 import { buildReplacementPmpContent } from '$features/room/buildReplacementContent';
@@ -289,36 +288,29 @@ const MessageFavoriteGifItem = as<
 >(({ room, mEvent, onClose, ...props }, ref) => {
   const mx = useMatrixClient();
   const content = mEvent.getContent();
-  const url = getIncomingMediaMxcUrl(content.file?.url ?? content.url) ?? '';
+  const favoriteGif = getFavoriteGifFromMessageContent(content);
+  const url = favoriteGif?.mediaUrl ?? '';
   const favoritedContent = useFavoriteGifs();
   const [favorited, setFavorited] = useState(
-    favoritedContent.gifs.find((v) => v.url == url) != undefined
+    favoritedContent.gifs.find((v) => v.mediaUrl == url) != undefined
   );
   const handleClick = async () => {
+    if (!favoriteGif) {
+      onClose?.();
+      return;
+    }
     if (!favorited) {
-      const info: IImageInfo | undefined = content?.info;
-      const body = content?.body;
       setFavorited(true);
       await mx
         .setAccountData(MATRIX_SABLE_UNSTABLE_FAVORITE_GIFS, {
-          gifs: [
-            ...favoritedContent.gifs,
-            {
-              title: body ?? '',
-              url: url,
-              width: info?.w,
-              height: info?.h,
-              size: info?.size,
-              mimetype: info?.mimetype,
-            },
-          ],
+          gifs: [...favoritedContent.gifs, favoriteGif],
         })
         .catch(() => setFavorited(false));
     } else {
       setFavorited(false);
       await mx
         .setAccountData(MATRIX_SABLE_UNSTABLE_FAVORITE_GIFS, {
-          gifs: favoritedContent.gifs.filter((v) => v.url != url),
+          gifs: favoritedContent.gifs.filter((v) => v.mediaUrl != url),
         })
         .catch(() => setFavorited(true));
     }
@@ -351,8 +343,6 @@ type OptionEmojiMenuProps = {
   emojiBoardAnchor?: RectCords;
   imagePackRooms?: Room[];
   isQuickOptions?: boolean;
-  isModal?: boolean;
-  ActualMessage?: ReactNode;
 };
 function OptionsEmojiBoard({
   mEvent,
@@ -362,8 +352,6 @@ function OptionsEmojiBoard({
   emojiBoardAnchor,
   imagePackRooms,
   isQuickOptions,
-  isModal,
-  ActualMessage,
 }: OptionEmojiMenuProps) {
   const position =
     (!isQuickOptions && 'Left') ||
@@ -375,15 +363,12 @@ function OptionsEmojiBoard({
       align={isQuickOptions ? 'End' : 'Start'}
       offset={undefined}
       anchor={emojiBoardAnchor}
-      style={isModal ? { width: '100%' } : {}}
       content={
-        <Menu className={isModal ? css.MessageOptionsMenu : undefined}>
-          {ActualMessage}
+        <Menu>
           <EmojiBoard
             imagePackRooms={imagePackRooms ?? []}
             returnFocusOnDeactivate={false}
             allowTextCustomEmoji
-            isFullWidth={isModal}
             onEmojiSelect={(key) => {
               onReactionToggle?.(mEvent.getId() ?? '', key);
               setEmojiBoardAnchor?.(undefined);
@@ -584,6 +569,14 @@ export function OptionQuickMenu({
   );
 }
 
+const triggerRect = (evt: Parameters<MouseEventHandler<HTMLButtonElement>>[0]): RectCords =>
+  evt.currentTarget.parentElement?.parentElement?.getBoundingClientRect() ?? {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+
 export type OptionMenuProps = {
   mEvent: MatrixEvent;
   room: Room;
@@ -611,6 +604,7 @@ export type OptionMenuProps = {
   setIsEmoji?: Dispatch<SetStateAction<boolean>>;
   ActualMessage?: ReactNode;
   isModal?: boolean;
+  closeMessageMenu?: () => void;
 };
 
 function OptionMenu({
@@ -632,10 +626,12 @@ function OptionMenu({
   ActualMessage,
   isModal,
   isGif,
+  closeMessageMenu,
 }: OptionMenuProps) {
   const mobileSheetClose = useMobileSheetClose();
   const closeMenu = mobileSheetClose ?? requestClose;
   const setModal = useSetAtom(modalAtom);
+  const pushModal = useSetAtom(pushModalAtom);
   const store = useStore();
   const mx = useMatrixClient();
   const isThreadedMessage = isThreadRelationEvent(mEvent, mEvent.threadRootId);
@@ -647,6 +643,8 @@ function OptionMenu({
     getEventEdits(evtTimeline.getTimelineSet(), evtId, mEvent.getType())?.getRelations();
   const isEdited = !!edits?.length;
   const [showPersonaSetting] = useSetting(settingsAtom, 'showPersonaSetting');
+
+  const closeAfterHandOff = closeMessageMenu ?? requestClose;
 
   const onTotalClose = () => {
     setModal(null);
@@ -663,28 +661,30 @@ function OptionMenu({
   const [reproxyPickerAnchor, setReproxyPickerAnchor] = useState<RectCords>();
 
   const handleOpenReproxyPicker: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    const target = isModal
-      ? { x: 0, y: innerHeight, width: 0, height: 0 }
-      : (evt.currentTarget.parentElement?.parentElement?.getBoundingClientRect() ?? {
-          x: 0,
-          y: 0,
-          width: 0,
-          height: 0,
-        });
-    setReproxyPickerAnchor(target);
+    if (isModal) {
+      pushModal({
+        type: ModalType.ReproxyPicker,
+        room,
+        mEvent,
+        closeMenu: closeAfterHandOff,
+      });
+      return;
+    }
+    setReproxyPickerAnchor(triggerRect(evt));
   };
 
   const handleOpenEmojiBoard: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    // THIS MAGIC NUMBER SHOULD BE FIXED WHEN SOMEONE FIGURES OUT WHY THE LACK OF IT CREATES A GAP IN THE EMOJIBOARD
-    const target = isModal
-      ? { x: 0, y: innerHeight + 10, width: 0, height: 0 }
-      : (evt.currentTarget.parentElement?.parentElement?.getBoundingClientRect() ?? {
-          x: 0,
-          y: 0,
-          width: 0,
-          height: 0,
-        });
-    setEmojiBoardAnchor?.(target);
+    if (isModal) {
+      pushModal({
+        type: ModalType.ReactionPicker,
+        mEvent,
+        imagePackRooms,
+        onReactionToggle,
+        closeMenu: closeAfterHandOff,
+      });
+      return;
+    }
+    setEmojiBoardAnchor?.(triggerRect(evt));
     setIsEmoji?.(true);
   };
 
@@ -698,8 +698,6 @@ function OptionMenu({
           setEmojiBoardAnchor={setEmojiBoardAnchor}
           emojiBoardAnchor={emojiBoardAnchor}
           imagePackRooms={imagePackRooms}
-          isModal={isModal}
-          ActualMessage={<WrappedMessage isModal={isModal} ActualMessage={ActualMessage} />}
         />
       )}
       {reproxyPickerAnchor !== undefined && (
@@ -727,7 +725,7 @@ function OptionMenu({
         }}
       >
         <Menu className={isModal ? css.MessageOptionsSheetMenu : ''}>
-          {ActualMessage && !emojiBoardAnchor && (
+          {ActualMessage && (
             <>
               <WrappedMessage isModal={isModal} ActualMessage={ActualMessage} />
               <Line direction="Horizontal" variant="SurfaceVariant" />
@@ -950,6 +948,8 @@ export function MobileOptionsInternal({ options }: { options: OptionMenuProps })
             canPinEvent={options.canPinEvent}
             canDelete={options.canDelete}
             setIsEmoji={options.setIsEmoji}
+            imagePackRooms={options.imagePackRooms}
+            closeMessageMenu={options.closeMenu}
             ActualMessage={options.ActualMessage}
             canSendReaction={options.canSendReaction}
             isModal

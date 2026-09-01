@@ -18,14 +18,16 @@ import {
   UserCircle,
 } from '$components/icons/phosphor';
 import { nameInitials } from '$utils/common';
-import type { IPowerLevels } from '$hooks/usePowerLevels';
 import { stopPropagation } from '$utils/keyboard';
+import type { IPowerLevels } from '$hooks/usePowerLevels';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
 import { BackRouteHandler } from '$components/BackRouteHandler';
 import { mxcUrlToHttp } from '$utils/matrix';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useRoomPinnedEvents } from '$hooks/useRoomPinnedEvents';
 import { PopOut, TooltipProvider } from '$components/overlay-stack';
+import { ResponsiveMenu } from '$components/ResponsiveMenu';
+import { useMenuAnchor } from '$hooks/useMenuAnchor';
 import { RoomPinMenu } from '$features/room/room-pin-menu';
 import { ForumMenu } from './ForumMenu';
 import * as css from './ForumView.css';
@@ -47,7 +49,7 @@ export function ForumHeader({ room, showProfile, powerLevels }: ForumHeaderProps
   const useAuthentication = useMediaAuthentication();
   const setPeopleDrawer = useSetSetting(settingsAtom, 'isPeopleDrawer');
   const [peopleDrawer] = useSetting(settingsAtom, 'isPeopleDrawer');
-  const [menuAnchor, setMenuAnchor] = useState<RectCords>();
+  const menu = useMenuAnchor<HTMLButtonElement>();
   const [pinMenuAnchor, setPinMenuAnchor] = useState<RectCords>();
   const screenSize = useScreenSizeContext();
   const pinnedEvents = useRoomPinnedEvents(room);
@@ -64,10 +66,6 @@ export function ForumHeader({ room, showProfile, powerLevels }: ForumHeaderProps
   const avatarUrl = avatarMxc
     ? (mxcUrlToHttp(mx, avatarMxc, useAuthentication, 96, 96, 'crop') ?? undefined)
     : undefined;
-
-  const handleOpenMenu: MouseEventHandler<HTMLButtonElement> = (evt) => {
-    setMenuAnchor(evt.currentTarget.getBoundingClientRect());
-  };
 
   const handleOpenPinMenu: MouseEventHandler<HTMLButtonElement> = (evt) => {
     setPinMenuAnchor(evt.currentTarget.getBoundingClientRect());
@@ -184,7 +182,7 @@ export function ForumHeader({ room, showProfile, powerLevels }: ForumHeaderProps
               </FocusTrap>
             }
           />
-          {screenSize !== ScreenSize.Mobile && (
+          {screenSize === ScreenSize.Desktop && (
             <TooltipProvider
               position="Bottom"
               offset={4}
@@ -205,53 +203,38 @@ export function ForumHeader({ room, showProfile, powerLevels }: ForumHeaderProps
               )}
             </TooltipProvider>
           )}
-          <TooltipProvider
+          <ResponsiveMenu
+            anchor={menu.anchor}
+            requestClose={menu.close}
             position="Bottom"
             align="End"
-            offset={4}
-            tooltip={
-              <Tooltip>
-                <Text>More Options</Text>
-              </Tooltip>
-            }
+            menu={<ForumMenu room={room} powerLevels={powerLevels} requestClose={menu.close} />}
           >
-            {(triggerRef) => (
-              <IconButton
-                fill="None"
-                onClick={handleOpenMenu}
-                ref={triggerRef}
-                aria-pressed={!!menuAnchor}
-              >
-                {composerIcon(DotsThreeOutlineVerticalIcon, {
-                  weight: menuAnchor ? 'fill' : 'regular',
-                })}
-              </IconButton>
-            )}
-          </TooltipProvider>
-          <PopOut
-            anchor={menuAnchor}
-            position="Bottom"
-            align="End"
-            content={
-              <FocusTrap
-                focusTrapOptions={{
-                  initialFocus: false,
-                  returnFocusOnDeactivate: false,
-                  onDeactivate: () => setMenuAnchor(undefined),
-                  clickOutsideDeactivates: true,
-                  isKeyForward: (evt: KeyboardEvent) => evt.key === 'ArrowDown',
-                  isKeyBackward: (evt: KeyboardEvent) => evt.key === 'ArrowUp',
-                  escapeDeactivates: stopPropagation,
-                }}
-              >
-                <ForumMenu
-                  room={room}
-                  powerLevels={powerLevels}
-                  requestClose={() => setMenuAnchor(undefined)}
-                />
-              </FocusTrap>
-            }
-          />
+            <TooltipProvider
+              position="Bottom"
+              align="End"
+              offset={4}
+              tooltip={
+                <Tooltip>
+                  <Text>More Options</Text>
+                </Tooltip>
+              }
+            >
+              {(triggerRef) => (
+                <IconButton
+                  fill="None"
+                  onClick={menu.triggerProps.onClick}
+                  ref={triggerRef}
+                  aria-label="More Options"
+                  aria-pressed={!!menu.anchor}
+                >
+                  {composerIcon(DotsThreeOutlineVerticalIcon, {
+                    weight: menu.anchor ? 'fill' : 'regular',
+                  })}
+                </IconButton>
+              )}
+            </TooltipProvider>
+          </ResponsiveMenu>
         </Box>
       </Box>
     </PageHeader>

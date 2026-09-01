@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, ReactNode, SyntheticEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
@@ -40,7 +40,11 @@ import {
   mxcUrlToHttp,
   rewriteAuthenticatedMediaUrl,
 } from '$utils/matrix';
-import { addTauriMediaRetryRevision, getTauriMediaRetryTarget } from '$utils/mediaUrl';
+import {
+  addTauriMediaRetryRevision,
+  getTauriMediaRetryTarget,
+  prepareLoopbackImageSource,
+} from '$utils/mediaUrl';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { isTauri } from '@tauri-apps/api/core';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
@@ -76,19 +80,43 @@ export function checkIfGif(url: string, mimetype?: string, body?: string) {
   );
 }
 
+// Matches Element Web's timeline thumbnail budget.
+const TIMELINE_THUMBNAIL_WIDTH = 800;
+const TIMELINE_THUMBNAIL_HEIGHT = 600;
+const THUMBNAIL_MIN_SOURCE_BYTES = 1024 * 1024;
+
+// Follows Element Web's `getThumbUrl`, except that unknown dimensions keep the original: stickers
+// and custom emoji render through this component too and routinely omit `info`.
+function wantsThumbnail(info: IImageInfo | undefined, width: number, height: number): boolean {
+  if (!info?.w || !info.h || !info.size) return false;
+  if (info.w <= width && info.h <= height) return false;
+  // At 1x the thumbnail is already full quality for the box; denser screens keep the original
+  // until the file is big enough that the bytes matter more than the sharpness.
+  return window.devicePixelRatio === 1 || info.size > THUMBNAIL_MIN_SOURCE_BYTES;
+}
+
+// `info.w`/`info.h` have the source EXIF orientation applied; homeservers that scale raw pixels
+// return a transposed thumbnail with no EXIF left for the browser to correct.
+function isTransposedThumbnail(info: IImageInfo | undefined, image: HTMLImageElement): boolean {
+  const { naturalWidth, naturalHeight } = image;
+  if (!info?.w || !info.h || !naturalWidth || !naturalHeight) return false;
+  return info.w > info.h !== naturalWidth > naturalHeight;
+}
+
 type RenderViewerProps = {
   src: string;
   alt: string;
   filename?: string;
   requestClose: () => void;
   info?: IImageInfo;
+  getDownloadBlob?: () => Promise<Blob>;
 };
 type RenderImageProps = {
   alt: string;
   title: string;
   src: string;
   info?: IImageInfo;
-  onLoad: () => void;
+  onLoad: (event?: SyntheticEvent<HTMLImageElement>) => void;
   onError: () => void;
   onLottieLoad: () => void;
   onLottieError: () => void;
@@ -104,6 +132,10 @@ export type ImageContentProps = {
   info?: IImageInfo;
   encInfo?: EncryptedAttachmentInfo;
   autoPlay?: boolean;
+  favoriteShareUrl?: string;
+  loadLabel?: string;
+  loadDescription?: string;
+  deferMediaLoad?: boolean;
   markedAsSpoiler?: boolean;
   spoilerReason?: string;
   renderViewer: (props: RenderViewerProps) => ReactNode;
@@ -128,6 +160,10 @@ export const ImageContent = as<'div', ImageContentProps>(
       info,
       encInfo,
       autoPlay,
+      favoriteShareUrl,
+      loadLabel,
+      loadDescription,
+      deferMediaLoad = false,
       markedAsSpoiler,
       spoilerReason,
       renderViewer,
@@ -148,6 +184,7 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const [load, setLoad] = useState(false);
     const [error, setError] = useState(false);
+    const [loadRequested, setLoadRequested] = useState(autoPlay ?? false);
     // Tauri only: each retry gets a distinct sable-media:// src.
     const retryRevisionRef = useRef(0);
     const [viewer, setViewer] = useState(false);
@@ -157,17 +194,42 @@ export const ImageContent = as<'div', ImageContentProps>(
 
     const favoritedContent = useFavoriteGifs();
     const [favorited, setFavorited] = useState(
-      favoritedContent.gifs.find((v) => v.url == url) != undefined
+      favoritedContent.gifs.find((v) => v.mediaUrl == url) != undefined
     );
 
     const isGif = checkIfGif(url, info?.mimetype, body);
 
+    const [thumbnailFailed, setThumbnailFailed] = useState(false);
+    // A caller-supplied edge means it already decided it wants a thumbnail of that size.
+    const explicitEdge = typeof matrixThumbnailMaxEdge === 'number' && matrixThumbnailMaxEdge > 0;
+    // Synapse rejects non-integer dimensions with a 400.
+    const thumbWidth = Math.round(explicitEdge ? matrixThumbnailMaxEdge : TIMELINE_THUMBNAIL_WIDTH);
+    const thumbHeight = Math.round(
+      explicitEdge ? matrixThumbnailMaxEdge : TIMELINE_THUMBNAIL_HEIGHT
+    );
+    const usesThumbnail =
+      !encInfo && // the homeserver cannot scale media it cannot decrypt
+      !isGif && // scaling drops the animation
+      !url.startsWith('http') &&
+      !thumbnailFailed &&
+      (explicitEdge || wantsThumbnail(info, thumbWidth, thumbHeight));
+
     const rawMediaUrl = useMemo(() => {
       if (url.startsWith('http')) return url;
+      if (usesThumbnail) {
+        return (
+          mxcUrlToHttp(mx, url, useAuthentication, thumbWidth, thumbHeight, 'scale') ?? undefined
+        );
+      }
       return mxcUrlToHttp(mx, url, useAuthentication) ?? undefined;
-    }, [mx, url, useAuthentication]);
+    }, [mx, url, useAuthentication, usesThumbnail, thumbWidth, thumbHeight]);
 
-    const resolvedMediaUrl = useRenderableMediaUrl(encInfo ? undefined : rawMediaUrl);
+    const shouldResolveMedia = !deferMediaLoad || autoPlay || loadRequested;
+    const tauri = isTauri();
+    // Tauri resolves the source inside `loadSrc` instead.
+    const resolvedMediaUrl = useRenderableMediaUrl(
+      encInfo || tauri || !shouldResolveMedia ? undefined : rawMediaUrl
+    );
 
     const createObjectURL = useCreateObjectURL();
 
@@ -175,7 +237,7 @@ export const ImageContent = as<'div', ImageContentProps>(
       useCallback(async () => {
         if (encInfo) {
           if (!rawMediaUrl) throw new Error('Invalid media URL');
-          if (isTauri()) {
+          if (tauri) {
             // The registration key is the revised target; Rust strips the fragment.
             const attemptedTarget =
               getTauriMediaRetryTarget(rawMediaUrl, retryRevisionRef.current) ?? rawMediaUrl;
@@ -188,11 +250,12 @@ export const ImageContent = as<'div', ImageContentProps>(
             )
           );
         }
-        return addTauriMediaRetryRevision(
+        const source = addTauriMediaRetryRevision(
           resolvedMediaUrl ?? rawMediaUrl ?? url,
           retryRevisionRef.current
         );
-      }, [rawMediaUrl, resolvedMediaUrl, url, mimeType, encInfo, createObjectURL])
+        return tauri && rawMediaUrl ? prepareLoopbackImageSource(source) : source;
+      }, [rawMediaUrl, resolvedMediaUrl, tauri, url, mimeType, encInfo, createObjectURL])
     );
 
     useEffect(() => {
@@ -200,12 +263,8 @@ export const ImageContent = as<'div', ImageContentProps>(
         setViewerFullSrc(null);
         return undefined;
       }
-      if (
-        typeof matrixThumbnailMaxEdge !== 'number' ||
-        matrixThumbnailMaxEdge <= 0 ||
-        encInfo ||
-        url.startsWith('http')
-      ) {
+      // The timeline shows a scaled rendition, so the viewer has to re-fetch the original.
+      if (!usesThumbnail) {
         return undefined;
       }
       let cancelled = false;
@@ -217,23 +276,34 @@ export const ImageContent = as<'div', ImageContentProps>(
       return () => {
         cancelled = true;
       };
-    }, [viewer, matrixThumbnailMaxEdge, encInfo, url, mx, useAuthentication]);
+    }, [viewer, usesThumbnail, url, mx, useAuthentication]);
 
-    const handleLoad = () => {
+    const handleLoad = (event?: SyntheticEvent<HTMLImageElement>) => {
+      if (usesThumbnail && event && isTransposedThumbnail(info, event.currentTarget)) {
+        setThumbnailFailed(true);
+        return;
+      }
       setLoad(true);
     };
     const handleError = () => {
       setLoad(false);
+      // Homeservers 4xx thumbnail requests for media they cannot scale; the original still works.
+      if (usesThumbnail) {
+        setThumbnailFailed(true);
+        return;
+      }
       setError(true);
     };
 
     const handleRetry = () => {
+      setLoadRequested(true);
       setError(false);
       retryRevisionRef.current += 1;
       loadSrc().catch(() => undefined);
     };
 
     const handleView = async () => {
+      setLoadRequested(true);
       if (srcState.status !== AsyncStatus.Idle) return;
       try {
         const src = await loadSrc();
@@ -249,6 +319,15 @@ export const ImageContent = as<'div', ImageContentProps>(
     useEffect(() => {
       if (autoPlay) loadSrc().catch(() => undefined);
     }, [autoPlay, loadSrc]);
+
+    // Guarded by a ref rather than `loadSrc` identity: `loadSrc` changes on every render when the
+    // caller passes `info`/`encInfo` inline, which would otherwise re-fetch in a loop.
+    const fallbackLoadedRef = useRef(false);
+    useEffect(() => {
+      if (!thumbnailFailed || fallbackLoadedRef.current) return;
+      fallbackLoadedRef.current = true;
+      loadSrc().catch(() => undefined);
+    }, [thumbnailFailed, loadSrc]);
 
     const imageW = info?.w;
     const imageH = info?.h;
@@ -284,6 +363,13 @@ export const ImageContent = as<'div', ImageContentProps>(
             filename,
             requestClose: () => setViewer(false),
             info,
+            getDownloadBlob:
+              encInfo && rawMediaUrl
+                ? () =>
+                    downloadEncryptedMedia(rawMediaUrl, (buffer) =>
+                      decryptFile(buffer, mimeType ?? FALLBACK_MIMETYPE, encInfo)
+                    )
+                : undefined,
           })
         : null;
 
@@ -340,8 +426,11 @@ export const ImageContent = as<'div', ImageContentProps>(
             className={css.AbsoluteContainer}
             alignItems="Center"
             justifyContent="Center"
+            direction="Column"
+            gap="200"
             {...viewActivation}
           >
+            {loadDescription && <Text size="T300">{loadDescription}</Text>}
             <Button
               variant="Secondary"
               fill="Solid"
@@ -349,7 +438,7 @@ export const ImageContent = as<'div', ImageContentProps>(
               size="300"
               before={sizedIcon(Image, 'Inherit', { filled: true })}
             >
-              <Text size="B300">View</Text>
+              <Text size="B300">{loadLabel ?? 'View'}</Text>
             </Button>
           </Box>
         )}
@@ -386,6 +475,7 @@ export const ImageContent = as<'div', ImageContentProps>(
             justifyContent="Center"
             onClick={() => {
               setBlurred(false);
+              setLoadRequested(true);
               if (srcState.status === AsyncStatus.Idle) {
                 loadSrc().catch(() => undefined);
               }
@@ -398,6 +488,7 @@ export const ImageContent = as<'div', ImageContentProps>(
               outlined
               onClick={() => {
                 setBlurred(false);
+                setLoadRequested(true);
                 if (srcState.status === AsyncStatus.Idle) {
                   loadSrc().catch(() => undefined);
                 }
@@ -464,6 +555,7 @@ export const ImageContent = as<'div', ImageContentProps>(
                   onClick={(e) => {
                     e.preventDefault();
                     if (srcState.status === AsyncStatus.Idle) {
+                      setLoadRequested(true);
                       loadSrc().catch(() => undefined);
                       setBlurred(false);
                     } else setBlurred(!blurred);
@@ -489,11 +581,17 @@ export const ImageContent = as<'div', ImageContentProps>(
                                 ...favoritedContent.gifs,
                                 {
                                   title: body ?? '',
-                                  url: url,
+                                  shareUrl: favoriteShareUrl ?? url,
+                                  mediaUrl: url,
                                   width: imageW,
                                   height: imageH,
                                   size: info?.size,
                                   mimetype: info?.mimetype,
+                                  ...(info?.[MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME]
+                                    ? {
+                                        blurhash: info[MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME],
+                                      }
+                                    : {}),
                                 },
                               ],
                             })
@@ -502,7 +600,7 @@ export const ImageContent = as<'div', ImageContentProps>(
                           setFavorited(false);
                           await mx
                             .setAccountData(MATRIX_SABLE_UNSTABLE_FAVORITE_GIFS, {
-                              gifs: favoritedContent.gifs.filter((v) => v.url != url),
+                              gifs: favoritedContent.gifs.filter((v) => v.mediaUrl != url),
                             })
                             .catch(() => setFavorited(true));
                         }

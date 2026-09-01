@@ -1,8 +1,8 @@
 import { EventEmitter } from 'events';
-import { forwardRef, useImperativeHandle, type ReactNode } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, type ReactNode } from 'react';
 import { act, render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import type { Editor } from 'slate';
+import type { ProseMirrorEditorController as Editor } from '$components/editor/prosemirrorController';
 import type { Room } from '$types/matrix-sdk';
 import { RoomEvent } from '$types/matrix-sdk';
 import type { ProcessedEvent } from '$hooks/timeline/useProcessedTimeline';
@@ -22,6 +22,7 @@ const {
   windowFocused,
   rowItemIndex,
   rowRenders,
+  vListMounts,
   eventRedacted,
   unrenderedJumpTarget,
   liveTimeline,
@@ -30,7 +31,9 @@ const {
   vListProps,
   timelineSyncOptions,
   timelineActionsOptions,
-  showToastMock,
+  showErrorToastMock,
+  markAsReadMock,
+  readMarkerInLiveTimeline,
 } = vi.hoisted(() => ({
   vListHandle: {
     scrollSize: 1000,
@@ -40,6 +43,7 @@ const {
     scrollTo: vi.fn<() => void>(),
     getItemOffset: () => 0,
     getItemSize: () => 100,
+    findItemIndex: () => 0,
   },
   timelineSync: {
     eventsLength: 1,
@@ -49,6 +53,8 @@ const {
     forwardStatus: 'idle',
     canPaginateBack: false,
     canPaginateForward: false,
+    backwardError: false,
+    forwardError: false,
     jumpFailed: false,
     focusItem: undefined as { eventId: string; scrollTo: boolean; highlight: boolean } | undefined,
     setFocusItem: vi.fn<() => void>(),
@@ -71,6 +77,7 @@ const {
   windowFocused: { current: false },
   rowItemIndex: { current: 0 },
   rowRenders: { count: 0 },
+  vListMounts: { count: 0 },
   eventRedacted: { current: false },
   unrenderedJumpTarget: {
     current: undefined as { eventId: string; rawIndex: number } | undefined,
@@ -84,7 +91,9 @@ const {
   vListProps: { shift: false, shiftValues: [] as boolean[] },
   timelineSyncOptions: { current: undefined as Record<string, unknown> | undefined },
   timelineActionsOptions: { current: undefined as Record<string, unknown> | undefined },
-  showToastMock: vi.fn<(text: string) => void>(),
+  showErrorToastMock: vi.fn<(text: string) => void>(),
+  markAsReadMock: vi.fn<() => void>(),
+  readMarkerInLiveTimeline: { current: false },
 }));
 
 let lastOnScroll: ((offset: number) => void) | undefined;
@@ -107,6 +116,9 @@ vi.mock('virtua', () => ({
     },
     ref
   ) {
+    useEffect(() => {
+      vListMounts.count += 1;
+    }, []);
     lastOnScroll = onScroll;
     lastOnScrollEnd = onScrollEnd;
     vListProps.shift = shift ?? false;
@@ -145,7 +157,7 @@ vi.mock('$hooks/useRoomNavigate', () => ({
   useRoomNavigate: () => ({ navigateRoom: navigateRoomMock }),
 }));
 
-vi.mock('$state/toast', () => ({ showToast: showToastMock }));
+vi.mock('$state/toast', () => ({ showErrorToast: showErrorToastMock }));
 
 vi.mock('$hooks/useSpace', () => ({ useSpaceOptionally: () => undefined }));
 
@@ -295,7 +307,7 @@ vi.mock('$utils/timeline', () => ({
     unrenderedJumpTarget.current?.eventId === eventId ? {} : eventTimeline.current,
   getDisplayedEventTimeline: (_linkedTimelines: unknown, eventId: string) =>
     unrenderedJumpTarget.current?.eventId === eventId ? {} : eventTimeline.current,
-  getFirstLinkedTimeline: () => undefined,
+  getFirstLinkedTimeline: () => (readMarkerInLiveTimeline.current ? liveTimeline : undefined),
   getInitialTimeline: () => undefined,
   getEventIdAbsoluteIndex: () => unrenderedJumpTarget.current?.rawIndex,
   isNewestLiveEvent: (
@@ -307,7 +319,7 @@ vi.mock('$utils/timeline', () => ({
   },
 }));
 
-vi.mock('$utils/notifications', () => ({ markAsRead: vi.fn<() => void>() }));
+vi.mock('$utils/notifications', () => ({ markAsRead: markAsReadMock }));
 
 vi.mock('$utils/dom', async (importOriginal) => {
   const actual = await importOriginal<typeof DomUtils>();
@@ -386,12 +398,15 @@ beforeEach(() => {
   windowFocused.current = false;
   rowItemIndex.current = 0;
   rowRenders.count = 0;
+  vListMounts.count = 0;
   eventRedacted.current = false;
   unrenderedJumpTarget.current = undefined;
   eventTimeline.current = liveTimeline;
   liveTimeline.getEvents = () => [{ getId: () => '$evt1' }];
   navigateRoomMock.mockReset();
-  showToastMock.mockReset();
+  showErrorToastMock.mockReset();
+  markAsReadMock.mockReset();
+  readMarkerInLiveTimeline.current = false;
   vListProps.shift = false;
   vListProps.shiftValues.length = 0;
   timelineSync.eventsLength = 1;
@@ -401,6 +416,8 @@ beforeEach(() => {
   timelineSync.liveTimelineLinked = true;
   timelineSync.jumpFailed = false;
   timelineSync.backwardStatus = 'idle';
+  timelineSync.backwardError = false;
+  timelineSync.forwardError = false;
   timelineSync.forwardStatus = 'idle';
   (timelineSync.handleTimelinePagination as ReturnType<typeof vi.fn>).mockReset();
   (timelineSync.cancelEventTimelineLoad as ReturnType<typeof vi.fn>).mockReset();
@@ -593,6 +610,17 @@ describe('RoomTimeline content ResizeObserver', () => {
     expect(getByText('Jump to Latest')).toBeTruthy();
   });
 
+  it('remounts the virtualizer when switching to a focused timeline window', () => {
+    const { rerender } = renderTimeline();
+    const mounts = vListMounts.count;
+
+    timelineSync.liveTimelineLinked = false;
+    timelineSync.focusItem = { eventId: '$evt1', scrollTo: true, highlight: true };
+    rerender(<RoomTimeline room={room} editor={{} as Editor} />);
+
+    expect(vListMounts.count).toBe(mounts + 1);
+  });
+
   it('shifts the virtual list when rendered history prepends', async () => {
     timelineSync.liveTimelineLinked = false;
     const { rerender } = render(<RoomTimeline room={room} editor={{} as Editor} eventId="$evt1" />);
@@ -711,8 +739,9 @@ describe('RoomTimeline content ResizeObserver', () => {
     );
   });
 
-  it('cancels a pending context load when opening an already-rendered event', () => {
-    renderTimeline();
+  it('cancels a pending context load when opening an already-rendered event', async () => {
+    const { getByText } = renderTimeline();
+    await settleInitialScroll();
 
     const handleOpenEvent = timelineActionsOptions.current?.handleOpenEvent as
       | ((eventId: string) => void)
@@ -720,6 +749,7 @@ describe('RoomTimeline content ResizeObserver', () => {
     act(() => handleOpenEvent?.('$evt1'));
 
     expect(timelineSync.cancelEventTimelineLoad).toHaveBeenCalled();
+    expect(getByText('Jump to Latest')).toBeTruthy();
   });
 
   it('keeps a fresh highlight visible for two seconds when refocusing the same event', () => {
@@ -850,7 +880,7 @@ describe('failed backfill on an empty timeline', () => {
   it('surfaces the error with a working Retry instead of endless placeholders', () => {
     timelineSync.eventsLength = 0;
     timelineSync.canPaginateBack = true;
-    timelineSync.backwardStatus = 'error';
+    timelineSync.backwardError = true;
 
     const { getByText } = renderTimeline();
 
@@ -927,13 +957,13 @@ describe('MemoizedTimelineItem', () => {
 });
 
 describe('jump reveal and focus-regain read receipts', () => {
-  it('keeps the timeline hidden while a jump is still pending', () => {
+  it('keeps rendering the timeline while a jump is still pending', () => {
     timelineSync.jumpFailed = false;
     const { getByText } = render(
       <RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />
     );
 
-    expect(getByText('canRedact:false hideReads:false')).not.toBeVisible();
+    expect(getByText('canRedact:false hideReads:false')).toBeVisible();
   });
 
   it('restarts a route jump when the Room instance is replaced with the same id', () => {
@@ -950,12 +980,12 @@ describe('jump reveal and focus-regain read receipts', () => {
     expect(timelineSync.loadEventTimeline).toHaveBeenCalledTimes(2);
   });
 
-  it('reveals the timeline when the jump fails instead of leaving a blank room', () => {
+  it('keeps the timeline visible when the jump fails', () => {
     timelineSync.jumpFailed = false;
     const { getByText, rerender } = render(
       <RoomTimeline room={room} editor={{} as Editor} eventId="$jump:example.org" />
     );
-    expect(getByText('canRedact:false hideReads:false')).not.toBeVisible();
+    expect(getByText('canRedact:false hideReads:false')).toBeVisible();
 
     timelineSync.jumpFailed = true;
     act(() => {
@@ -984,7 +1014,7 @@ describe('jump reveal and focus-regain read receipts', () => {
     const onJumpError = timelineSyncOptions.current?.onJumpError as (() => void) | undefined;
     act(() => onJumpError?.());
 
-    expect(showToastMock).toHaveBeenCalledWith('Unable to load this message.');
+    expect(showErrorToastMock).toHaveBeenCalledWith('Unable to load this message.');
   });
 
   it('clears a notification route when an own message returns to the live timeline', async () => {
@@ -1035,6 +1065,24 @@ describe('unread read marker (normal sync)', () => {
     });
 
     expect(processedTimelineOptions.current?.readUptoEventId).toBeUndefined();
+  });
+
+  it('does not mark the room read after scrolling to its unread boundary', async () => {
+    getRoomUnreadInfoMock.mockReturnValue({
+      readUptoEventId: '$read:example.org',
+      inLiveTimeline: true,
+      scrollTo: true,
+    });
+    readMarkerInLiveTimeline.current = true;
+    windowFocused.current = true;
+    eventTimeline.current = liveTimeline;
+    unrenderedJumpTarget.current = { eventId: '$read:example.org', rawIndex: 0 };
+
+    renderTimeline();
+
+    expect(vListHandle.scrollToIndex).toHaveBeenCalledWith(0, { align: 'start' });
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(markAsReadMock).not.toHaveBeenCalled();
   });
 });
 

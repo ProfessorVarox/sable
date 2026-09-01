@@ -10,23 +10,23 @@ use std::{
 use sha2::{Digest, Sha256};
 use tauri::{
     http::{header, Request, Response, StatusCode, Uri},
-    AppHandle, Manager, Runtime, State, UriSchemeContext, UriSchemeResponder,
+    AppHandle, Emitter, Manager, Runtime, State, UriSchemeContext, UriSchemeResponder,
 };
 
-#[cfg(target_os = "android")]
-mod android_loopback;
 mod crypto;
 mod lane;
+mod loopback;
+
+pub const LOOPBACK_REBOUND_EVENT: &str = "sable-media://loopback-rebound";
 mod response;
 mod session;
 
-#[cfg(target_os = "android")]
-use android_loopback::LoopbackMediaServer;
 use crypto::EncryptionStore;
 use lane::{LanePermit, LifoLane};
+use loopback::LoopbackMediaServer;
 use response::{
     apply_cors_headers, error_response, ok_response, read_full, serve_range, serve_range_memory,
-    session_unavailable_response, sniff_image_content_type,
+    session_unavailable_response, sniff_media_content_type,
 };
 use session::{MediaSession, SessionStore};
 use tauri_plugin_http::reqwest::{
@@ -43,7 +43,8 @@ const CACHE_SUBDIR: &str = "sable-media";
 // Inactivity deadline between chunks, so a slow but progressing download is not killed.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_CONCURRENT_THUMBNAIL_REQUESTS: usize = 4;
+// Small and multiplexed over one HTTP/2 connection, so a tight cap only serialises the timeline.
+const MAX_CONCURRENT_THUMBNAIL_REQUESTS: usize = 12;
 const MAX_CONCURRENT_DOWNLOAD_REQUESTS: usize = 6;
 // The frontend mounts (and starts requesting media) before it hands us the session, so a request
 // may arrive first. `<img>` never retries, so waiting beats answering 503.
@@ -67,7 +68,6 @@ pub struct MediaSessionState {
     download_lane: LifoLane,
     cache_miss_gates: Mutex<HashMap<String, Weak<AsyncMutex<Option<FetchResult>>>>>,
     negative_cache: Mutex<HashMap<String, (StatusCode, Instant)>>,
-    #[cfg(target_os = "android")]
     loopback: Option<LoopbackMediaServer>,
 }
 
@@ -81,7 +81,6 @@ impl Default for MediaSessionState {
             download_lane: LifoLane::new(MAX_CONCURRENT_DOWNLOAD_REQUESTS),
             cache_miss_gates: Mutex::new(HashMap::new()),
             negative_cache: Mutex::new(HashMap::new()),
-            #[cfg(target_os = "android")]
             loopback: LoopbackMediaServer::start().ok(),
         }
     }
@@ -113,26 +112,33 @@ impl MediaSessionState {
     }
 
     fn set_session(&self, session: MediaSession) -> Result<(), String> {
-        self.session_store.set(session, || {
+        self.session_store.set(session, |changed| {
             self.forget_client_errors();
-            #[cfg(target_os = "android")]
-            self.clear_loopback_media();
+            // Capabilities embed the access token, so only a real session change orphans them.
+            if changed {
+                self.clear_loopback_media();
+            }
         })
     }
 
     fn clear_session(&self) -> Result<(), String> {
         self.session_store.clear(|| {
             self.forget_client_errors();
-            #[cfg(target_os = "android")]
             self.clear_loopback_media();
         })
     }
 
-    #[cfg(target_os = "android")]
     fn clear_loopback_media(&self) {
         if let Some(loopback) = &self.loopback {
             loopback.clear();
         }
+    }
+
+    fn ensure_loopback_media_live(&self) -> Result<bool, String> {
+        let Some(loopback) = &self.loopback else {
+            return Ok(false);
+        };
+        loopback.ensure_live().map_err(|err| err.to_string())
     }
 
     // Shared across requests so the connection pool and TLS sessions stay warm.
@@ -262,9 +268,19 @@ pub fn set_media_encryption(
         .register(&url, &key, &iv, &sha256, &version, mime_type)
 }
 
-#[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn prepare_loopback_video<R: Runtime>(
+pub fn ensure_loopback_media<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, MediaSessionState>,
+) -> Result<(), String> {
+    if state.ensure_loopback_media_live()? {
+        let _ = app.emit(LOOPBACK_REBOUND_EVENT, ());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn prepare_loopback_media<R: Runtime>(
     app: AppHandle<R>,
     url: String,
 ) -> Result<String, String> {
@@ -343,15 +359,60 @@ pub fn respond<R: Runtime>(
     });
 }
 
+struct ResolvedMedia {
+    cache_key: String,
+    content_type: String,
+    in_memory_body: Option<Arc<Vec<u8>>>,
+    disk_path: PathBuf,
+}
+
+enum Resolved {
+    Ready(MediaSession, ResolvedMedia),
+    SessionUnavailable,
+}
+
 async fn handle_request<R: Runtime>(
     app: &AppHandle<R>,
     uri: Uri,
     range: Option<String>,
     loopback: bool,
 ) -> Result<Response<Vec<u8>>, StatusCode> {
-    #[cfg(not(target_os = "android"))]
-    let _ = loopback;
+    let (session, resolved) = match resolve_media(app, &uri).await? {
+        Resolved::SessionUnavailable => return Ok(session_unavailable_response()),
+        Resolved::Ready(session, resolved) => (session, resolved),
+    };
+    let ResolvedMedia {
+        cache_key,
+        content_type,
+        in_memory_body,
+        disk_path,
+    } = resolved;
+    log_served_content_type(&content_type, range.is_some());
 
+    if loopback && in_memory_body.is_none() {
+        let state = app.state::<MediaSessionState>();
+        if let Some(loopback) = &state.loopback {
+            if loopback.ensure_live().unwrap_or(false) {
+                let _ = app.emit(LOOPBACK_REBOUND_EVENT, ());
+            }
+            return Ok(loopback.redirect_response(&session, &cache_key, disk_path, &content_type));
+        }
+    }
+
+    match (range, in_memory_body) {
+        (Some(range_header), Some(body)) => {
+            Ok(serve_range_memory(&body, &content_type, &range_header))
+        }
+        (Some(range_header), None) => serve_range(disk_path, content_type, range_header).await,
+        (None, Some(body)) => {
+            let vec_body = Arc::try_unwrap(body).unwrap_or_else(|b| (*b).clone());
+            Ok(ok_response(vec_body, &content_type))
+        }
+        (None, None) => Ok(ok_response(read_full(disk_path).await?, &content_type)),
+    }
+}
+
+async fn resolve_media<R: Runtime>(app: &AppHandle<R>, uri: &Uri) -> Result<Resolved, StatusCode> {
     let target = percent_encoding::percent_decode_str(uri.path().trim_start_matches('/'))
         .decode_utf8()
         .map_err(|_| StatusCode::BAD_REQUEST)?
@@ -359,7 +420,7 @@ async fn handle_request<R: Runtime>(
 
     let state = app.state::<MediaSessionState>();
     let Some(session) = state.wait_for_session().await else {
-        return Ok(session_unavailable_response());
+        return Ok(Resolved::SessionUnavailable);
     };
 
     let mut media_url = Url::parse(&target).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -378,7 +439,7 @@ async fn handle_request<R: Runtime>(
     {
         return Err(StatusCode::FORBIDDEN);
     }
-    if !session_marker_matches(&uri, &session.scope)? {
+    if !session_marker_matches(uri, &session.scope)? {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -392,24 +453,45 @@ async fn handle_request<R: Runtime>(
     let (content_type, in_memory_body, disk_path) =
         ensure_cached(&state, &session, &key, media_url, dir, temp_dir).await?;
 
-    #[cfg(target_os = "android")]
-    if loopback && in_memory_body.is_none() && content_type.starts_with("video/") {
-        if let Some(loopback) = &state.loopback {
-            return Ok(loopback.redirect_response(&session, &key, disk_path, &content_type));
-        }
-    }
+    Ok(Resolved::Ready(
+        session,
+        ResolvedMedia {
+            cache_key: key,
+            content_type,
+            in_memory_body,
+            disk_path,
+        },
+    ))
+}
 
-    match (range, in_memory_body) {
-        (Some(range_header), Some(body)) => {
-            Ok(serve_range_memory(&body, &content_type, &range_header))
+#[cfg(desktop)]
+pub(crate) async fn copy_media_to_file<R: Runtime>(
+    app: &AppHandle<R>,
+    url: &str,
+    destination: &Path,
+) -> Result<(), String> {
+    let uri = url.parse::<Uri>().map_err(|err| err.to_string())?;
+    let resolved = resolve_media(app, &uri)
+        .await
+        .map_err(|status| format!("media unavailable ({status})"))?;
+
+    let Resolved::Ready(_, media) = resolved else {
+        return Err("no active media session".to_owned());
+    };
+
+    match media.in_memory_body {
+        Some(body) => {
+            tokio::fs::write(destination, body.as_slice())
+                .await
+                .map_err(|err| err.to_string())?;
         }
-        (Some(range_header), None) => serve_range(disk_path, content_type, range_header).await,
-        (None, Some(body)) => {
-            let vec_body = Arc::try_unwrap(body).unwrap_or_else(|b| (*b).clone());
-            Ok(ok_response(vec_body, &content_type))
+        None => {
+            tokio::fs::copy(&media.disk_path, destination)
+                .await
+                .map_err(|err| err.to_string())?;
         }
-        (None, None) => Ok(ok_response(read_full(disk_path).await?, &content_type)),
     }
+    Ok(())
 }
 
 // Ensure the body + content type are on disk (persistent or temporary), fetching from the homeserver on a miss.
@@ -610,12 +692,12 @@ async fn fetch_and_cache(
         );
     }
 
-    let content_type = upstream
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_owned();
+    let content_type = normalize_content_type(
+        upstream
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
 
     // Encrypted media stays buffered: its SHA-256 only verifies over the whole ciphertext.
     if state.encryption.contains(media_url.as_str()) {
@@ -849,14 +931,38 @@ async fn read_content_type(body_path: PathBuf, content_type_path: PathBuf) -> Op
         if !body_path.is_file() {
             return None;
         }
-        fs::read_to_string(&content_type_path).ok()
+        fs::read_to_string(&content_type_path)
+            .ok()
+            .map(|stored| normalize_content_type(Some(&stored)))
     })
     .await
     .unwrap_or(None)
 }
 
+// Empty becomes octet-stream so it reaches the sniffer; an empty Content-Type is fatal
+// under `nosniff`.
+fn normalize_content_type(raw: Option<&str>) -> String {
+    let trimmed = raw.unwrap_or_default().trim();
+    if trimmed.is_empty() {
+        return "application/octet-stream".to_owned();
+    }
+    trimmed.to_owned()
+}
+
+// Images are the bulk of the traffic and would drown the log.
+fn log_served_content_type(content_type: &str, ranged: bool) {
+    if content_type.starts_with("image/") {
+        return;
+    }
+    if content_type == "application/octet-stream" {
+        log::warn!("[sable-media] serving application/octet-stream (ranged={ranged}); nosniff blocks decoding");
+    } else {
+        log::info!("[sable-media] serving {content_type} (ranged={ranged})");
+    }
+}
+
 /// On a cache hit where the stored content type is octet-stream, re-sniff the
-/// body file's magic bytes and rewrite the .ct file if a real image type is found.
+/// body file's magic bytes and rewrite the .ct file if a known media type is found.
 async fn sniff_and_fix_content_type(
     body_path: PathBuf,
     content_type_path: PathBuf,
@@ -871,9 +977,9 @@ async fn sniff_and_fix_content_type(
             Ok(f) => f,
             Err(_) => return ct_for_closure,
         };
-        let mut buf = [0u8; 64];
+        let mut buf = [0u8; 512];
         let n = file.read(&mut buf).unwrap_or(0);
-        if let Some(sniffed) = sniff_image_content_type(&buf[..n]) {
+        if let Some(sniffed) = sniff_media_content_type(&buf[..n]) {
             let _ = fs::write(&content_type_path, sniffed);
             return sniffed.to_owned();
         }
@@ -955,8 +1061,8 @@ mod tests {
     use tauri::http::{StatusCode, Uri};
 
     use super::{
-        cache_key, session_marker_matches, should_retry_with_session, MediaSession,
-        MediaSessionState, Url,
+        cache_key, normalize_content_type, session_marker_matches, should_retry_with_session,
+        MediaSession, MediaSessionState, Url,
     };
 
     static TEST_CACHE_ID: AtomicU64 = AtomicU64::new(0);
@@ -1492,5 +1598,18 @@ mod tests {
             cache_key("@a:example.org", &format!("{base}#retry=1")),
             cache_key("@a:example.org", &format!("{base}#retry=1"))
         );
+    }
+
+    #[test]
+    fn blank_content_types_become_octet_stream() {
+        for raw in [None, Some(""), Some("   "), Some("\n")] {
+            assert_eq!(normalize_content_type(raw), "application/octet-stream");
+        }
+    }
+
+    #[test]
+    fn real_content_types_are_kept_and_trimmed() {
+        assert_eq!(normalize_content_type(Some("video/webm")), "video/webm");
+        assert_eq!(normalize_content_type(Some("  video/mp4 ")), "video/mp4");
     }
 }

@@ -1,7 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import type { Editor } from 'slate';
-import { ReactEditor } from 'slate-react';
-import { isEmptyEditor, moveCursor } from '$components/editor';
+import type { ProseMirrorEditorController } from '$components/editor/prosemirrorController';
 
 export interface UseMessageEditOptions {
   onReset?: () => void;
@@ -18,7 +16,7 @@ export interface UseMessageEditOptions {
  * editor and returns focus.
  */
 export function useMessageEdit(
-  editor: Editor,
+  editor: ProseMirrorEditorController,
   options?: UseMessageEditOptions
 ): { editId: string | undefined; handleEdit: (editId?: string) => void } {
   const [editId, setEditId] = useState<string | undefined>(undefined);
@@ -41,9 +39,8 @@ export function useMessageEdit(
       if (!focusOnCancelRef.current) return;
       requestAnimationFrame(() => {
         if (aliveRef.current && !aliveRef.current()) return;
-        if (onResetRef.current && isEmptyEditor(editor)) onResetRef.current();
-        ReactEditor.focus(editor);
-        moveCursor(editor);
+        if (onResetRef.current && editor.isEmpty()) onResetRef.current();
+        editor.focus();
       });
     },
     [editor]

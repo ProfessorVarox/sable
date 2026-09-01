@@ -41,15 +41,13 @@ const mx = {
 const profile = (id: string, displayname: string): PerMessageProfileMsc4461 => ({
   id,
   displayname,
-  trigger: { prefix: [] },
 });
 
-/** Mirrors how the editor represents a typed command: empty text node, then a command node. */
+/** Mirrors a command selected from autocomplete in the engine-neutral document. */
 const commandInput = (command: Command, rest = '') => [
   {
     type: BlockType.Paragraph as const,
     children: [
-      { text: '' },
       { type: BlockType.Command as const, command, children: [{ text: '' }] },
       { text: rest },
     ],
@@ -180,7 +178,7 @@ describe('buildOutgoingMessage', () => {
   });
 
   it('strips a pluralkit proxy wrapper and lets its profile win', async () => {
-    const proxied = { ...profile('proxy', 'Proxied'), trigger: { prefix: ['A: '] } };
+    const proxied = { ...profile('proxy', 'Proxied'), triggers: [{ prefix: 'A: ' }] };
     profiles.account = proxied;
 
     const result = await build('A: hello there', {

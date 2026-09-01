@@ -25,34 +25,38 @@ import { useOpenUserRoomProfile } from '$state/hooks/userRoomProfile';
 import { useSpaceOptionally } from '$hooks/useSpace';
 import { getMouseEventCords } from '$utils/dom';
 import * as css from './PollResponses.css';
-import { useCallback, useEffect, useState } from 'react';
-import type { PollAnswerItem } from '$components/message/PollEvent';
-import { M_POLL_RESPONSE, M_TEXT } from 'matrix-js-sdk';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getCountedSelections, type PollAnswerItem } from '$components/message/PollEvent';
+import { M_TEXT } from 'matrix-js-sdk';
 
 type PollResponsesViewerProps = {
   room: Room;
   answers: PollAnswerItem[];
+  maxSelections: number;
   events: MatrixEvent[];
   initialSelection: PollAnswerItem;
   onClose: () => void;
 };
 export const PollResponsesViewer = as<'div', PollResponsesViewerProps>(
-  ({ className, room, answers, events, initialSelection, onClose, ...props }, ref) => {
+  (
+    { className, room, answers, maxSelections, events, initialSelection, onClose, ...props },
+    ref
+  ) => {
     const mx = useMatrixClient();
     const useAuthentication = useMediaAuthentication();
     const space = useSpaceOptionally();
     const openProfile = useOpenUserRoomProfile();
     const nicknames = useAtomValue(nicknamesAtom);
     const [selectedOption, setSelectedOption] = useState(initialSelection);
+    const answerIds = useMemo(() => new Set(answers.map((item) => item.id)), [answers]);
     const getVotes = useCallback(() => {
       let votes: MatrixEvent[] = [];
       events.forEach((item) => {
-        const response = item.getContent()[M_POLL_RESPONSE.name];
-        const selections = response?.answers;
-        if (selections.includes(selectedOption.id) && item.event.sender) votes.push(item);
+        const counted = getCountedSelections(item, answerIds, maxSelections);
+        if (counted.includes(selectedOption.id) && item.event.sender) votes.push(item);
       });
       return votes;
-    }, [selectedOption, events]);
+    }, [selectedOption, events, answerIds, maxSelections]);
     const [votes, setVotes] = useState(getVotes());
     useEffect(() => {
       setSelectedOption(initialSelection);

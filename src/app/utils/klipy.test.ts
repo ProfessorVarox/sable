@@ -1,25 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { getKlipyMxcUrl, getSendableKlipyMxcUrl } from './klipy';
+import { isAllowedKlipyMediaUrl, parseLegacyKlipyGif } from './klipy';
 
-describe('getKlipyMxcUrl', () => {
+describe('legacy Klipy external GIF rendering', () => {
   const gifUrl = 'https://static.klipy.com/ii/example.gif';
 
-  it('does not create an MXC URL without a proxy', () => {
-    expect(getKlipyMxcUrl(gifUrl)).toBe(gifUrl);
-    expect(getSendableKlipyMxcUrl(gifUrl)).toBeUndefined();
-    expect(getSendableKlipyMxcUrl(gifUrl, '   ')).toBeUndefined();
+  it('accepts only approved media URLs', () => {
+    expect(isAllowedKlipyMediaUrl(gifUrl)).toBe(true);
+    expect(isAllowedKlipyMediaUrl('https://static.klipy.com.attacker.example/ii/a.gif')).toBe(
+      false
+    );
+    expect(isAllowedKlipyMediaUrl('https://static.klipy.com:8443/ii/a.gif')).toBe(false);
+    expect(isAllowedKlipyMediaUrl('https://user:pass@static.klipy.com/ii/a.gif')).toBe(false);
   });
 
-  it('allows an existing MXC favorite without a proxy', () => {
-    expect(getSendableKlipyMxcUrl('mxc://example.org/existing')).toBe('mxc://example.org/existing');
-  });
-
-  it('creates an MXC URL when a proxy is configured', () => {
-    expect(getKlipyMxcUrl(gifUrl, 'media.example.org')).toMatch(
-      /^mxc:\/\/media\.example\.org\/klipy_[A-Za-z0-9_-]+$/
-    );
-    expect(getSendableKlipyMxcUrl(gifUrl, 'media.example.org')).toMatch(
-      /^mxc:\/\/media\.example\.org\/klipy_[A-Za-z0-9_-]+$/
-    );
+  it('decodes historical Soliditas MXC events to external GIF metadata', () => {
+    expect(
+      parseLegacyKlipyGif({
+        msgtype: 'm.image',
+        body: 'Reaction',
+        url: 'mxc://gifs.sable.moe/klipy_ZXhhbXBsZS5naWY',
+        info: { w: 480, h: 270, mimetype: 'image/gif' },
+      })
+    ).toMatchObject({
+      provider: 'klipy',
+      media_url: gifUrl,
+      w: 480,
+      h: 270,
+      title: 'Reaction',
+    });
   });
 });

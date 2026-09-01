@@ -92,10 +92,27 @@ export function VerifyCurrentDeviceTile({
   secretStorageKeyId,
   secretStorageKeyContent,
 }: VerifyCurrentDeviceTileProps) {
+  const mx = useMatrixClient();
   const [learnMore, setLearnMore] = useState(false);
 
   const [manualVerification, setManualVerification] = useState(false);
   const handleCancelVerification = () => setManualVerification(false);
+
+  const [requestState, setRequestState] = useState<AsyncState<VerificationRequest, Error>>({
+    status: AsyncStatus.Idle,
+  });
+  const requestVerification = useAsync<VerificationRequest, Error, []>(
+    useCallback(async () => {
+      const crypto = mx.getCrypto();
+      if (!crypto) throw new Error('Unexpected Error! Crypto object not found.');
+      return crypto.requestOwnUserVerification();
+    }, [mx]),
+    setRequestState
+  );
+  const handleExitVerification = useCallback(() => {
+    setRequestState({ status: AsyncStatus.Idle });
+  }, []);
+  const requesting = requestState.status === AsyncStatus.Loading;
 
   return (
     <>
@@ -104,7 +121,7 @@ export function VerifyCurrentDeviceTile({
         title="Unverified"
         description={
           <>
-            Start verification from other device or verify manually.{' '}
+            Verify with another device or verify manually.{' '}
             <Text as="a" size="T200" onClick={() => setLearnMore(!learnMore)}>
               <b>{learnMore ? 'View Less' : 'Learn More'}</b>
             </Text>
@@ -112,22 +129,42 @@ export function VerifyCurrentDeviceTile({
         }
         after={
           !manualVerification && (
-            <Button
-              size="300"
-              variant="Critical"
-              fill="Soft"
-              radii="300"
-              outlined
-              onClick={() => setManualVerification(true)}
-            >
-              <Text as="span" size="B300">
-                Verify Manually
-              </Text>
-            </Button>
+            <Box gap="200" alignItems="Center">
+              <Button
+                size="300"
+                variant="Critical"
+                radii="300"
+                onClick={requestVerification}
+                before={requesting && <Spinner size="100" variant="Critical" fill="Solid" />}
+                disabled={requesting}
+              >
+                <Text as="span" size="B300">
+                  Verify with Device
+                </Text>
+              </Button>
+              <Button
+                size="300"
+                variant="Critical"
+                fill="Soft"
+                radii="300"
+                outlined
+                onClick={() => setManualVerification(true)}
+              >
+                <Text as="span" size="B300">
+                  Verify Manually
+                </Text>
+              </Button>
+            </Box>
           )
         }
       >
         {learnMore && <LearnStartVerificationFromOtherDevice />}
+        {requestState.status === AsyncStatus.Error && (
+          <Text size="T200">{requestState.error.message}</Text>
+        )}
+        {requestState.status === AsyncStatus.Success && (
+          <DeviceVerification request={requestState.data} onExit={handleExitVerification} />
+        )}
       </InfoCard>
       {manualVerification && (
         <ManualVerificationTile

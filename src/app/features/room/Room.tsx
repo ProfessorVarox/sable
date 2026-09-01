@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { Box, Line } from 'folds';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { isKeyHotkey } from 'is-hotkey';
 import { useAtom, useAtomValue } from 'jotai';
 import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
@@ -13,6 +13,8 @@ import { markAsRead } from '$utils/notifications';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useRoomMembers } from '$hooks/useRoomMembers';
 import { Page } from '$components/page';
+import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import { ContainerColor } from '$styles/ContainerColor.css';
 import { CallView } from '$features/call/CallView';
 import { WidgetsDrawer } from '$features/widgets/WidgetsDrawer';
 import { callChatAtom } from '$state/callEmbed';
@@ -45,7 +47,7 @@ export function Room() {
   }, [room.roomId, eventId]);
 
   const [isDrawer] = useSetting(settingsAtom, 'isPeopleDrawer');
-  const [isWidgetDrawerOpen] = useSetting(settingsAtom, 'isWidgetDrawer');
+  const [isWidgetDrawerOpen, setWidgetDrawerOpen] = useSetting(settingsAtom, 'isWidgetDrawer');
   const [hideReads] = useSetting(settingsAtom, 'hideReads');
   const screenSize = useScreenSizeContext();
 
@@ -114,7 +116,7 @@ export function Room() {
   return (
     <PowerLevelsContextProvider value={powerLevels}>
       <RoomAbbreviationsContext.Provider value={abbreviations}>
-        <Box grow="Yes" style={{ position: 'relative' }}>
+        <Box grow="Yes" style={{ position: 'relative', minWidth: 0, width: '100%' }}>
           {callView && (screenSize === ScreenSize.Desktop || !chat) && (
             <Page>
               <RoomViewHeader callView />
@@ -126,7 +128,7 @@ export function Room() {
           {!callView && (
             <Box grow="Yes" direction="Column">
               <RoomViewHeader />
-              <Box grow="Yes">
+              <Box grow="Yes" style={{ minWidth: 0, minHeight: 0, width: '100%' }}>
                 <RoomView eventId={eventId} />
               </Box>
             </Box>
@@ -151,6 +153,21 @@ export function Room() {
               <Line variant="Background" direction="Vertical" size="300" />
               <WidgetsDrawer key={`widgets-${room.roomId}`} room={room} />
             </>
+          )}
+          {screenSize !== ScreenSize.Desktop && isWidgetDrawerOpen && (
+            <ModalOverlay
+              requestClose={() => setWidgetDrawerOpen(false)}
+              dismissOnClickOutside={false}
+              mobile="fullscreen"
+            >
+              <Box
+                className={ContainerColor({ variant: 'Background' })}
+                direction="Column"
+                style={{ position: 'fixed', inset: 0 }}
+              >
+                <WidgetsDrawer key={`widgets-${room.roomId}`} room={room} />
+              </Box>
+            </ModalOverlay>
           )}
           {screenSize === ScreenSize.Desktop && openThreadId && (
             <>

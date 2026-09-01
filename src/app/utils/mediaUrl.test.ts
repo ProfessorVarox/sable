@@ -3,33 +3,48 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 
 const hoistedGetSessionScope = vi.hoisted(() => vi.fn<() => string>(() => 'session_abc'));
 const hoistedIsTauri = vi.hoisted(() => vi.fn<() => boolean>(() => false));
+const hoistedStripsCache = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 const hoistedConvertFileSrc = vi.hoisted(() =>
   vi.fn<(url: string, protocol: string) => string>(
     (url: string, protocol: string) => `${protocol}://${url}`
   )
 );
 
+const hoistedInvoke = vi.hoisted(() =>
+  vi.fn<(command: string, args: { url: string }) => Promise<string>>()
+);
+
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: hoistedIsTauri,
   convertFileSrc: hoistedConvertFileSrc,
+  invoke: hoistedInvoke,
 }));
 
 vi.mock('./mediaTransport', () => ({
   getCurrentMediaSessionScope: hoistedGetSessionScope,
 }));
 
+vi.mock('./platform', () => ({
+  webviewStripsCustomProtocolCache: hoistedStripsCache,
+}));
+
 import {
+  addMediaRetryRevision,
   addTauriMediaRetryRevision,
-  getTauriMediaSourceUrl,
   getTauriMediaRetryTarget,
+  prepareLoopbackImageSource,
+  prepareLoopbackMedia,
   rewriteAuthenticatedMediaUrl,
 } from './mediaUrl';
 
 afterEach(() => {
+  hoistedInvoke.mockReset();
   hoistedIsTauri.mockReset();
   hoistedIsTauri.mockReturnValue(false);
   hoistedGetSessionScope.mockReset();
   hoistedGetSessionScope.mockReturnValue('session_abc');
+  hoistedStripsCache.mockReset();
+  hoistedStripsCache.mockReturnValue(true);
 });
 
 const VERSION_SNIPPET = '__sable_media_cache=3';
@@ -194,6 +209,73 @@ describe('addTauriMediaRetryRevision', () => {
   });
 });
 
+describe('prepareLoopbackImageSource', () => {
+  const RAW = 'https://matrix.example.com/_matrix/client/v1/media/thumbnail/example.com/abc123';
+
+  it('skips the loopback where the protocol keeps its cache headers', async () => {
+    hoistedIsTauri.mockReturnValue(true);
+    hoistedStripsCache.mockReturnValue(false);
+
+    const source = await prepareLoopbackImageSource(RAW);
+
+    expect(source).toContain('sable-media://');
+    expect(hoistedInvoke).not.toHaveBeenCalled();
+  });
+
+  it('uses the loopback where the headers would be stripped', async () => {
+    hoistedIsTauri.mockReturnValue(true);
+    hoistedStripsCache.mockReturnValue(true);
+    hoistedInvoke.mockResolvedValue('http://127.0.0.1:45678/capability');
+
+    await expect(prepareLoopbackImageSource(RAW)).resolves.toBe(
+      'http://127.0.0.1:45678/capability'
+    );
+    expect(hoistedInvoke).toHaveBeenCalledOnce();
+  });
+});
+
+describe('addMediaRetryRevision', () => {
+  const WEB_URL =
+    'https://matrix.example.com/_matrix/client/v1/media/thumbnail/example.com/abc123?width=96';
+  const WRAPPED = `sable-media://${WEB_URL}?__sable_media_cache=3&__sable_media_session=session_abc`;
+
+  it('is a no-op for the first attempt on either platform', () => {
+    hoistedIsTauri.mockReturnValue(false);
+    expect(addMediaRetryRevision(WEB_URL, 0)).toBe(WEB_URL);
+    hoistedIsTauri.mockReturnValue(true);
+    expect(addMediaRetryRevision(WRAPPED, 0)).toBe(WRAPPED);
+  });
+
+  it('changes the requested url outside Tauri so the retry actually re-requests', () => {
+    hoistedIsTauri.mockReturnValue(false);
+    const revised = addMediaRetryRevision(WEB_URL, 1);
+
+    expect(revised).not.toBe(WEB_URL);
+    const parsed = new URL(revised);
+    expect(parsed.searchParams.get('__sable_media_retry')).toBe('1');
+    expect(parsed.searchParams.get('width')).toBe('96');
+    expect(parsed.pathname).toBe('/_matrix/client/v1/media/thumbnail/example.com/abc123');
+  });
+
+  it('replaces the revision outside Tauri instead of stacking parameters', () => {
+    hoistedIsTauri.mockReturnValue(false);
+    const second = addMediaRetryRevision(addMediaRetryRevision(WEB_URL, 1), 2);
+    expect(second).toBe(addMediaRetryRevision(WEB_URL, 2));
+    expect(new URL(second).searchParams.getAll('__sable_media_retry')).toEqual(['2']);
+  });
+
+  it('leaves non-http(s) sources alone outside Tauri', () => {
+    hoistedIsTauri.mockReturnValue(false);
+    const blob = 'blob:https://app.local/0000-1111';
+    expect(addMediaRetryRevision(blob, 1)).toBe(blob);
+  });
+
+  it('delegates to the Tauri fragment encoding inside Tauri', () => {
+    hoistedIsTauri.mockReturnValue(true);
+    expect(addMediaRetryRevision(WRAPPED, 1)).toBe(addTauriMediaRetryRevision(WRAPPED, 1));
+  });
+});
+
 describe('getTauriMediaRetryTarget', () => {
   const WRAPPED =
     'sable-media://https://matrix.example.com/_matrix/client/v1/media/download/example.com/abc123?__sable_media_cache=3&__sable_media_session=session_abc';
@@ -221,16 +303,56 @@ describe('getTauriMediaRetryTarget', () => {
   );
 });
 
-describe('getTauriMediaSourceUrl', () => {
-  it('unwraps the Android protocol URL to its Matrix media source', () => {
-    const source = 'https://matrix.example.com/_matrix/client/v1/media/download/example.com/abc123';
-    const url = `https://sable-media.localhost/${encodeURIComponent(source)}?__sable_media_cache=3`;
+describe('prepareLoopbackMedia', () => {
+  it('resolves the loopback URL under Tauri', async () => {
+    hoistedIsTauri.mockReturnValue(true);
+    hoistedInvoke.mockResolvedValue('http://127.0.0.1:45678/capability');
 
-    expect(getTauriMediaSourceUrl(url)).toBe(source);
+    await expect(prepareLoopbackMedia('sable-media://localhost/media')).resolves.toBe(
+      'http://127.0.0.1:45678/capability'
+    );
+    expect(hoistedInvoke).toHaveBeenCalledWith('prepare_loopback_media', {
+      url: 'sable-media://localhost/media',
+    });
   });
 
-  it('passes ordinary URLs through unchanged', () => {
-    const url = 'https://example.org/image.png';
-    expect(getTauriMediaSourceUrl(url)).toBe(url);
+  it('leaves the URL alone outside Tauri', async () => {
+    hoistedIsTauri.mockReturnValue(false);
+
+    await expect(prepareLoopbackMedia('https://hs.example/media')).resolves.toBe(
+      'https://hs.example/media'
+    );
+    expect(hoistedInvoke).not.toHaveBeenCalled();
+  });
+
+  // Degrading to the custom-scheme URL would silently never load.
+  it('propagates a loopback failure', async () => {
+    hoistedIsTauri.mockReturnValue(true);
+    hoistedInvoke.mockRejectedValue(new Error('loopback media server unavailable'));
+
+    await expect(prepareLoopbackMedia('sable-media://localhost/media')).rejects.toThrow(
+      'loopback media server unavailable'
+    );
+  });
+});
+
+describe('prepareLoopbackImageSource', () => {
+  it('resolves the loopback URL under Tauri', async () => {
+    hoistedIsTauri.mockReturnValue(true);
+    hoistedInvoke.mockResolvedValue('http://127.0.0.1:45678/capability');
+
+    await expect(prepareLoopbackImageSource('sable-media://localhost/media')).resolves.toBe(
+      'http://127.0.0.1:45678/capability'
+    );
+  });
+
+  // Unlike a media element, an image renders from the custom scheme just fine.
+  it('degrades to the custom-scheme URL when the loopback fails', async () => {
+    hoistedIsTauri.mockReturnValue(true);
+    hoistedInvoke.mockRejectedValue(new Error('loopback media server unavailable'));
+
+    await expect(prepareLoopbackImageSource('sable-media://localhost/media')).resolves.toBe(
+      'sable-media://localhost/media'
+    );
   });
 });

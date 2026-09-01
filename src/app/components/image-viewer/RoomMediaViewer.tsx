@@ -13,6 +13,7 @@ import {
   mxcUrlToHttp,
   rewriteAuthenticatedMediaUrl,
 } from '$utils/matrix';
+import { prepareLoopbackImageSource } from '$utils/mediaUrl';
 import { FALLBACK_MIMETYPE } from '$utils/mimeTypes';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { isTauri } from '@tauri-apps/api/core';
@@ -69,8 +70,10 @@ function ResolvedRoomMedia({
     () => (item.url.startsWith('http') ? item.url : mxcUrlToHttp(mx, item.url, useAuthentication)),
     [item.url, mx, useAuthentication]
   );
+  const tauri = isTauri();
+  // Tauri resolves the source inside the effect instead.
   const resolvedMediaUrl = useRenderableMediaUrl(
-    item.encInfo ? undefined : (rawMediaUrl ?? undefined)
+    item.encInfo || tauri ? undefined : (rawMediaUrl ?? undefined)
   );
 
   const [resolved, setResolved] = useState<ResolvedMedia>();
@@ -86,7 +89,7 @@ function ResolvedRoomMedia({
       const { encInfo, mimeType } = item;
       if (encInfo) {
         if (!rawMediaUrl) throw new Error('Invalid media URL');
-        if (isTauri()) {
+        if (tauri) {
           await setMediaEncryption(rawMediaUrl, encInfo, mimeType ?? FALLBACK_MIMETYPE);
           return rewriteAuthenticatedMediaUrl(rawMediaUrl)!;
         }
@@ -96,6 +99,7 @@ function ResolvedRoomMedia({
           )
         );
       }
+      if (tauri && rawMediaUrl) return prepareLoopbackImageSource(rawMediaUrl);
       return resolvedMediaUrl ?? rawMediaUrl ?? item.url;
     };
 
@@ -108,7 +112,7 @@ function ResolvedRoomMedia({
         if (requestRef.current !== request) return;
         setError(err instanceof Error ? err : new Error('Failed to load media'));
       });
-  }, [item, rawMediaUrl, resolvedMediaUrl, createObjectURL, retryToken]);
+  }, [item, rawMediaUrl, resolvedMediaUrl, tauri, createObjectURL, retryToken]);
 
   const loading = !error && resolved?.item.eventId !== item.eventId;
   const showingResolved = resolved?.item.eventId === item.eventId;
@@ -126,6 +130,14 @@ function ResolvedRoomMedia({
           requestClose={requestClose}
           onPrevious={onPrevious}
           onNext={onNext}
+          getDownloadBlob={
+            item.encInfo && rawMediaUrl
+              ? () =>
+                  downloadEncryptedMedia(rawMediaUrl, (buffer) =>
+                    decryptFile(buffer, item.mimeType ?? FALLBACK_MIMETYPE, item.encInfo!)
+                  )
+              : undefined
+          }
         />
       )}
       {loading && (

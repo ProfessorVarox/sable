@@ -63,6 +63,7 @@ import * as customHtmlCss from '$styles/CustomHtml.css';
 type MessagePreviewRendererOptions = {
   room: Room;
   mediaAutoLoad?: boolean;
+  bundledPreview?: boolean;
   urlPreview?: boolean;
   htmlReactParserOptions: HTMLReactParserOptions;
   linkifyOpts: LinkifyOpts;
@@ -131,6 +132,7 @@ function renderRoomMessage(
       getContent={resolvedGetContent}
       edited={resolved.edited}
       mediaAutoLoad={ctx.mediaAutoLoad}
+      bundledPreview={ctx.bundledPreview}
       urlPreview={ctx.urlPreview}
       htmlReactParserOptions={ctx.htmlReactParserOptions}
       linkifyOpts={ctx.linkifyOpts}
@@ -147,7 +149,7 @@ function renderEncryptedDecrypted(
   event: MatrixEvent,
   displayName: string,
   decryptedEvent: MatrixEvent,
-  eventTimeline: NonNullable<ReturnType<Room['getTimelineForEvent']>>
+  eventTimeline: ReturnType<Room['getTimelineForEvent']>
 ) {
   const eventId = event.getId()!;
   if (decryptedEvent.isRedacted()) return <RedactedContent />;
@@ -165,7 +167,9 @@ function renderEncryptedDecrypted(
     );
   }
   if (decryptedType === messageType) {
-    const editedEvent = getEditedEvent(eventId, decryptedEvent, eventTimeline.getTimelineSet());
+    const editedEvent = eventTimeline
+      ? getEditedEvent(eventId, decryptedEvent, eventTimeline.getTimelineSet())
+      : undefined;
     const getContent = (() =>
       editedEvent?.getContent()?.['m.new_content'] ??
       decryptedEvent.getContent()) as GetContentCallback;
@@ -193,9 +197,10 @@ function renderEncrypted(
 ) {
   const eventId = event.getId()!;
   const eventTimeline = ctx.room.getTimelineForEvent(eventId);
-  const decryptedEvent = eventTimeline?.getEvents().find((item) => item.getId() === eventId);
-
-  if (!decryptedEvent || !eventTimeline) return <MessageNotDecryptedContent />;
+  // Previews are also rendered for events outside any loaded timeline (the
+  // notification inbox), so fall back to the event we were handed.
+  const decryptedEvent =
+    eventTimeline?.getEvents().find((item) => item.getId() === eventId) ?? event;
 
   return (
     <EncryptedContent mEvent={decryptedEvent}>
@@ -281,7 +286,9 @@ export function useRoomMessagePreviewRenderer(
   const mentionClickHandler = useMentionClickHandler(room.roomId);
   const spoilerClickHandler = useSpoilerClickHandler();
   const [mediaAutoLoad] = useSetting(settingsAtom, 'mediaAutoLoad');
+  const [bundledPreview] = useSetting(settingsAtom, 'bundledPreview');
   const [urlPreview] = useSetting(settingsAtom, 'urlPreview');
+  const [encUrlPreview] = useSetting(settingsAtom, 'encUrlPreview');
   const [autoplayEmojis] = useSetting(settingsAtom, 'autoplayEmojis');
   const [incomingInlineImagesDefaultHeight] = useSetting(
     settingsAtom,
@@ -340,11 +347,20 @@ export function useRoomMessagePreviewRenderer(
     () => ({
       room,
       mediaAutoLoad,
-      urlPreview,
+      bundledPreview,
+      urlPreview: room.hasEncryptionStateEvent() ? encUrlPreview : urlPreview,
       htmlReactParserOptions,
       linkifyOpts,
     }),
-    [room, mediaAutoLoad, urlPreview, htmlReactParserOptions, linkifyOpts]
+    [
+      room,
+      mediaAutoLoad,
+      bundledPreview,
+      urlPreview,
+      encUrlPreview,
+      htmlReactParserOptions,
+      linkifyOpts,
+    ]
   );
 
   return useMessagePreviewRenderer(rendererOptions);

@@ -1,17 +1,14 @@
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useMemo } from 'react';
-import type { Editor } from 'slate';
 import { Box, config, MenuItem, Text } from 'folds';
 import type { Room } from '$types/matrix-sdk';
 import type { Command } from '$hooks/useCommands';
 import { useCommands } from '$hooks/useCommands';
-import type { AutocompleteQuery } from '$components/editor';
-import {
-  AutocompleteMenu,
-  createCommandElement,
-  moveCursor,
-  replaceWithElement,
-} from '$components/editor';
+import type {
+  EditorAutocompleteQuery,
+  ProseMirrorEditorController,
+} from '$components/editor/prosemirrorController';
+import { AutocompleteMenu, createCommandElement } from '$components/editor';
 import type { UseAsyncSearchOptions } from '$hooks/useAsyncSearch';
 import { useAsyncSearch } from '$hooks/useAsyncSearch';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -23,8 +20,8 @@ const GIF_COMMAND = 'gif';
 
 type CommandAutocompleteProps = {
   room: Room;
-  editor: Editor;
-  query: AutocompleteQuery<string>;
+  controller: ProseMirrorEditorController;
+  query: EditorAutocompleteQuery<string>;
   requestClose: () => void;
 };
 
@@ -36,7 +33,7 @@ const SEARCH_OPTIONS: UseAsyncSearchOptions = {
 
 export function CommandAutocomplete({
   room,
-  editor,
+  controller,
   query,
   requestClose,
 }: CommandAutocompleteProps) {
@@ -62,8 +59,8 @@ export function CommandAutocomplete({
 
   const handleAutocomplete: CommandAutoCompleteHandler = (commandName) => {
     const cmdEl = createCommandElement(commandName);
-    replaceWithElement(editor, query.range, cmdEl);
-    moveCursor(editor, true);
+    controller.insertInline(cmdEl, query.from, query.to);
+    controller.insertText(' ');
     requestClose();
   };
 
@@ -85,7 +82,6 @@ export function CommandAutocomplete({
         </Box>
       }
       requestClose={requestClose}
-      editor={editor}
     >
       {autoCompleteNames.map((commandName) => (
         <MenuItem

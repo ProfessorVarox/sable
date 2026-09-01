@@ -19,6 +19,13 @@ if [[ "$VERSION" == *-* ]]; then
   RPM_ITERATION="0.${PRERELEASE}"
 fi
 
+# ARCH is read by appimagetool.
+case "$(uname -m)" in
+  x86_64) export ARCH=x86_64; NFPM_ARCH=amd64 ;;
+  aarch64 | arm64) export ARCH=aarch64; NFPM_ARCH=arm64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
 STAGE="$ROOT/src-tauri/target/release"
 OUT="$STAGE/bundle"
 WORK="$STAGE/cef-pkg"
@@ -28,7 +35,7 @@ DISPLAY_NAME="${3:-}"
 APPIMAGE_BIN_PATH="${4:-}"
 if [ -z "$BIN_PATH" ]; then
   for candidate in "$STAGE/Sable Nightly" "$STAGE/Sable" "$STAGE/sable" \
-    "$ROOT/src-tauri/target/x86_64-unknown-linux-gnu/release/sable"; do
+    "$ROOT/src-tauri/target/$ARCH-unknown-linux-gnu/release/sable"; do
     [ -x "$candidate" ] || continue
     BIN_PATH="$candidate"
     break
@@ -111,10 +118,10 @@ EOF
   chmod 755 "$PKGROOT/usr/bin/sable"
   cp -a "$WORK/stage/share/." "$PKGROOT/usr/share/"
 
-  PKGROOT="$PKGROOT" PKG_VERSION="$DEB_VERSION" PKG_RELEASE=1 nfpm pkg -f nfpm.yaml -p deb \
-    -t "$OUT/deb/Sable-${VERSION}-linux-x86_64.deb"
-  PKGROOT="$PKGROOT" PKG_VERSION="$RPM_VERSION" PKG_RELEASE="$RPM_ITERATION" nfpm pkg -f nfpm.yaml -p rpm \
-    -t "$OUT/rpm/Sable-${VERSION}-linux-x86_64.rpm"
+  PKGROOT="$PKGROOT" PKG_ARCH="$NFPM_ARCH" PKG_VERSION="$DEB_VERSION" PKG_RELEASE=1 nfpm pkg -f nfpm.yaml -p deb \
+    -t "$OUT/deb/Sable-${VERSION}-linux-${ARCH}.deb"
+  PKGROOT="$PKGROOT" PKG_ARCH="$NFPM_ARCH" PKG_VERSION="$RPM_VERSION" PKG_RELEASE="$RPM_ITERATION" nfpm pkg -f nfpm.yaml -p rpm \
+    -t "$OUT/rpm/Sable-${VERSION}-linux-${ARCH}.rpm"
 else
   echo "nfpm not found" >&2
   exit 1
@@ -130,7 +137,7 @@ exec "$HERE/usr/bin/sable" "$@"
 EOF
 chmod 755 "$APPDIR/AppRun"
 
-APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$APPIMAGETOOL_CMD" "$APPDIR" \
-  "$OUT/appimage/Sable-${VERSION}-linux-x86_64.AppImage"
+APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL_CMD" "$APPDIR" \
+  "$OUT/appimage/Sable-${VERSION}-linux-${ARCH}.AppImage"
 
 echo "Packages in: $OUT"

@@ -8,7 +8,7 @@ import {
   useLocation,
   useNavigate,
   useNavigationType,
-} from 'react-router-dom';
+} from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { Text } from 'folds';
 import { SequenceCard } from '$components/sequence-card';
@@ -196,6 +196,16 @@ function LocationProbe() {
   );
 }
 
+function RouterBackProbe() {
+  const navigate = useNavigate();
+
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      Router back
+    </button>
+  );
+}
+
 function HomePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -243,6 +253,7 @@ function renderClientShell(
       <MemoryRouter initialEntries={initialEntries} initialIndex={options?.initialIndex}>
         <ScreenSizeProvider value={screenSize}>
           <LocationProbe />
+          <RouterBackProbe />
           <Routes>
             <Route element={<ClientRouteOutlet />}>
               <Route path={getHomePath()} element={<HomePage />} />
@@ -648,6 +659,29 @@ describe('SettingsRoute', () => {
       expect(screen.getByTestId('location-probe')).toHaveTextContent(getSettingsPath())
     );
     expect(screen.getByText('Settings')).toBeInTheDocument();
+  });
+
+  it('leaves settings in one back after a section opened from the menu was closed', async () => {
+    const user = userEvent.setup();
+
+    renderClientShell(ScreenSize.Mobile, {
+      initialEntries: [getHomePath(), getSettingsPath()],
+      initialIndex: 1,
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Appearance' }));
+    expect(await screen.findByRole('heading', { name: 'Appearance section' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe')).toHaveTextContent(getSettingsPath())
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Router back' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe')).toHaveTextContent(getHomePath())
+    );
   });
 });
 

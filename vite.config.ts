@@ -6,15 +6,13 @@ import svgr from 'vite-plugin-svgr';
 import { wasm } from '@rollup/plugin-wasm';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
-import { NodeGlobalsPolyfillPlugin } from '@esbuild-plugins/node-globals-polyfill';
+import nodePolyfills from '@rolldown/plugin-node-polyfills';
 import inject from '@rollup/plugin-inject';
-import topLevelAwait from 'vite-plugin-top-level-await';
 import { VitePWA } from 'vite-plugin-pwa';
 import { compression, defineAlgorithm } from 'vite-plugin-compression2';
 import { constants as zlibConstants } from 'zlib';
 import fs from 'fs';
 import path from 'path';
-import { cloudflare } from '@cloudflare/vite-plugin';
 import { createRequire } from 'module';
 import { sentryVitePlugin } from '@sentry/vite-plugin';
 import buildConfig from './build.config';
@@ -57,6 +55,7 @@ const tauriDevHost = process.env.TAURI_DEV_HOST;
 const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
 const isTauriDebug = process.env.TAURI_ENV_DEBUG === 'true';
 const tauriBuildMinify = !isTauriDebug ? 'esbuild' : false;
+const desktopUpdaterEnabled = process.env.VITE_DESKTOP_UPDATER_ENABLED !== 'false';
 const sentryUploadEnabled = Boolean(
   process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
 );
@@ -74,16 +73,19 @@ const isReleaseTag = (() => {
 
 const baseProductName = typeof appConfig.productName === 'string' ? appConfig.productName : 'Sable';
 
+const callEmbeddedDir = 'node_modules/@sableclient/sable-call-embedded/dist';
+
 const copyFiles = {
   targets: [
     {
-      src: 'node_modules/@sableclient/sable-call-embedded/dist/*',
+      src: callEmbeddedDir,
       dest: 'public/element-call',
+      rename: { stripBase: callEmbeddedDir.split('/').length },
     },
     {
       src: 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs',
-      dest: '',
-      rename: 'pdf.worker.min.js',
+      dest: '.',
+      rename: { name: 'pdf.worker.min.js', stripBase: true as const },
     },
     {
       src: 'config.json',
@@ -92,22 +94,31 @@ const copyFiles = {
     {
       src: 'public/manifest.json',
       dest: '',
+      rename: { name: 'manifest.json', stripBase: true as const },
     },
     {
       src: 'public/res/logo-maskable',
       dest: 'public/',
+      rename: { stripBase: 2 },
     },
     {
       src: 'public/res/logo',
       dest: 'public/',
+      rename: { stripBase: 2 },
     },
     {
       src: 'public/res/svg',
       dest: 'public/',
+      rename: { stripBase: 2 },
     },
     {
       src: 'public/locales',
       dest: 'public/',
+      rename: { stripBase: 1 },
+    },
+    {
+      src: 'wrangler.json',
+      dest: '',
     },
   ],
 };
@@ -151,6 +162,7 @@ export default defineConfig(({ command }) => {
       IS_RELEASE_TAG: JSON.stringify(isReleaseTag),
       SABLE_PRODUCT_NAME: JSON.stringify(baseProductName),
       SABLE_BUILD_FLAVOR: JSON.stringify(buildFlavor),
+      DESKTOP_UPDATER_ENABLED: JSON.stringify(desktopUpdaterEnabled),
     },
     resolve: {
       alias: {
@@ -192,12 +204,6 @@ export default defineConfig(({ command }) => {
     },
     plugins: [
       serverMatrixSdkCryptoWasm(),
-      topLevelAwait({
-        // The export name of top-level await promise for each chunk module
-        promiseExportName: '__tla',
-        // The function to generate import names of top-level await promise in each chunk module
-        promiseImportName: (i) => `__tla_${i}`,
-      }),
       viteStaticCopy(copyFiles),
       vanillaExtractPlugin({ identifiers: 'debug' }),
       wasm() as PluginOption,
@@ -233,14 +239,6 @@ export default defineConfig(({ command }) => {
       }),
       ...(!isTauriBuild
         ? [
-            cloudflare({
-              config: {
-                compatibility_date: '2026-03-03',
-                assets: {
-                  not_found_handling: 'single-page-application',
-                },
-              },
-            }),
             compression({
               algorithms: [
                 defineAlgorithm('brotliCompress', {
@@ -287,22 +285,16 @@ export default defineConfig(({ command }) => {
         '@vanilla-extract/recipes/createRuntimeFn',
       ],
       needsInterop: ['matrix-widget-api'],
-      esbuildOptions: {
-        define: {
-          global: 'globalThis',
+      rolldownOptions: {
+        transform: {
+          define: {
+            global: 'globalThis',
+          },
         },
-        plugins: [
-          // Enable esbuild polyfill plugins
-          NodeGlobalsPolyfillPlugin({
-            process: false,
-            buffer: true,
-          }),
-        ],
+        plugins: [nodePolyfills()],
       },
     },
     build: {
-      // es2022+ avoids esbuild 0.27.7 failing to downlevel destructuring when
-      // vite-plugin-top-level-await re-transpiles chunks (see vitejs/vite#22225).
       target: 'es2022',
       minify: isTauriBuild ? tauriBuildMinify : undefined,
       sourcemap: isTauriBuild ? isTauriDebug || sentryUploadEnabled : true,

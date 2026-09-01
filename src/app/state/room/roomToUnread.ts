@@ -9,7 +9,7 @@ import type {
   ReceiptType,
 } from '$types/matrix-sdk';
 import { RoomEvent, SyncState, EventType, ClientEvent, KnownMembership } from '$types/matrix-sdk';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { RoomToUnread, UnreadInfo, Unread } from '$types/matrix/room';
 import { NotificationType } from '$types/matrix/room';
 import { getAllParents } from '$utils/room/hierarchy';
@@ -20,6 +20,7 @@ import {
   getUnreadInfosForRooms,
   isNotificationEvent,
 } from '$utils/room/unread';
+import { UnreadCountResolver } from '$utils/room/unreadResolver';
 import { useSyncState } from '$hooks/useSyncState';
 import { useRoomsNotificationPreferencesContext } from '$hooks/useRoomsNotificationPreferences';
 import { useMatrixEvent } from '$hooks/useMatrixEvent';
@@ -137,6 +138,11 @@ export const roomToUnreadAtom = atom<RoomToUnread, [RoomToUnreadAction], undefin
     }
     if (action.type === 'PUT') {
       const { unreadInfo } = action;
+      const currentUnread = get(baseRoomToUnread).get(unreadInfo.roomId);
+      // Estimated results never replace counts resolved from read evidence.
+      if (unreadInfo.estimated && currentUnread && currentUnread.total >= unreadInfo.total) {
+        return;
+      }
       if (unreadInfo.total <= 0 && unreadInfo.highlight <= 0) {
         if (get(baseRoomToUnread).has(unreadInfo.roomId)) {
           set(
@@ -152,7 +158,6 @@ export const roomToUnreadAtom = atom<RoomToUnread, [RoomToUnreadAction], undefin
         }
         return;
       }
-      const currentUnread = get(baseRoomToUnread).get(unreadInfo.roomId);
       if (currentUnread && unreadEqual(currentUnread, unreadInfoToUnread(unreadInfo))) {
         // Do not update if unread data has not changed
         // like total & highlight
@@ -186,9 +191,52 @@ export const useBindRoomToUnreadAtom = (mx: MatrixClient, unreadAtom: typeof roo
     () => getClientSyncDiagnostics(mx).transport === 'sliding',
     [mx]
   );
+  const resolverRef = useRef<UnreadCountResolver | null>(null);
+  const mDirectsRef = useRef(mDirects);
+  useEffect(() => {
+    mDirectsRef.current = mDirects;
+  }, [mDirects]);
+  const publishUnreadActionRef = useRef<(action: RoomToUnreadAction) => void>(() => {});
+  useEffect(() => {
+    if (getClientSyncDiagnostics(mx).transport !== 'sliding') return undefined;
+    const resolver = new UnreadCountResolver(mx, (room, unreadInfo) => {
+      const emit = () => {
+        const info =
+          unreadInfo ?? getUnreadInfo(room, { applyFixup: true, mDirects: mDirectsRef.current });
+        if (info.total > 0 || info.highlight > 0) {
+          publishUnreadActionRef.current({ type: 'PUT', unreadInfo: info });
+        } else {
+          publishUnreadActionRef.current({ type: 'DELETE', roomId: room.roomId });
+        }
+      };
+      const manager = getSlidingSyncManager(mx);
+      if (manager?.isResponseProcessing()) {
+        const unsubscribe = manager.subscribeToResponseSettled(() => {
+          unsubscribe();
+          emit();
+        });
+      } else {
+        emit();
+      }
+    });
+    resolverRef.current = resolver;
+    return () => {
+      resolver.dispose();
+      resolverRef.current = null;
+    };
+  }, [mx]);
   const publishUnreadAction = useCallback(
     (action: RoomToUnreadAction) => {
       if (getClientSyncDiagnostics(mx).transport === 'sliding') {
+        const infos =
+          action.type === 'PUT'
+            ? [action.unreadInfo]
+            : action.type === 'RESET'
+              ? action.unreadInfos
+              : [];
+        infos.forEach((info) => {
+          if (info.estimated) resolverRef.current?.queue(info.roomId);
+        });
         const manager = getSlidingSyncManager(mx);
         if (manager?.isResponseProcessing()) return;
       }
@@ -196,6 +244,33 @@ export const useBindRoomToUnreadAtom = (mx: MatrixClient, unreadAtom: typeof roo
     },
     [mx, setUnreadAtom]
   );
+  const resetUnread = useCallback(
+    () =>
+      publishUnreadAction({
+        type: 'RESET',
+        unreadInfos: getUnreadInfos(mx, {
+          applyFixup: shouldApplyUnreadFixup(),
+          mDirects,
+        }),
+      }),
+    [mx, publishUnreadAction, shouldApplyUnreadFixup, mDirects]
+  );
+  useEffect(() => {
+    publishUnreadActionRef.current = publishUnreadAction;
+  }, [publishUnreadAction]);
+
+  useEffect(() => {
+    const manager = getSlidingSyncManager(mx);
+    if (!manager) return undefined;
+
+    let cancelled = false;
+    void manager.waitForSidebarCacheHydration().then((hydrated) => {
+      if (!cancelled && hydrated) resetUnread();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mx, resetUnread]);
 
   useEffect(() => {
     const manager = getSlidingSyncManager(mx);
@@ -216,14 +291,8 @@ export const useBindRoomToUnreadAtom = (mx: MatrixClient, unreadAtom: typeof roo
   }, [mx, setUnreadAtom, publishUnreadAction, mDirects]);
 
   useEffect(() => {
-    publishUnreadAction({
-      type: 'RESET',
-      unreadInfos: getUnreadInfos(mx, {
-        applyFixup: shouldApplyUnreadFixup(),
-        mDirects,
-      }),
-    });
-  }, [mx, publishUnreadAction, shouldApplyUnreadFixup, mDirects, roomToParents]);
+    resetUnread();
+  }, [resetUnread, roomToParents]);
 
   useSyncState(
     mx,
@@ -233,16 +302,10 @@ export const useBindRoomToUnreadAtom = (mx: MatrixClient, unreadAtom: typeof roo
           (state === SyncState.Prepared && prevState === null) ||
           (state === SyncState.Syncing && prevState !== SyncState.Syncing)
         ) {
-          publishUnreadAction({
-            type: 'RESET',
-            unreadInfos: getUnreadInfos(mx, {
-              applyFixup: shouldApplyUnreadFixup(),
-              mDirects,
-            }),
-          });
+          resetUnread();
         }
       },
-      [mx, publishUnreadAction, shouldApplyUnreadFixup, mDirects]
+      [resetUnread]
     )
   );
 
@@ -386,14 +449,8 @@ export const useBindRoomToUnreadAtom = (mx: MatrixClient, unreadAtom: typeof roo
   useMatrixEvent(mx, RoomEvent.AccountData, handleRoomAccountData);
 
   useEffect(() => {
-    publishUnreadAction({
-      type: 'RESET',
-      unreadInfos: getUnreadInfos(mx, {
-        applyFixup: shouldApplyUnreadFixup(),
-        mDirects,
-      }),
-    });
-  }, [mx, publishUnreadAction, roomsNotificationPreferences, shouldApplyUnreadFixup, mDirects]);
+    resetUnread();
+  }, [resetUnread, roomsNotificationPreferences]);
 
   const handleMembershipChange = useCallback(
     (room: Room, membership: string) => {

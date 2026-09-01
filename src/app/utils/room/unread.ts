@@ -1,8 +1,10 @@
 import type { IPushRule, IPushRules, MatrixClient, MatrixEvent, Room } from '$types/matrix-sdk';
 import {
+  Direction,
   EventType,
   NotificationCountType,
   PushRuleActionName,
+  ReceiptType,
   RelationType,
 } from '$types/matrix-sdk';
 
@@ -35,26 +37,10 @@ export const isDirectInvite = (room: Room | null, myUserId: string | null): bool
   return content?.is_direct === true;
 };
 
-/**
- * Detects if a room is a direct message room using multiple signals for robustness:
- * 1. Primary: checks if room is in mDirects set (from m.direct account data)
- * 2. Fallback: checks if room has exactly 2 joined members (classic DM heuristic)
- *
- * The fallback handles cases where m.direct account data is incomplete or outdated.
- */
 export const isDMRoom = (room: Room, mDirects?: Set<string>): boolean => {
-  // Primary signal: check m.direct account data
-  if (mDirects?.has(room.roomId)) {
-    return true;
-  }
-
-  // Fallback: use member count heuristic for untagged DMs
-  // Only applies to non-space rooms with exactly 2 members (you + them)
-  if (!room.isSpaceRoom() && room.getJoinedMemberCount() === 2) {
-    return true;
-  }
-
-  return false;
+  if (mDirects?.has(room.roomId)) return true;
+  // Fallback for DMs missing from m.direct account data.
+  return !room.isSpaceRoom() && room.getJoinedMemberCount() === 2;
 };
 
 const hasNotifyPushAction = (actions: IPushRule['actions']): boolean =>
@@ -87,45 +73,28 @@ export const getNotificationType = (mx: MatrixClient, roomId: string): Notificat
     return NotificationType.Default;
   }
 
-  if ((roomPushRule.actions[0] as string) === 'notify') return NotificationType.AllMessages;
+  if (roomPushRule.actions[0] === PushRuleActionName.Notify) return NotificationType.AllMessages;
   return NotificationType.MentionsAndKeywords;
 };
 
 const NOTIFICATION_EVENT_TYPES = new Set<string>([
-  EventType.RoomCreate,
   EventType.RoomMessage,
   EventType.RoomMessageEncrypted,
-  EventType.RoomMember,
   EventType.Sticker,
   EventType.Reaction,
 ]);
 export const isNotificationEvent = (mEvent: MatrixEvent, room?: Room, userId?: string) => {
-  const eType = mEvent.getType();
-  if (!NOTIFICATION_EVENT_TYPES.has(eType)) {
-    return false;
-  }
-  if (eType === 'm.room.member') return false;
-
+  if (!NOTIFICATION_EVENT_TYPES.has(mEvent.getType())) return false;
   if (mEvent.isRedacted()) return false;
+
   const relation = mEvent.getRelation();
   const relationType = relation?.rel_type;
+  if (relationType === RelationType.Replace) return false;
 
-  // Filter out edits - they shouldn't count as new notifications
-  if (relationType === 'm.replace') return false;
-
-  // For reactions: only count them if they're reactions to the current user's messages
   if (relationType === RelationType.Annotation) {
-    if (!room || !userId || !relation) {
-      // If we don't have room/userId/relation context, filter out all reactions (safe default)
-      return false;
-    }
-    // Get the event being reacted to
-    const reactedToEventId = relation.event_id;
-    if (!reactedToEventId) return false;
-
-    const reactedToEvent = room.findEventById(reactedToEventId);
-    // Only count as notification if the reacted-to message was sent by current user
-    return reactedToEvent?.getSender() === userId;
+    // Without context we cannot tell whose message was reacted to, so ignore it.
+    if (!room || !userId || !relation?.event_id) return false;
+    return room.findEventById(relation.event_id)?.getSender() === userId;
   }
 
   return true;
@@ -138,20 +107,33 @@ export const roomHaveNotification = (room: Room): boolean => {
   return total > 0 || highlight > 0;
 };
 
+export const getFullyReadEventId = (room: Room): string | undefined =>
+  room.getAccountData(EventType.FullyRead)?.getContent<{ event_id?: string }>()?.event_id;
+
+// m.fully_read is a boundary too: the receipt can be gone after a restart.
+export const getReadBoundaryEventId = (room: Room, userId: string): string | undefined => {
+  const receiptId = room.getEventReadUpTo(userId) ?? undefined;
+  const fullyReadId = getFullyReadEventId(room);
+  if (!fullyReadId || receiptId === fullyReadId) return receiptId;
+
+  // Only trust the marker if it is actually loaded.
+  const liveEvents = room.getLiveTimeline().getEvents();
+  for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+    const eventId = liveEvents[i]?.getId();
+    if (eventId === receiptId) return receiptId;
+    if (eventId === fullyReadId) return fullyReadId;
+  }
+  return receiptId;
+};
+
 export const roomHaveUnread = (mx: MatrixClient, room: Room) => {
   if (getNotificationType(mx, room.roomId) === NotificationType.Mute) return false;
   const userId = mx.getUserId();
   if (!userId) return false;
-  const readUpToId = room.getEventReadUpTo(userId);
+  const readUpToId = getReadBoundaryEventId(room, userId);
   const liveEvents = room.getLiveTimeline().getEvents();
 
   if (!readUpToId) {
-    return false;
-  }
-
-  const latestEvent = liveEvents[liveEvents.length - 1];
-
-  if (latestEvent?.getSender() === userId) {
     return false;
   }
 
@@ -159,6 +141,9 @@ export const roomHaveUnread = (mx: MatrixClient, room: Room) => {
     const event = liveEvents[i];
     if (!event) return false;
     if (event.getId() === readUpToId) {
+      return false;
+    }
+    if (event.getSender() === userId) {
       return false;
     }
     if (isNotificationEvent(event, room, userId)) {
@@ -171,6 +156,175 @@ export const roomHaveUnread = (mx: MatrixClient, room: Room) => {
 type UnreadInfoOptions = {
   applyFixup?: boolean;
   mDirects?: Set<string>;
+};
+
+export const hasAnyReadReceipt = (room: Room, userId: string): boolean =>
+  !!room.getReadReceiptForUserId(userId) ||
+  !!room.getReadReceiptForUserId(userId, false, ReceiptType.ReadPrivate);
+
+export const isTimelineExhausted = (room: Room): boolean =>
+  !room.getLiveTimeline().getPaginationToken(Direction.Backward);
+
+// Accepts m.fully_read as evidence when the receipt is missing or lags behind it.
+export const hasReadEvent = (room: Room, userId: string, eventId: string): boolean => {
+  if (room.hasUserReadEvent(userId, eventId)) return true;
+
+  const fullyReadId = getFullyReadEventId(room);
+  if (!fullyReadId) return false;
+
+  const liveEvents = room.getLiveTimeline().getEvents();
+  for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+    const currentId = liveEvents[i]?.getId();
+    // Walking backwards, the marker wins only if it sits at or after the event.
+    if (currentId === fullyReadId) return true;
+    if (currentId === eventId) return false;
+  }
+  return false;
+};
+
+export const isReadBoundaryLoaded = (room: Room, userId: string): boolean => {
+  const readUpToId = room.getEventReadUpTo(userId);
+  if (readUpToId && room.findEventById(readUpToId)) return true;
+  const fullyReadEventId = getFullyReadEventId(room);
+  if (fullyReadEventId && room.findEventById(fullyReadEventId)) return true;
+  return isTimelineExhausted(room);
+};
+
+type TimelineUnreadOptions = {
+  boundaryEventId?: string | null;
+  stopAtOwnEvent?: boolean;
+};
+
+export const countTimelineUnread = (
+  room: Room,
+  userId: string,
+  options: TimelineUnreadOptions = {}
+): { total: number; highlight: number } => {
+  const { boundaryEventId, stopAtOwnEvent = false } = options;
+  let total = 0;
+  let highlight = 0;
+  const pushProcessor = room.client.pushProcessor;
+  const liveEvents = room.getLiveTimeline().getEvents();
+  for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+    const event = liveEvents[i];
+    if (!event) break;
+    if (boundaryEventId && event.getId() === boundaryEventId) break;
+    if (event.getSender() === userId) {
+      if (stopAtOwnEvent) break;
+      continue;
+    }
+    if (isNotificationEvent(event, room, userId)) {
+      total += 1;
+      const pushActions = pushProcessor?.actionsForEvent(event);
+      if (pushActions?.tweaks?.highlight) highlight += 1;
+    }
+  }
+  return { total, highlight };
+};
+
+type Counts = { total: number; highlight: number };
+
+// Clamps only the room portion so thread reply counts survive.
+const clampStaleCounts = (room: Room, userId: string, counts: Counts): Counts => {
+  const roomTotal = room.getRoomUnreadNotificationCount(NotificationCountType.Total);
+  if (roomTotal === 0) return counts;
+
+  // Own sent events always read as read, which would clamp incorrectly.
+  const latestNotification = room
+    .getLiveTimeline()
+    .getEvents()
+    .toReversed()
+    .find(
+      (event) =>
+        !event.isSending() &&
+        event.getSender() !== userId &&
+        isNotificationEvent(event, room, userId)
+    );
+  const latestNotificationId = latestNotification?.getId();
+  if (!latestNotificationId || !hasReadEvent(room, userId, latestNotificationId)) return counts;
+
+  return {
+    total: counts.total - roomTotal,
+    highlight:
+      counts.highlight - room.getRoomUnreadNotificationCount(NotificationCountType.Highlight),
+  };
+};
+
+const countFromBoundary = (room: Room, userId: string): UnreadInfo | undefined => {
+  const boundaryId = getReadBoundaryEventId(room, userId);
+  const counted = countTimelineUnread(room, userId, { boundaryEventId: boundaryId });
+  if (counted.total === 0) return undefined;
+
+  const countIsExact =
+    !!(boundaryId && room.findEventById(boundaryId)) || isTimelineExhausted(room);
+  return {
+    roomId: room.roomId,
+    highlight: counted.highlight,
+    total: counted.total,
+    estimated: !countIsExact,
+  };
+};
+
+const scanForActivity = (
+  room: Room,
+  userId: string,
+  fullyReadEventId: string | undefined
+): { hasActivity: boolean; foundReadBoundary: boolean } => {
+  const liveEvents = room.getLiveTimeline().getEvents();
+  for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+    const event = liveEvents[i];
+    if (!event) break;
+    if (event.getId() === fullyReadEventId || event.getSender() === userId) {
+      return { hasActivity: false, foundReadBoundary: true };
+    }
+    if (isNotificationEvent(event, room, userId)) {
+      return { hasActivity: true, foundReadBoundary: false };
+    }
+  }
+  return { hasActivity: false, foundReadBoundary: false };
+};
+
+// Rooms unvisited under sliding sync have no receipt, so SDK counts are unreliable.
+const estimateWithoutReceipt = (
+  room: Room,
+  userId: string,
+  { total, highlight }: Counts
+): UnreadInfo | undefined => {
+  const fullyReadEventId = getFullyReadEventId(room);
+  const { hasActivity, foundReadBoundary } = scanForActivity(room, userId, fullyReadEventId);
+  const boundaryKnown = foundReadBoundary || isReadBoundaryLoaded(room, userId);
+  const hasDistantReadEvidence =
+    !boundaryKnown && (!!fullyReadEventId || hasAnyReadReceipt(room, userId));
+  if (!hasActivity && !hasDistantReadEvidence) return undefined;
+
+  if (total > 0 || highlight > 0) {
+    return hasActivity ? { roomId: room.roomId, highlight, total } : undefined;
+  }
+
+  if (boundaryKnown) {
+    const counted = countTimelineUnread(room, userId, {
+      boundaryEventId: fullyReadEventId,
+      stopAtOwnEvent: true,
+    });
+    if (counted.total === 0 && counted.highlight === 0) return undefined;
+    return { roomId: room.roomId, highlight: counted.highlight, total: counted.total };
+  }
+  if (hasActivity && !fullyReadEventId) {
+    // No read evidence at all: dot badge with an unknown real count.
+    return { roomId: room.roomId, highlight: 0, total: 1, estimated: true };
+  }
+  // Cannot prove unread state until the distant boundary is loaded.
+  return { roomId: room.roomId, highlight: 0, total: 0, estimated: true };
+};
+
+// Push rules can fail to match a DM, so unread DMs are badged as highlights regardless.
+const shouldForceDMHighlight = (room: Room, mDirects?: Set<string>): boolean => {
+  if (!isDMRoom(room, mDirects)) return false;
+  const notificationType = getNotificationType(room.client, room.roomId);
+  return (
+    notificationType !== NotificationType.Mute &&
+    notificationType !== NotificationType.MentionsAndKeywords
+  );
 };
 
 const unreadInfoFixupInProgress = new WeakSet<Room>();
@@ -190,119 +344,34 @@ export const getUnreadInfo = (room: Room, options?: UnreadInfoOptions): UnreadIn
     }
   }
 
-  let total = room.getUnreadNotificationCount(NotificationCountType.Total);
-  const highlight = room.getUnreadNotificationCount(NotificationCountType.Highlight);
-  let hasTimelineUnread: boolean | undefined;
-  const roomHasTimelineUnread = () => {
-    hasTimelineUnread ??= roomHaveUnread(room.client, room);
-    return hasTimelineUnread;
+  let counts: Counts = {
+    total: room.getUnreadNotificationCount(NotificationCountType.Total),
+    highlight: room.getUnreadNotificationCount(NotificationCountType.Highlight),
   };
 
-  // Check if this is a DM and what notification type it has (using multiple signals for robustness)
-  const isDM = isDMRoom(room, options?.mDirects);
-  const notificationType = isDM ? getNotificationType(room.client, room.roomId) : undefined;
-  const shouldForceDMHighlight =
-    isDM &&
-    notificationType !== NotificationType.Mute &&
-    notificationType !== NotificationType.MentionsAndKeywords;
+  let cachedTimelineUnread: boolean | undefined;
+  const hasTimelineUnread = () => {
+    cachedTimelineUnread ??= roomHaveUnread(room.client, room);
+    return cachedTimelineUnread;
+  };
 
-  // If our latest main-timeline notification event is confirmed read, clamp its stale count.
-  // Only apply to the room (non-thread) portion so thread reply counts are preserved.
-  // Guard: only clamp when the room has NO receipt-confirmed unread events; if roomHaveUnread
-  // is true then there genuinely are unread messages and the SDK count is not fully stale.
-  if (userId && total > 0 && highlight === 0 && !roomHasTimelineUnread()) {
-    const roomTotal = room.getRoomUnreadNotificationCount(NotificationCountType.Total);
-    if (roomTotal > 0) {
-      const liveEvents = room.getLiveTimeline().getEvents();
-      // Exclude the user's own messages: own sent events are always "read" (hasUserReadEvent
-      // returns true for them), which would cause the clamp to fire incorrectly.
-      const latestNotification = [...liveEvents]
-        .toReversed()
-        .find(
-          (event) =>
-            !event.isSending() &&
-            event.getSender() !== userId &&
-            isNotificationEvent(event, room, userId)
-        );
-      const latestNotificationId = latestNotification?.getId();
-      if (latestNotificationId && room.hasUserReadEvent(userId, latestNotificationId)) {
-        // Subtract only the stale main-timeline count; thread totals remain intact.
-        total -= roomTotal;
-      }
-    }
+  if (userId && counts.total > 0 && !hasTimelineUnread()) {
+    counts = clampStaleCounts(room, userId, counts);
   }
 
-  // Fallback: SDK counters are stale/zero but there are receipt-confirmed unread
-  // messages. Walk the live timeline to compute real counts so the badge number
-  // and highlight colour reflect actual state rather than a hard-coded stub.
-  if (total === 0 && highlight === 0 && userId && roomHasTimelineUnread()) {
-    const readUpToId = room.getEventReadUpTo(userId);
-    const liveEvents = room.getLiveTimeline().getEvents();
-    let fallbackTotal = 0;
-    let fallbackHighlight = 0;
-    const pushProcessor = room.client.pushProcessor;
-    for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
-      const event = liveEvents[i];
-      if (!event) break;
-      if (event.getId() === readUpToId) break;
-      if (isNotificationEvent(event, room, userId) && event.getSender() !== userId) {
-        fallbackTotal += 1;
-        const pushActions = pushProcessor.actionsForEvent(event);
-        if (pushActions?.tweaks?.highlight) fallbackHighlight += 1;
-      }
-    }
-    if (fallbackTotal > 0) {
-      return {
-        roomId: room.roomId,
-        highlight: fallbackHighlight,
-        total: fallbackTotal,
-      };
-    }
+  if (userId && counts.total === 0 && counts.highlight === 0 && hasTimelineUnread()) {
+    const counted = countFromBoundary(room, userId);
+    if (counted) return counted;
   }
 
-  // Sliding sync limitation: unvisited rooms don't have read receipt data, but may have
-  // timeline activity. Check for notification events from others in the timeline to show a
-  // badge even when SDK counts are 0 (or unreliable without receipts).
-  if (userId) {
-    const readUpToId = room.getEventReadUpTo(userId);
-
-    // If we have no read receipt, SDK counts may be unreliable. Always check timeline.
-    if (!readUpToId) {
-      const liveEvents = room.getLiveTimeline().getEvents();
-      const fullyReadEventId = room
-        .getAccountData(EventType.FullyRead)
-        ?.getContent<{ event_id?: string }>()?.event_id;
-      let hasActivity = false;
-      for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
-        const event = liveEvents[i];
-        if (!event || event.getId() === fullyReadEventId) break;
-        if (event.getSender() !== userId && isNotificationEvent(event, room, userId)) {
-          hasActivity = true;
-          break;
-        }
-      }
-
-      if (hasActivity) {
-        // If SDK already has counts, use those. Otherwise show dot badge (count=1).
-        if (total === 0 && highlight === 0) {
-          return { roomId: room.roomId, highlight: 0, total: 1 };
-        }
-        // SDK has counts but no receipt - trust the counts and show them
-        return { roomId: room.roomId, highlight, total };
-      }
-    }
+  if (userId && !room.getEventReadUpTo(userId)) {
+    const estimated = estimateWithoutReceipt(room, userId, counts);
+    if (estimated) return estimated;
   }
 
-  // For DMs with Default or AllMessages notification type: if there are unread messages,
-  // ensure we show a notification badge (treat as highlight for badge color purposes).
-  // This handles cases where push rules don't properly match (e.g., classic sync with
-  // member_count condition failures, or sliding sync with limited required_state).
-  if (shouldForceDMHighlight && total > 0 && highlight === 0) {
-    return {
-      roomId: room.roomId,
-      highlight: total, // Treat all unread messages as highlights for DMs
-      total,
-    };
+  const { total, highlight } = counts;
+  if (total > 0 && highlight === 0 && shouldForceDMHighlight(room, options?.mDirects)) {
+    return { roomId: room.roomId, highlight: total, total };
   }
 
   return {
@@ -312,23 +381,21 @@ export const getUnreadInfo = (room: Room, options?: UnreadInfoOptions): UnreadIn
   };
 };
 
-export const getUnreadInfos = (mx: MatrixClient, options?: UnreadInfoOptions): UnreadInfo[] => {
-  const unreadInfos = mx.getRooms().reduce<UnreadInfo[]>((unread, room) => {
-    if (room.isSpaceRoom()) return unread;
-    if (room.getMyMembership() !== 'join') return unread;
-    if (getNotificationType(mx, room.roomId) === NotificationType.Mute) return unread;
+const tracksUnread = (mx: MatrixClient, room: Room): boolean =>
+  room.getMyMembership() === 'join' &&
+  getNotificationType(mx, room.roomId) !== NotificationType.Mute;
 
-    // Always call getUnreadInfo - it has fallback logic for sliding sync rooms without receipts
+const hasUnread = (unreadInfo: UnreadInfo): boolean =>
+  unreadInfo.total > 0 || unreadInfo.highlight > 0;
+
+export const getUnreadInfos = (mx: MatrixClient, options?: UnreadInfoOptions): UnreadInfo[] =>
+  mx.getRooms().reduce<UnreadInfo[]>((unread, room) => {
+    if (room.isSpaceRoom() || !tracksUnread(mx, room)) return unread;
+
     const unreadInfo = getUnreadInfo(room, options);
-    if (unreadInfo.total > 0 || unreadInfo.highlight > 0) {
-      unread.push(unreadInfo);
-    }
-
+    if (hasUnread(unreadInfo)) unread.push(unreadInfo);
     return unread;
   }, []);
-
-  return unreadInfos;
-};
 
 export const getUnreadInfosForRooms = (
   mx: MatrixClient,
@@ -347,17 +414,13 @@ export const getUnreadInfosForRooms = (
     // Space unread is derived from children in the atom reducer; skip like
     // getUnreadInfos rather than deleting.
     if (room.isSpaceRoom()) continue;
-    if (room.getMyMembership() !== 'join') {
-      deleted.push(roomId);
-      continue;
-    }
-    if (getNotificationType(mx, room.roomId) === NotificationType.Mute) {
+    if (!tracksUnread(mx, room)) {
       deleted.push(roomId);
       continue;
     }
 
     const unreadInfo = getUnreadInfo(room, options);
-    if (unreadInfo.total > 0 || unreadInfo.highlight > 0) {
+    if (hasUnread(unreadInfo)) {
       unread.push(unreadInfo);
     } else {
       deleted.push(roomId);

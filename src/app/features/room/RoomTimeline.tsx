@@ -9,7 +9,7 @@ import {
   useState,
   memo,
 } from 'react';
-import type { Editor } from 'slate';
+import type { ProseMirrorEditorController } from '$components/editor/prosemirrorController';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import type { Room, MatrixEvent, EventTimelineSet } from '$types/matrix-sdk';
 import { Direction, EventTimeline, EventType, MsgType, RoomEvent } from '$types/matrix-sdk';
@@ -45,7 +45,7 @@ import { getMemberDisplayName } from '$utils/room/display';
 import { useRoomNavigate } from '$hooks/useRoomNavigate';
 import { useSlidingSyncRoomLoading } from '$hooks/useSlidingSyncActiveRoom';
 import { useOpenUserRoomProfile } from '$state/hooks/userRoomProfile';
-import { showToast } from '$state/toast';
+import { showErrorToast } from '$state/toast';
 import { useSpaceOptionally } from '$hooks/useSpace';
 import { useIgnoredUsers } from '$hooks/useIgnoredUsers';
 import { useImagePackRooms } from '$hooks/useImagePackRooms';
@@ -77,6 +77,7 @@ import { RoomMediaViewer } from '$components/image-viewer/RoomMediaViewer';
 import type { RoomMediaItem } from '$components/image-viewer/RoomMediaViewer';
 import type { IImageContent } from '$types/matrix/common';
 import { useTimelineRendererContext } from '$hooks/timeline/useTimelineRendererContext';
+import { useUrlPreviewPrefetch } from '$hooks/timeline/useUrlPreviewPrefetch';
 import { TimelineScrollingProvider, useScrollActivity } from '$hooks/useTimelineScrollActivity';
 import * as css from './RoomTimeline.css';
 import type { Persona } from '$app/persona';
@@ -316,7 +317,7 @@ const MemoizedTimelineItem = memo(
 export type RoomTimelineProps = {
   room: Room;
   eventId?: string;
-  editor: Editor;
+  editor: ProseMirrorEditorController;
   onEditorReset?: () => void;
   onEditLastMessageRef?: React.MutableRefObject<(() => void) | undefined>;
   editId?: string;
@@ -470,33 +471,14 @@ export function RoomTimeline({
   const [topSpacerHeight, setTopSpacerHeight] = useState(0);
 
   const topSpacerHeightRef = useRef(0);
-  const mountScrollWindowRef = useRef<number>(Date.now() + 3000);
   const hasInitialScrolledRef = useRef(false);
   const initialScrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const initialScrollCancelledRef = useRef(false);
   const hasUserScrollIntentRef = useRef(false);
-  const focusedPaginationIntentRef = useRef<'backward' | 'forward'>();
-  const touchStartYRef = useRef<number>();
+  const focusedPaginationIntentRef = useRef<'backward' | 'forward' | undefined>(undefined);
+  const touchStartYRef = useRef<number | undefined>(undefined);
   const pendingReadyRef = useRef(false);
-  const currentRoomIdRef = useRef(room.roomId);
-
   const [isReady, setIsReady] = useState(false);
-
-  if (currentRoomIdRef.current !== room.roomId) {
-    hasInitialScrolledRef.current = false;
-    mountScrollWindowRef.current = Date.now() + 3000;
-    currentRoomIdRef.current = room.roomId;
-    initialScrollCancelledRef.current = false;
-    hasUserScrollIntentRef.current = false;
-    focusedPaginationIntentRef.current = undefined;
-    touchStartYRef.current = undefined;
-    pendingReadyRef.current = false;
-    if (initialScrollTimerRef.current !== undefined) {
-      clearTimeout(initialScrollTimerRef.current);
-      initialScrollTimerRef.current = undefined;
-    }
-    setIsReady(false);
-  }
 
   const processedEventsRef = useRef<ProcessedEvent[]>([]);
   const timelineSyncRef = useRef<typeof timelineSync>(null as unknown as typeof timelineSync);
@@ -555,7 +537,7 @@ export function RoomTimeline({
   const handleJumpError = useCallback(() => {
     scrollAnchorRef.current = undefined;
     setAtBottom(true);
-    showToast('Unable to load this message.');
+    showErrorToast('Unable to load this message.');
   }, [setAtBottom]);
   const handleReturnToLive = useCallback(() => {
     scrollAnchorRef.current = undefined;
@@ -791,11 +773,9 @@ export function RoomTimeline({
   );
 
   useLayoutEffect(() => {
-    if (!isReady) return;
     if (timelineSync.eventsLength > 0) return;
-    setIsReady(false);
     hasInitialScrolledRef.current = false;
-  }, [isReady, timelineSync.eventsLength]);
+  }, [timelineSync.eventsLength]);
 
   const recalcTopSpacer = useCallback(() => {
     const v = vListRef.current;
@@ -825,12 +805,21 @@ export function RoomTimeline({
     prevBackwardStatusRef.current = timelineSync.backwardStatus;
     if (timelineSync.backwardStatus === 'loading') {
       wasAtBottomBeforePaginationRef.current = atBottomRef.current;
-    } else if (prev === 'loading' && timelineSync.backwardStatus === 'idle') {
+    } else if (
+      prev === 'loading' &&
+      timelineSync.backwardStatus === 'idle' &&
+      !timelineSync.backwardError
+    ) {
       if (scrollOwnerRef.current === 'event' && scrollAnchorRef.current !== undefined) {
         restoreScrollAnchor();
       } else if (wasAtBottomBeforePaginationRef.current) scrollToBottom();
     }
-  }, [timelineSync.backwardStatus, restoreScrollAnchor, scrollToBottom]);
+  }, [
+    timelineSync.backwardStatus,
+    timelineSync.backwardError,
+    restoreScrollAnchor,
+    scrollToBottom,
+  ]);
 
   useEffect(() => {
     if (!timelineSync.focusItem?.scrollTo || !vListRef.current) return;
@@ -895,7 +884,6 @@ export function RoomTimeline({
 
   useEffect(() => {
     if (!eventId) return;
-    if (!timelineSyncRef.current.jumpFailed) setIsReady(false);
     jumpToEvent(eventId);
   }, [eventId, room, jumpToEvent]);
 
@@ -933,12 +921,13 @@ export function RoomTimeline({
             : getProcessedRowIndexForRawTimelineIndex(rows, absoluteIndex)?.rowIndex;
         if (processedIndex !== undefined && vListRef.current) {
           vListRef.current.scrollToIndex(processedIndex, { align: 'start' });
+          setAtBottom(false);
         }
         unreadScrollToRef.current = false;
         setUnreadInfo((prev) => (prev ? { ...prev, scrollTo: false } : prev));
       }
     }
-  }, [room, unreadInfo, timelineSync.timeline.linkedTimelines, eventId, isReady]);
+  }, [room, unreadInfo, timelineSync.timeline.linkedTimelines, eventId, isReady, setAtBottom]);
 
   useEffect(() => {
     const el = messageListRef.current;
@@ -998,6 +987,7 @@ export function RoomTimeline({
 
       if (processedIndex !== undefined) {
         timelineSync.cancelEventTimelineLoad();
+        setAtBottom(false);
         if (vListRef.current) {
           vListRef.current.scrollToIndex(processedIndex, { align: 'center' });
         }
@@ -1061,6 +1051,7 @@ export function RoomTimeline({
 
   const tryAutoMarkAsRead = useCallback(() => {
     if (isInactivePanel) return; // Don't clear unread while room is behind the list
+    if (!atBottomRef.current) return;
     if (!readUptoEventIdRef.current) {
       requestAnimationFrame(() => markAsRead(mx, room.roomId, hideReads));
       return;
@@ -1165,11 +1156,24 @@ export function RoomTimeline({
     };
   }, [eventId]);
 
+  const prefetchPreviews = useUrlPreviewPrefetch(mx, settings.showUrlPreview, processedEventsRef);
+
+  const prefetchAroundViewport = useCallback(() => {
+    const v = vListRef.current;
+    if (!v) return;
+    const { scrollOffset, viewportSize } = v;
+    prefetchPreviews(v.findItemIndex(scrollOffset), v.findItemIndex(scrollOffset + viewportSize));
+  }, [prefetchPreviews]);
+
+  useEffect(prefetchAroundViewport, [prefetchAroundViewport, timelineSync.eventsLength]);
+
   const handleVListScroll = useCallback(
     (offset: number) => {
       notifyScroll();
       const v = vListRef.current;
       if (!v) return;
+
+      prefetchAroundViewport();
 
       const distanceFromBottom = v.scrollSize - offset - v.viewportSize;
       syncAtBottom(offset);
@@ -1218,7 +1222,7 @@ export function RoomTimeline({
         void timelineSyncRef.current.handleTimelinePagination(false);
       }
     },
-    [eventId, notifyScroll, syncAtBottom]
+    [eventId, notifyScroll, syncAtBottom, prefetchAroundViewport]
   );
   const handleVListScrollEnd = useCallback(() => {
     if (!timelineSyncRef.current.focusItem?.scrollTo) return;
@@ -1230,8 +1234,7 @@ export function RoomTimeline({
 
   // A failed backfill keeps its pagination token, so the placeholder condition
   // would otherwise hold forever and never reach the error and its Retry.
-  const showEmptyPaginationError =
-    timelineSync.eventsLength === 0 && timelineSync.backwardStatus === 'error';
+  const showEmptyPaginationError = timelineSync.eventsLength === 0 && timelineSync.backwardError;
 
   const showLoadingPlaceholders =
     timelineSync.eventsLength === 0 &&
@@ -1239,8 +1242,12 @@ export function RoomTimeline({
     (!isReady || timelineSync.canPaginateBack || timelineSync.backwardStatus === 'loading');
 
   let backPaginationJSX: ReactNode | undefined;
-  if (timelineSync.canPaginateBack || timelineSync.backwardStatus !== 'idle') {
-    if (timelineSync.backwardStatus === 'error') {
+  if (
+    timelineSync.canPaginateBack ||
+    timelineSync.backwardStatus !== 'idle' ||
+    timelineSync.backwardError
+  ) {
+    if (timelineSync.backwardError) {
       backPaginationJSX = (
         <Box
           justifyContent="Center"
@@ -1265,8 +1272,12 @@ export function RoomTimeline({
   }
 
   let frontPaginationJSX: ReactNode | undefined;
-  if (!timelineSync.liveTimelineLinked || timelineSync.forwardStatus !== 'idle') {
-    if (timelineSync.forwardStatus === 'error') {
+  if (
+    !timelineSync.liveTimelineLinked ||
+    timelineSync.forwardStatus !== 'idle' ||
+    timelineSync.forwardError
+  ) {
+    if (timelineSync.forwardError) {
       frontPaginationJSX = (
         <Box
           justifyContent="Center"
@@ -1330,8 +1341,11 @@ export function RoomTimeline({
   });
 
   processedEventsRef.current = processedEvents;
-  const previousProcessedEventIdsRef = useRef<string[]>();
-  const processedEventIds = processedEvents.map((event) => event.id);
+  const previousProcessedEventIdsRef = useRef<string[] | undefined>(undefined);
+  const processedEventIds = useMemo(
+    () => processedEvents.map((event) => event.id),
+    [processedEvents]
+  );
   const previousProcessedEventIds = previousProcessedEventIdsRef.current;
   const shouldShift =
     previousProcessedEventIds !== undefined &&
@@ -1344,10 +1358,6 @@ export function RoomTimeline({
   useLayoutEffect(() => {
     previousProcessedEventIdsRef.current = processedEventIds;
   }, [processedEventIds]);
-  const vListKeyRef = useRef(room.roomId);
-  if (!isReady && scrollOwner === 'live')
-    vListKeyRef.current = `${room.roomId}:${processedEvents.map((event) => event.id).join(',')}`;
-
   useLayoutEffect(() => {
     if (!pendingReadyRef.current) return;
     if (processedEvents.length === 0) return;
@@ -1416,7 +1426,7 @@ export function RoomTimeline({
   }, [room.roomId, scrollOwner, timelineSync.eventsLength, timelineSync.backwardStatus]);
 
   return (
-    <Box grow="Yes" style={{ position: 'relative' }}>
+    <Box grow="Yes" style={{ position: 'relative', minWidth: 0, minHeight: 0, width: '100%' }}>
       {(hideTimelineForRoomState || (roomSyncLoading && timelineSync.eventsLength === 0)) && (
         <Box
           justifyContent="Center"
@@ -1442,7 +1452,7 @@ export function RoomTimeline({
             radii="Pill"
             outlined
             before={chipIcon(Checks)}
-            onClick={() => markAsRead(mx, room.roomId, hideReads)}
+            onClick={() => markAsRead(mx, room.roomId, hideReads, true)}
           >
             <Text size="L400">Mark as Read</Text>
           </Chip>
@@ -1455,18 +1465,15 @@ export function RoomTimeline({
         style={{
           flex: 1,
           minHeight: 0,
+          width: '100%',
           overflow: 'hidden',
           position: 'relative',
-          opacity:
-            !hideTimelineForRoomState &&
-            (isReady || showLoadingPlaceholders || showEmptyPaginationError)
-              ? 1
-              : 0,
+          opacity: hideTimelineForRoomState ? 0 : 1,
         }}
       >
         <TimelineScrollingProvider value={isTimelineScrolling}>
           <VList<ProcessedEvent>
-            key={vListKeyRef.current}
+            key={`${room.roomId}:${timelineSync.liveTimelineLinked ? 'live' : (timelineSync.focusItem?.eventId ?? scrollAnchorRef.current)}`}
             ref={vListRef}
             data={processedEvents}
             shift={shouldShift}
@@ -1475,6 +1482,7 @@ export function RoomTimeline({
             style={{
               flex: 1,
               minHeight: 0,
+              width: '100%',
               display: 'flex',
               flexDirection: 'column',
               paddingTop: topSpacerHeight > 0 ? topSpacerHeight : config.space.S600,
@@ -1537,7 +1545,7 @@ export function RoomTimeline({
         </TimelineFloat>
       )}
 
-      {(!atBottomState || !timelineSync.liveTimelineLinked) && isReady && (
+      {(!atBottomState || !timelineSync.liveTimelineLinked) && (
         <TimelineFloat position="Bottom">
           <Chip
             variant="SurfaceVariant"

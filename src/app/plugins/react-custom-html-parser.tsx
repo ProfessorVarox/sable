@@ -1,8 +1,15 @@
 /* oxlint-disable jsx-a11y/alt-text */
-import type { CSSProperties, ComponentPropsWithoutRef, ReactEventHandler, ReactNode } from 'react';
+import type {
+  CSSProperties,
+  ComponentPropsWithoutRef,
+  JSX,
+  ReactEventHandler,
+  ReactNode,
+} from 'react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { HTMLReactParserOptions } from 'html-react-parser';
-import { attributesToProps, domToReact, Element, Text as DOMText } from 'html-react-parser';
+import { attributesToProps, domToReact, Element } from 'html-react-parser';
+import type { Text as DOMText } from 'html-react-parser';
 import type { MatrixClient } from '$types/matrix-sdk';
 import classNames from 'classnames';
 import { Box, Chip, config, Header, IconButton, Scroll, Text, toRem } from 'folds';
@@ -17,6 +24,7 @@ import {
 import type { IntermediateRepresentation, OptFn, Opts as LinkifyOpts } from 'linkifyjs';
 import Linkify from 'linkify-react';
 import type { ChildNode } from 'domhandler';
+import { isText } from 'domhandler';
 import * as css from '$styles/CustomHtml.css';
 import {
   getCanonicalAliasRoomId,
@@ -369,7 +377,7 @@ const scaleEmojiChunk = (text: string, output: (string | JSX.Element)[]) => {
 
 export const scaleSystemEmoji = (text: string): (string | JSX.Element)[] => {
   const parts: (string | JSX.Element)[] = [];
-  const urlReg = new RegExp(URL_REG);
+  const urlReg = new RegExp(URL_REG, 'g');
   let lastIndex = 0;
 
   [...text.matchAll(urlReg)].forEach((match) => {
@@ -642,7 +650,7 @@ export const getReactCustomHtmlParser = (
 
   const opts: HTMLReactParserOptions = {
     replace: (domNode) => {
-      if (replaceTextNode && domNode instanceof DOMText) {
+      if (replaceTextNode && isText(domNode)) {
         const replacement = replaceTextNode(domNode.data, (text, key) =>
           renderReplacementText(text, !!params.linkifyOpts && shouldLinkifyDomText(domNode), key)
         );
@@ -823,9 +831,9 @@ export const getReactCustomHtmlParser = (
             rel: ensureNoopenerRel(props.rel),
           };
 
-          const content = children.find((child) => !(child instanceof DOMText))
+          const content = children.find((child) => !isText(child))
             ? undefined
-            : children.map((c) => (c instanceof DOMText ? c.data : '')).join();
+            : children.map((c) => (isText(c) ? c.data : '')).join();
 
           if (decodedHref && (testMatrixTo(decodedHref) || testMatrixUri(decodedHref))) {
             const mention = renderMatrixMention(
@@ -1042,7 +1050,7 @@ export const getReactCustomHtmlParser = (
         }
       }
 
-      if (domNode instanceof DOMText) {
+      if (isText(domNode)) {
         const linkify = !!params.linkifyOpts && shouldLinkifyDomText(domNode);
         const decoratedText = decorateText(domNode.data);
 

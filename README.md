@@ -27,6 +27,15 @@ brew install --cask SableClient/sable/sable
 
 The fully qualified name matters: since [Homebrew 6.0.0](https://brew.sh/2026/06/11/homebrew-6.0.0/) non-official taps need explicit trust, and installing this way trusts just this one cask. `brew tap` followed by a short-name install now fails unless you also run `brew trust`.
 
+On Linux, nightly builds have their own Flatpak remote, rebuilt from `dev` every night:
+
+```sh
+flatpak remote-add --if-not-exists sable-nightly https://sableclient.github.io/Sable/sable-nightly.flatpakrepo
+flatpak install sable-nightly moe.sable.client.Nightly
+```
+
+It installs alongside the stable Flathub build under a separate application ID. Built by the `build-nightly-flatpak` and `publish-nightly-flatpak` jobs in [`tauri-build.yml`](.github/workflows/tauri-build.yml).
+
 ## Android (Obtainium)
 
 Android APKs are published to every release, and [Obtainium](https://obtainium.imranr.dev) keeps them updated straight from GitHub. Each release also ships an `obtainium.json` app config. Use it for the nightly channel, where prereleases and date-based version tracking have to be enabled to follow the rolling `nightly` tag.
@@ -41,7 +50,7 @@ Android APKs are published to every release, and [Obtainium](https://obtainium.i
 
 ### Nightly
 
-<a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22moe.sable.client%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FSableClient%2FSable%22%2C%22author%22%3A%22SableClient%22%2C%22name%22%3A%22Sable%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22about%5C%22%3A%5C%22An%20almost%20stable%20Matrix%20client%5C%22%2C%5C%22includePrereleases%5C%22%3Atrue%2C%5C%22useLatestAssetDateAsReleaseDate%5C%22%3Atrue%2C%5C%22releaseDateAsVersion%5C%22%3Atrue%2C%5C%22versionDetection%5C%22%3Afalse%7D%22%2C%22overrideSource%22%3A%22GitHub%22%7D"><img alt="Add to Obtainium" src="https://img.shields.io/badge/Add_to_Obtainium-6750A3?style=for-the-badge"></a>
+<a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22moe.sable.client.nightly%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FSableClient%2FSable%22%2C%22author%22%3A%22SableClient%22%2C%22name%22%3A%22Sable%20Nightly%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22about%5C%22%3A%5C%22An%20almost%20stable%20Matrix%20client%5C%22%2C%5C%22includePrereleases%5C%22%3Atrue%2C%5C%22useLatestAssetDateAsReleaseDate%5C%22%3Atrue%2C%5C%22releaseDateAsVersion%5C%22%3Atrue%2C%5C%22versionDetection%5C%22%3Afalse%7D%22%2C%22overrideSource%22%3A%22GitHub%22%7D"><img alt="Add to Obtainium" src="https://img.shields.io/badge/Add_to_Obtainium-6750A3?style=for-the-badge"></a>
 &nbsp;
 <a href="https://github.com/SableClient/Sable/releases/download/nightly/obtainium.json"><img alt="App config" src="https://img.shields.io/badge/App_config-6B7280?style=for-the-badge"></a>
 &nbsp;

@@ -35,6 +35,7 @@ type FakeEventOptions = {
   relation?: { rel_type: string; event_id: string; key?: string };
   threadRootId?: string;
   ts?: number;
+  localTimestamp?: number;
   isRedaction?: boolean;
 };
 
@@ -47,6 +48,7 @@ function createEvent({
   relation,
   threadRootId,
   ts = 1_000_000,
+  localTimestamp = ts,
   isRedaction = false,
 }: FakeEventOptions): MatrixEvent {
   return {
@@ -57,6 +59,7 @@ function createEvent({
     getPrevContent: () => prevContent,
     getWireContent: () => content,
     getTs: () => ts,
+    localTimestamp,
     isRedacted: () => false,
     isRedaction: () => isRedaction,
     isEncrypted: () => false,
@@ -66,13 +69,20 @@ function createEvent({
   } as unknown as MatrixEvent;
 }
 
-function createReaction(id: string, targetId: string): MatrixEvent {
+function createReaction(
+  id: string,
+  targetId: string,
+  ts = 1_000_000,
+  localTimestamp = ts
+): MatrixEvent {
   const relation = { rel_type: RelationType.Annotation, event_id: targetId, key: '👍' };
   return createEvent({
     id,
     type: EventType.Reaction,
     content: { 'm.relates_to': relation },
     relation,
+    ts,
+    localTimestamp,
   });
 }
 
@@ -127,10 +137,22 @@ function createMembership(id: string): MatrixEvent {
   });
 }
 
-function createTimeline(events: MatrixEvent[]): EventTimeline {
+function createTimeline(events: MatrixEvent[], relationEvents: MatrixEvent[] = []): EventTimeline {
   const timelineSet = {
     relations: {
-      getChildEventsForEvent: () => null,
+      getChildEventsForEvent: (parentId: string, relationType: string, eventType: string) => {
+        const relations = relationEvents.filter(
+          (event) =>
+            event.getRelation()?.event_id === parentId &&
+            event.getRelation()?.rel_type === relationType &&
+            event.getType() === eventType
+        );
+        if (relations.length === 0) return null;
+        return {
+          getRelations: () => relations,
+          getSortedAnnotationsByKey: () => null,
+        };
+      },
     },
   } as unknown as EventTimelineSet;
   return {
@@ -165,6 +187,12 @@ const dividerIds = (processed: ProcessedEvent[]) =>
   processed.filter((e) => e.willRenderNewDivider).map((e) => e.id);
 
 describe('useProcessedTimeline new-messages divider', () => {
+  it('deduplicates events from overlapping timeline windows', () => {
+    const event = createEvent({ id: '$duplicate' });
+
+    expect(renderedIds(processTimeline([event, event], undefined))).toEqual(['$duplicate']);
+  });
+
   it('renders an event that is still encrypted', () => {
     const processed = processTimeline(
       [
@@ -479,7 +507,7 @@ describe('useProcessedTimeline new-messages divider', () => {
     expect(renderedIds(result.current)).toEqual(['$a', '$r', '$b', '$c']);
   });
 
-  it('keeps orphan edits ordered after a reaction has moved beside its parent', () => {
+  it('keeps indexed reactions and orphan edits in timeline order', () => {
     const ignored = '@ignored:example.org';
     const events = [
       createEvent({ id: '$a' }),
@@ -508,10 +536,10 @@ describe('useProcessedTimeline new-messages divider', () => {
       })
     );
 
-    expect(renderedIds(result.current)).toEqual(['$a', '$reaction', '$b', '$edit', '$c']);
+    expect(renderedIds(result.current)).toEqual(['$a', '$b', '$reaction', '$edit', '$c']);
   });
 
-  it('keeps a reaction next to its target when timestamps are equal', () => {
+  it('uses raw timeline order when reaction timestamps are equal', () => {
     const events = [
       createEvent({ id: '$a', ts: 1000 }),
       createEvent({ id: '$b', ts: 1000 }),
@@ -533,7 +561,135 @@ describe('useProcessedTimeline new-messages divider', () => {
       })
     );
 
-    expect(renderedIds(result.current)).toEqual(['$a', '$r', '$b', '$c']);
+    expect(renderedIds(result.current)).toEqual(['$a', '$b', '$c', '$r']);
+  });
+
+  it('keeps an indexed next-day reaction after intervening messages', () => {
+    const day24 = Date.UTC(2026, 6, 24, 19, 8);
+    const day25 = Date.UTC(2026, 6, 25, 5, 3);
+    const events = [
+      createEvent({ id: '$parent', ts: day24 }),
+      createEvent({ id: '$message-a', ts: day24 + 60_000 }),
+      createEvent({ id: '$message-b', ts: day24 + 120_000 }),
+      createReaction('$reaction', '$parent', day25),
+    ];
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [createTimeline(events)],
+        ignoredUsersSet: new Set(),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual([
+      '$parent',
+      '$message-a',
+      '$message-b',
+      '$reaction',
+    ]);
+    expect(
+      result.current.filter((event) => event.willRenderDayDivider).map((event) => event.id)
+    ).toEqual(['$reaction']);
+  });
+
+  it('places fetched reactions chronologically instead of relation insertion order', () => {
+    const parent = createEvent({ id: '$parent', ts: 1_000 });
+    const events = [
+      parent,
+      createEvent({ id: '$later-a', ts: 3_000 }),
+      createEvent({ id: '$later-b', ts: 5_000 }),
+    ];
+    const fetchedReactions = [
+      createReaction('$newest', '$parent', 6_000),
+      createReaction('$middle', '$parent', 2_000),
+      createReaction('$oldest', '$parent', 1_500),
+    ];
+    const timeline = createTimeline(events, fetchedReactions);
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [timeline],
+        ignoredUsersSet: new Set(),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual([
+      '$parent',
+      '$oldest',
+      '$middle',
+      '$later-a',
+      '$later-b',
+      '$newest',
+    ]);
+  });
+
+  it('places an older fetched reaction before a newer indexed reaction in the same gap', () => {
+    const parent = createEvent({ id: '$parent', ts: 1_000 });
+    const indexedReaction = createReaction('$indexed-newer', '$parent', 2_500);
+    const later = createEvent({ id: '$later', ts: 3_000 });
+    const fetchedReaction = createReaction('$fetched-older', '$parent', 2_000);
+    const events = [parent, indexedReaction, later];
+    const timeline = createTimeline(events, [fetchedReaction]);
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [timeline],
+        ignoredUsersSet: new Set(),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual([
+      '$parent',
+      '$fetched-older',
+      '$indexed-newer',
+      '$later',
+    ]);
+  });
+
+  it('uses the SDK local timestamp to place a fetched reaction', () => {
+    const events = [
+      createEvent({ id: '$parent', ts: 1_000 }),
+      createEvent({ id: '$later', ts: 3_000 }),
+    ];
+    const fetchedReaction = createReaction('$reaction', '$parent', 10_000, 2_000);
+    const timeline = createTimeline(events, [fetchedReaction]);
+    const { result } = renderHook(() =>
+      useProcessedTimeline({
+        items: events.map((_, index) => index),
+        linkedTimelines: [timeline],
+        ignoredUsersSet: new Set(),
+        hiddenEvents: { ...hiddenEvents, hiddenEventReactions: true },
+        mxUserId: MY_USER,
+        readUptoEventId: undefined,
+        hideMembershipEvents: false,
+        hideNickAvatarEvents: false,
+        isReadOnly: false,
+        hideMemberInReadOnly: false,
+      })
+    );
+
+    expect(renderedIds(result.current)).toEqual(['$parent', '$reaction', '$later']);
   });
 
   it('drops a cached row whose event id was rewritten in place by the remote echo', () => {

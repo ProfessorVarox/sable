@@ -1,5 +1,6 @@
 import { useAtom, useAtomValue } from 'jotai';
 import { hasCustomDesktopTitlebar } from '$utils/tauriTitlebar';
+import { isDesktopUpdaterEnabled } from '$utils/platform';
 import { useDesktopSetting } from '$state/hooks/desktopSettings';
 import { updatePhaseAtom, updateBannerVisibleAtom } from '$state/desktopUpdate';
 import type { UpdatePhase } from '$state/desktopUpdate';
@@ -24,7 +25,7 @@ export function DesktopUpdatePill() {
   const [useCustomTitleBar] = useDesktopSetting('useCustomTitleBar');
   const status = !bannerVisible ? phaseToStatusView(phase) : null;
 
-  if (!hasCustomDesktopTitlebar(useCustomTitleBar)) return null;
+  if (!isDesktopUpdaterEnabled() || !hasCustomDesktopTitlebar(useCustomTitleBar)) return null;
 
   return (
     <SyncConnectionStatusTitlebar

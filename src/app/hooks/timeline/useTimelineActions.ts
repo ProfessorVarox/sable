@@ -3,13 +3,12 @@ import { useCallback } from 'react';
 import type { MatrixClient, Room, MatrixEvent } from '$types/matrix-sdk';
 import type { UserProfile } from '$hooks/useUserProfile';
 import { EventStatus, RelationType } from '$types/matrix-sdk';
-import type { Editor } from 'slate';
-import { ReactEditor } from 'slate-react';
 
 import { getMxIdLocalPart, toggleReaction } from '$utils/matrix';
 import { getMemberDisplayName } from '$utils/room/display';
 import { extractReplyDraftBody, resolveReplyDraftTarget } from '$utils/room/relations';
-import { createMentionElement, moveCursor } from '$components/editor';
+import { createMentionElement } from '$components/editor';
+import type { ProseMirrorEditorController } from '$components/editor/prosemirrorController';
 import * as prefix from '$unstable/prefixes';
 import type { Persona } from '$hooks/usePerMessageProfile';
 import { convertBeeperFormatToOurPerMessageProfile } from '$hooks/usePerMessageProfile';
@@ -49,7 +48,7 @@ export const buildCachedProfilePayload = (cachedData: UserProfile | undefined) =
 export interface UseTimelineActionsOptions {
   room: Room;
   mx: MatrixClient;
-  editor: Editor;
+  editor: ProseMirrorEditorController;
   nicknames: Record<string, string>;
   getGlobalProfile: (userId: string) => UserProfile | undefined;
   spaceId?: string;
@@ -140,15 +139,15 @@ export function useTimelineActions({
       const name =
         getMemberDisplayName(room, userId, nicknames) ?? getMxIdLocalPart(userId) ?? userId;
 
-      editor.insertNode(
+      editor.insertInline(
         createMentionElement(
           userId,
           name.startsWith('@') ? name : `@${name}`,
           userId === mx.getUserId()
         )
       );
-      ReactEditor.focus(editor);
-      moveCursor(editor);
+      editor.insertText(' ');
+      editor.focus();
     },
     [mx, room, editor, nicknames]
   );

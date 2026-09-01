@@ -5,6 +5,8 @@ mod desktop;
 mod diagnostics;
 #[cfg(target_os = "ios")]
 mod ios;
+#[cfg(feature = "matrix-crypto")]
+mod matrix_crypto;
 #[cfg(target_os = "android")]
 mod mobile;
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -27,6 +29,14 @@ type BrowserEngine = tauri_runtime_cef::CefRuntime<tauri::EventLoopMessage>;
 use tauri::Wry as BrowserEngine;
 
 pub const MAIN_WINDOW_LABEL: &str = "main";
+
+#[cfg(target_os = "android")]
+fn is_internal_navigation(url: &tauri::Url, dev: bool) -> bool {
+    url.scheme() == "tauri"
+        || url.scheme() == "javascript"
+        || url.host_str() == Some("tauri.localhost")
+        || (dev && url.host_str() == Some("localhost"))
+}
 
 #[cfg(desktop)]
 pub(crate) fn main_window_title(app: &AppHandle<crate::BrowserEngine>) -> &str {
@@ -150,9 +160,7 @@ pub fn show_or_create_main_window(app: &AppHandle<crate::BrowserEngine>) -> taur
     let builder = {
         let nav_handle = app.clone();
         builder.on_navigation(move |url| {
-            let internal = url.scheme() == "tauri"
-                || url.host_str() == Some("tauri.localhost")
-                || (cfg!(dev) && url.host_str() == Some("localhost"));
+            let internal = is_internal_navigation(url, cfg!(dev));
             if !internal {
                 // open in new thread
                 // open_url blocks on the ui thread but we are on the ui thread...
@@ -451,9 +459,19 @@ pub fn run() {
             network::media_protocol::set_media_session,
             network::media_protocol::clear_media_session,
             network::media_protocol::set_media_encryption,
-            #[cfg(target_os = "android")]
-            network::media_protocol::prepare_loopback_video,
+            network::media_protocol::prepare_loopback_media,
+            network::media_protocol::ensure_loopback_media,
             sentry::set_native_sentry_enabled,
+            #[cfg(feature = "matrix-crypto")]
+            matrix_crypto::engine_invoke,
+            #[cfg(feature = "matrix-crypto")]
+            matrix_crypto::engine_open,
+            #[cfg(feature = "matrix-crypto")]
+            matrix_crypto::engine_close,
+            #[cfg(feature = "matrix-crypto")]
+            matrix_crypto::engine_wipe,
+            #[cfg(feature = "matrix-crypto")]
+            matrix_crypto::push::engine_decrypt_push,
             share_inbox::share_inbox_drain,
             share_inbox::share_inbox_read,
             share_inbox::share_inbox_clear,
@@ -461,6 +479,8 @@ pub fn run() {
             mobile::set_status_bar_color,
             #[cfg(target_os = "android")]
             mobile::set_navigation_bar_color,
+            #[cfg(target_os = "android")]
+            mobile::set_window_background_color,
             #[cfg(target_os = "android")]
             mobile::set_immersive_mode,
             #[cfg(target_os = "android")]
@@ -479,6 +499,8 @@ pub fn run() {
             ios::deactivate_call_audio_session,
             #[cfg(desktop)]
             desktop::download::save_download,
+            #[cfg(desktop)]
+            desktop::download::save_media_download,
             #[cfg(desktop)]
             desktop::diagnostics::export_diagnostics,
             #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -510,23 +532,32 @@ pub fn run() {
         return;
     };
 
-    app.run(|app, event| {
+    app.run(|_app, _event| {
         #[cfg(desktop)]
-        desktop::tray::handle_run_event(app, event);
+        desktop::tray::handle_run_event(_app, _event);
 
         #[cfg(not(any(desktop, mobile)))]
-        let _ = (app, event);
+        let _ = (_app, _event);
     });
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "android")]
+    #[test]
+    fn javascript_navigation_stays_in_webview() {
+        let url = tauri::Url::parse("javascript:window.scrollTo(0,0)").unwrap();
+
+        assert!(crate::is_internal_navigation(&url, false));
+    }
+
     #[test]
     fn desktop_modules_are_grouped_under_desktop() {
         let _ = crate::desktop::settings::DesktopSettings {
             close_to_background_on_close: true,
             show_system_tray_icon: true,
             use_custom_title_bar: false,
+            spellcheck: true,
         };
         let _ = crate::desktop::runtime_state::DesktopRuntimeState {
             tray_available: true,

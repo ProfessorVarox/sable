@@ -241,6 +241,28 @@ describe('hydrateAllRoomMembers', () => {
     expect(members).toHaveBeenCalledTimes(2);
   });
 
+  it('retries within the TTL when the joined count grows', async () => {
+    let joinedCount = 3;
+    const setStateEvents = vi.fn<() => void>();
+    const room = {
+      roomId: ROOM_ID,
+      getJoinedMembers: () => [{}, {}] as RoomMember[],
+      getJoinedMemberCount: () => joinedCount,
+      getMember: () => null,
+      currentState: { setStateEvents },
+    } as unknown as Room;
+    const members = vi.fn<() => Promise<object>>(() => Promise.resolve({ chunk: [] }));
+    const mx = { getRoom: () => room, members } as unknown as MatrixClient;
+
+    await hydrateAllRoomMembers(mx, ROOM_ID);
+    await hydrateAllRoomMembers(mx, ROOM_ID);
+    expect(members).toHaveBeenCalledTimes(1);
+
+    joinedCount = 20;
+    await hydrateAllRoomMembers(mx, ROOM_ID);
+    expect(members).toHaveBeenCalledTimes(2);
+  });
+
   it('swallows a failed fetch', async () => {
     const { mx, members, setStateEvents } = makeBulkFakes(2, 20);
     members.mockRejectedValueOnce(new Error('403'));

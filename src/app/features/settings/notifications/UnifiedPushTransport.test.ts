@@ -11,8 +11,17 @@ import {
 const unifiedPushApi = vi.hoisted(() => ({
   isPermissionGranted: vi.fn<() => Promise<boolean>>(),
   requestPermission: vi.fn<() => Promise<string>>(),
-  registerForPushNotifications:
-    vi.fn<(vapid?: string) => Promise<{ deviceToken: string; p256dh?: string; auth?: string }>>(),
+  registerForPushNotifications: vi.fn<
+    (
+      vapid?: string,
+      embeddedGatewayUrl?: string
+    ) => Promise<{
+      deviceToken: string;
+      p256dh?: string;
+      auth?: string;
+      distributor?: string;
+    }>
+  >(),
   unregisterForPushNotifications: vi.fn<() => Promise<void>>(),
   listDistributors: vi.fn<() => Promise<string[]>>(),
   setDistributor: vi.fn<(name: string) => Promise<void>>(),
@@ -73,6 +82,41 @@ describe('registerUnifiedPushTransport', () => {
       status: 'denied',
       permissionState: 'denied',
       error: 'UnifiedPush permission denied',
+    });
+    expect(unifiedPushApi.registerForPushNotifications).not.toHaveBeenCalled();
+  });
+
+  it('registers through the built-in distributor when none is installed', async () => {
+    unifiedPushApi.isPermissionGranted.mockResolvedValue(true);
+    localStorage.removeItem('unifiedpush_distributor');
+    unifiedPushApi.listDistributors.mockResolvedValue([]);
+    unifiedPushApi.registerForPushNotifications.mockResolvedValue({
+      deviceToken: 'https://ntfy.sh/upabc123',
+      distributor: 'embedded-websocket',
+    });
+
+    await expect(registerUnifiedPushTransport(undefined, 'https://ntfy.sh')).resolves.toEqual({
+      status: 'registered',
+      permissionState: 'granted',
+      endpoint: 'https://ntfy.sh/upabc123',
+      distributor: 'embedded-websocket',
+      p256dh: undefined,
+      auth: undefined,
+    });
+    expect(unifiedPushApi.registerForPushNotifications).toHaveBeenCalledWith(
+      undefined,
+      'https://ntfy.sh',
+      undefined
+    );
+  });
+
+  it('still reports missing-distributor when no built-in server is configured', async () => {
+    unifiedPushApi.isPermissionGranted.mockResolvedValue(true);
+    localStorage.removeItem('unifiedpush_distributor');
+    unifiedPushApi.listDistributors.mockResolvedValue([]);
+
+    await expect(registerUnifiedPushTransport(undefined, '   ')).resolves.toMatchObject({
+      status: 'missing-distributor',
     });
     expect(unifiedPushApi.registerForPushNotifications).not.toHaveBeenCalled();
   });
@@ -146,15 +190,18 @@ describe('UnifiedPush distributor state helpers', () => {
     expect(unifiedPushApi.setDistributor).toHaveBeenCalledOnce();
   });
 
-  it('drops a stale saved distributor that is no longer installed', async () => {
-    localStorage.setItem('unifiedpush_distributor', 'org.unifiedpush.distributor.removed');
-    unifiedPushApi.listDistributors.mockResolvedValue(['org.unifiedpush.distributor.ntfy']);
+  it('keeps a saved distributor the scan did not list instead of adopting the only other one', async () => {
+    localStorage.setItem('unifiedpush_distributor', 'org.unifiedpush.distributor.ntfy');
+    unifiedPushApi.listDistributors.mockResolvedValue(['moe.sable.client']);
 
     await expect(loadUnifiedPushDistributorState()).resolves.toEqual({
-      distributors: ['org.unifiedpush.distributor.ntfy'],
-      selectedDistributor: 'org.unifiedpush.distributor.ntfy',
+      distributors: ['moe.sable.client'],
+      selectedDistributor: '',
     });
-    expect(unifiedPushApi.setDistributor).toHaveBeenCalledWith('org.unifiedpush.distributor.ntfy');
+    expect(unifiedPushApi.setDistributor).not.toHaveBeenCalled();
+    expect(localStorage.getItem('unifiedpush_distributor')).toBe(
+      'org.unifiedpush.distributor.ntfy'
+    );
   });
 
   it('ensures a distributor selection by auto-saving the first available distributor', async () => {
@@ -168,15 +215,15 @@ describe('UnifiedPush distributor state helpers', () => {
     expect(unifiedPushApi.setDistributor).toHaveBeenCalledOnce();
   });
 
-  it('replaces a stale selected distributor with the first available one', async () => {
+  it('never replaces an explicitly chosen distributor that the scan did not list', async () => {
     unifiedPushApi.setDistributor.mockResolvedValue(undefined);
     await expect(
       ensureUnifiedPushDistributorSelection(
         ['org.unifiedpush.distributor.ntfy', 'org.unifiedpush.distributor.nextpush'],
         'org.unifiedpush.distributor.removed'
       )
-    ).resolves.toBe('org.unifiedpush.distributor.ntfy');
-    expect(unifiedPushApi.setDistributor).toHaveBeenCalledWith('org.unifiedpush.distributor.ntfy');
+    ).resolves.toBe('');
+    expect(unifiedPushApi.setDistributor).not.toHaveBeenCalled();
   });
 
   it('persists a selected distributor through the transport helper', async () => {

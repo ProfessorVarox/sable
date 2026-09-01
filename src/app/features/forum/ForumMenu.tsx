@@ -1,7 +1,7 @@
 import { forwardRef, useState } from 'react';
 import { Box, Line, Menu, MenuItem, Text, config, toRem } from 'folds';
 import type { Room } from 'matrix-js-sdk';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { InviteUserPrompt } from '$components/invite-user-prompt';
 import { useMatrixClient } from '$hooks/useMatrixClient';
 import { useIsDirectRoom } from '$hooks/useRoom';
@@ -15,10 +15,28 @@ import { settingsAtom } from '$state/settings';
 import { markAsRead } from '$utils/notifications';
 import { copyToClipboard } from '$utils/dom';
 import { getCanonicalAliasOrRoomId, isRoomAlias } from '$utils/matrix';
-import { getHomeRoomPath, getDirectRoomPath, getSpaceRoomPath } from '$pages/pathUtils';
+import {
+  getHomeRoomPath,
+  getDirectRoomPath,
+  getSpaceRoomPath,
+  withSearchParam,
+} from '$pages/pathUtils';
+import { ROOM_TIMELINE_SEARCH_PARAM } from '$pages/paths';
 import { getMatrixToRoom } from '$plugins/matrix-to';
 import { getViaServers } from '$plugins/via-servers';
-import { Checks, GearSix, Link, menuIcon, Terminal, UserPlus } from '$components/icons/phosphor';
+import {
+  Checks,
+  GearSix,
+  Link,
+  menuIcon,
+  SignOut,
+  Terminal,
+  UserCircle,
+  UserPlus,
+} from '$components/icons/phosphor';
+import { useRoomMenuActions } from '$hooks/useRoomMenuActions';
+import { ScreenSize, useScreenSizeContext } from '$hooks/useScreenSize';
+import { RoomSettingsPage } from '$state/roomSettings';
 
 type ForumMenuProps = {
   room: Room;
@@ -34,14 +52,16 @@ export const ForumMenu = forwardRef<HTMLDivElement, ForumMenuProps>(
     const permissions = useRoomPermissions(creators, powerLevels);
     const canInvite = permissions.action('invite', mx.getSafeUserId());
     const openRoomSettings = useOpenRoomSettings();
+    const screenSize = useScreenSizeContext();
     const navigate = useNavigate();
     const parentSpace = useSpaceOptionally();
     const isDirectRoom = useIsDirectRoom();
+    const { handleLeaveRoom } = useRoomMenuActions(room);
 
     const [invitePrompt, setInvitePrompt] = useState(false);
 
     const handleMarkAsRead = () => {
-      markAsRead(mx, room.roomId, hideReads);
+      markAsRead(mx, room.roomId, hideReads, true);
       requestClose();
     };
 
@@ -63,14 +83,16 @@ export const ForumMenu = forwardRef<HTMLDivElement, ForumMenuProps>(
 
     const handleOpenTimeline = () => {
       const roomIdOrAlias = getCanonicalAliasOrRoomId(mx, room.roomId);
+      let path: string;
       if (parentSpace) {
         const spaceIdOrAlias = getCanonicalAliasOrRoomId(mx, parentSpace.roomId);
-        navigate(getSpaceRoomPath(spaceIdOrAlias, roomIdOrAlias));
+        path = getSpaceRoomPath(spaceIdOrAlias, roomIdOrAlias);
       } else if (isDirectRoom) {
-        navigate(getDirectRoomPath(roomIdOrAlias));
+        path = getDirectRoomPath(roomIdOrAlias);
       } else {
-        navigate(getHomeRoomPath(roomIdOrAlias));
+        path = getHomeRoomPath(roomIdOrAlias);
       }
+      navigate(withSearchParam(path, { [ROOM_TIMELINE_SEARCH_PARAM]: 'true' }));
       requestClose();
     };
 
@@ -113,6 +135,21 @@ export const ForumMenu = forwardRef<HTMLDivElement, ForumMenuProps>(
               Copy Link
             </Text>
           </MenuItem>
+          {screenSize !== ScreenSize.Desktop && (
+            <MenuItem
+              onClick={() => {
+                openRoomSettings(room.roomId, parentSpace?.roomId, RoomSettingsPage.MembersPage);
+                requestClose();
+              }}
+              size="300"
+              after={menuIcon(UserCircle)}
+              radii="300"
+            >
+              <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
+                Members
+              </Text>
+            </MenuItem>
+          )}
           <MenuItem onClick={handleRoomSettings} size="300" after={menuIcon(GearSix)} radii="300">
             <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
               Room Settings
@@ -130,6 +167,23 @@ export const ForumMenu = forwardRef<HTMLDivElement, ForumMenuProps>(
               </Text>
             </MenuItem>
           )}
+        </Box>
+        <Line variant="Surface" size="300" />
+        <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
+          <MenuItem
+            onClick={async () => {
+              if (await handleLeaveRoom()) requestClose();
+            }}
+            variant="Critical"
+            fill="None"
+            size="300"
+            after={menuIcon(SignOut)}
+            radii="300"
+          >
+            <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
+              Leave Room
+            </Text>
+          </MenuItem>
         </Box>
       </Menu>
     );

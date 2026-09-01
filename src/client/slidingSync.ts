@@ -32,6 +32,7 @@ import { createDebugLogger } from '$utils/debugLogger';
 import { CustomStateEvent } from '$types/matrix/room';
 import * as Sentry from '@sentry/react';
 import { SlidingSyncSidebarCache } from './slidingSyncSidebarCache';
+import { markPreprocessingSlidingSyncTimelineReset } from './slidingSyncTimelineReset';
 
 const log = createLogger('slidingSync');
 const debugLog = createDebugLogger('slidingSync');
@@ -48,6 +49,11 @@ const DEFAULT_POLL_TIMEOUT_MS = 45000;
 // Mirrors the js-sdk's own BUFFER_PERIOD_MS so our watchdog sits after its `clientTimeout`.
 const SDK_CLIENT_TIMEOUT_BUFFER_MS = 10_000;
 const POLL_DEADLINE_MARGIN_MS = 20_000;
+
+// The SDK's to_device extension takes 100 events per response, so a backlog needs several.
+const MAX_PUSH_DRAIN_POLLS = 5;
+
+const PUSH_DRAIN_TIMEOUT_MS = 120_000;
 
 const ACTIVE_ROOM_SUBSCRIPTION_KEY = 'active_room';
 const CALL_ROOM_SUBSCRIPTION_KEY = 'call_room';
@@ -328,6 +334,7 @@ export const prepareSlidingSyncTimelines = (
 ): TimelineResetCompletion | null => {
   if (!resp?.rooms) return null;
   let didResetTimeline = false;
+  const resetTimelines: Array<{ room: Room; timelineSet: EventTimelineSet }> = [];
   const pendingEventsToRestore: Array<{
     timelineSet: EventTimelineSet;
     events: MatrixEvent[];
@@ -415,17 +422,29 @@ export const prepareSlidingSyncTimelines = (
         pendingEventsToRestore.push({ timelineSet, events: pendingEvents });
       }
       const previousOldState = room.oldState;
-      timelineSet.resetLiveTimeline(
-        typeof timelineData.prev_batch === 'string' ? timelineData.prev_batch : undefined
-      );
+      markPreprocessingSlidingSyncTimelineReset(timelineSet, () => {
+        timelineSet.resetLiveTimeline(
+          typeof timelineData.prev_batch === 'string' ? timelineData.prev_batch : undefined
+        );
+      });
       const newLiveTimeline = timelineSet.getLiveTimeline();
       room.oldState = newLiveTimeline.getState(EventTimeline.BACKWARDS)!;
       room.currentState = newLiveTimeline.getState(EventTimeline.FORWARDS)!;
       if (room.oldState !== previousOldState) {
         room.emit(RoomEvent.OldStateUpdated, room, previousOldState, room.oldState);
       }
+      resetTimelines.push({ room, timelineSet });
       didResetTimeline = true;
       continue;
+    }
+
+    // The SDK writes prev_batch over the live timeline's BACKWARDS token on every
+    // limited response. When the window starts at an event we already have below
+    // our top, nothing is prepended and the top does not move, so that token would
+    // back-paginate from the wrong stream position and prepend newer events.
+    if (timelineData.limited === true && firstKnownResponseIndex === 0 && firstKnownLiveIndex > 0) {
+      const topToken = liveTimeline?.getPaginationToken(EventTimeline.BACKWARDS);
+      if (typeof topToken === 'string') timelineData.prev_batch = topToken;
     }
 
     if (!shouldMarkLimited) {
@@ -442,7 +461,7 @@ export const prepareSlidingSyncTimelines = (
   }
 
   if (didResetTimeline) mx?.resetNotifTimelineSet();
-  if (pendingEventsToRestore.length === 0) return null;
+  if (!didResetTimeline) return null;
 
   return () => {
     for (const { timelineSet, events } of pendingEventsToRestore) {
@@ -463,7 +482,85 @@ export const prepareSlidingSyncTimelines = (
         });
       }
     }
+
+    for (const { room, timelineSet } of resetTimelines) {
+      room.emit(RoomEvent.TimelineRefresh, room, timelineSet);
+    }
   };
+};
+
+const LOCAL_ECHO_MATCH_MAX_CLOCK_SKEW_MS = 60_000;
+
+const canonicalJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .toSorted()
+      .map(
+        (key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`
+      );
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+export const reconcileLocalEchoes = (room: Room | null | undefined): void => {
+  if (!room) return;
+  const liveEvents = room.getLiveTimeline().getEvents();
+  const pendingEchoes = liveEvents.filter(
+    (event) =>
+      event.status !== null &&
+      event.status !== EventStatus.CANCELLED &&
+      event.status !== EventStatus.SENT
+  );
+  if (pendingEchoes.length === 0) return;
+
+  const claimedEventIds = new Set<string>();
+  const isMergeCandidate = (candidate: MatrixEvent, echo: MatrixEvent): boolean => {
+    const candidateId = candidate.getId();
+    if (!candidateId || candidate === echo || claimedEventIds.has(candidateId)) return false;
+    if (candidate.status !== null) return false;
+    if (candidate.getSender() !== echo.getSender()) return false;
+    return !candidate.isRedacted();
+  };
+
+  for (const echo of pendingEchoes) {
+    const txnId = echo.getTxnId();
+    let match = txnId
+      ? liveEvents.find(
+          (candidate) =>
+            isMergeCandidate(candidate, echo) && candidate.getUnsigned()?.transaction_id === txnId
+        )
+      : undefined;
+    if (!match) {
+      const wireType = echo.getWireType();
+      const wireContent = canonicalJson(echo.getWireContent());
+      match = liveEvents.find((candidate) => {
+        if (!isMergeCandidate(candidate, echo)) return false;
+        if (candidate.getWireType() !== wireType) return false;
+        const candidateTxn = candidate.getUnsigned()?.transaction_id;
+        if (typeof candidateTxn === 'string' && candidateTxn !== txnId) return false;
+        if (candidate.getTs() < echo.getTs() - LOCAL_ECHO_MATCH_MAX_CLOCK_SKEW_MS) return false;
+        return canonicalJson(candidate.getWireContent()) === wireContent;
+      });
+    }
+    const matchId = match?.getId();
+    if (!match || !matchId) continue;
+    claimedEventIds.add(matchId);
+
+    const unsigned = match.getUnsigned();
+    if (txnId && typeof unsigned.transaction_id !== 'string') {
+      unsigned.transaction_id = txnId;
+      match.setUnsigned(unsigned);
+    }
+    room.removeEvent(matchId);
+    room.handleRemoteEcho(match, echo);
+    debugLog.info('sync', 'Reconciled unlinked local echo', {
+      roomId: room.roomId,
+      localEchoId: echo.getId(),
+      remoteEventId: matchId,
+    });
+  }
 };
 
 export class SlidingSyncManager {
@@ -619,7 +716,15 @@ export class SlidingSyncManager {
 
   private paused = false;
 
+  private pushDrainPollsLeft = 0;
+
+  private pushDrainSawEvents = false;
+
+  private pushDrainTimer: ReturnType<typeof setTimeout> | undefined;
+
   private readonly resumeWaiters = new Set<() => void>();
+
+  private readonly transportStateListeners = new Set<() => void>();
 
   /** Span covering the period from attach() to the first successful complete cycle. */
   private initialSyncSpan: ReturnType<typeof Sentry.startInactiveSpan> | null = null;
@@ -708,6 +813,9 @@ export class SlidingSyncManager {
 
       this.timelineResetCompletions.get(resp)?.();
       this.timelineResetCompletions.delete(resp);
+      for (const roomId of Object.keys(resp.rooms ?? {})) {
+        reconcileLocalEchoes(this.mx.getRoom(roomId));
+      }
       this.recordServerMembershipRooms(resp);
       this.reassertOptimisticJoins();
 
@@ -717,6 +825,7 @@ export class SlidingSyncManager {
       this.roomDataAwaitingSyncCompletion.clear();
 
       this.syncCount += 1;
+      this.settlePushDrain(resp);
 
       // A subscription that saw no room data is settled once a full cycle has
       // completed after the one it was requested in: the server had nothing to
@@ -924,18 +1033,71 @@ export class SlidingSyncManager {
     this.pollWatchdogTimer = undefined;
     this.slidingSync.resend();
     debugLog.info('sync', 'Sliding sync paused');
+    this.notifyTransportState();
+  }
+
+  private liftPause(): void {
+    this.paused = false;
+    this.releaseResumeWaiters();
+    this.armPollWatchdog();
   }
 
   public resume(): void {
     if (!this.paused) return;
-    this.paused = false;
-    this.releaseResumeWaiters();
-    this.armPollWatchdog();
+    this.liftPause();
     debugLog.info('sync', 'Sliding sync resumed');
+    this.notifyTransportState();
+  }
+
+  public requestPushDrain(): void {
+    if (this.disposed || this.pushDrainPollsLeft === MAX_PUSH_DRAIN_POLLS) return;
+    this.pushDrainPollsLeft = MAX_PUSH_DRAIN_POLLS;
+    this.pushDrainSawEvents = false;
+    if (this.pushDrainTimer !== undefined) clearTimeout(this.pushDrainTimer);
+    this.pushDrainTimer = setTimeout(() => this.endPushDrain(), PUSH_DRAIN_TIMEOUT_MS);
+    debugLog.info('sync', 'Sliding sync asked to drain to-device after a push');
+    this.notifyTransportState();
+  }
+
+  private endPushDrain(): void {
+    if (this.pushDrainTimer !== undefined) {
+      clearTimeout(this.pushDrainTimer);
+      this.pushDrainTimer = undefined;
+    }
+    if (this.pushDrainPollsLeft === 0) return;
+    this.pushDrainPollsLeft = 0;
+    this.pushDrainSawEvents = false;
+    this.notifyTransportState();
+  }
+
+  private settlePushDrain(resp: MSC3575SlidingSyncResponse): void {
+    if (this.pushDrainPollsLeft === 0) return;
+    const toDevice = resp.extensions?.to_device as { events?: unknown[] } | undefined;
+    if ((toDevice?.events?.length ?? 0) > 0) {
+      this.pushDrainSawEvents = true;
+      return;
+    }
+    this.pushDrainPollsLeft -= 1;
+    if (this.pushDrainSawEvents || this.pushDrainPollsLeft === 0) this.endPushDrain();
   }
 
   public isPaused(): boolean {
     return this.paused;
+  }
+
+  public isDrainingPush(): boolean {
+    return this.pushDrainPollsLeft > 0;
+  }
+
+  public onTransportStateChange(listener: () => void): () => void {
+    this.transportStateListeners.add(listener);
+    return () => {
+      this.transportStateListeners.delete(listener);
+    };
+  }
+
+  private notifyTransportState(): void {
+    this.transportStateListeners.forEach((listener) => listener());
   }
 
   /** Resolves on the next resume(), or immediately when not paused. */
@@ -981,6 +1143,13 @@ export class SlidingSyncManager {
 
     this.disposed = true;
     this.paused = false;
+    this.pushDrainPollsLeft = 0;
+    this.pushDrainSawEvents = false;
+    if (this.pushDrainTimer !== undefined) {
+      clearTimeout(this.pushDrainTimer);
+      this.pushDrainTimer = undefined;
+    }
+    this.transportStateListeners.clear();
     this.releaseResumeWaiters();
     globalThis.clearTimeout(this.pollWatchdogTimer);
     this.pollWatchdogTimer = undefined;
@@ -1710,8 +1879,6 @@ export class SlidingSyncManager {
         this.slidingSync.useCustomSubscription(roomId, CALL_ROOM_SUBSCRIPTION_KEY);
       } else if (this.activeRoomSubscriptions.has(roomId)) {
         this.slidingSync.useCustomSubscription(roomId, ACTIVE_ROOM_SUBSCRIPTION_KEY);
-      } else if (this.sidebarRoomSubscriptions.has(roomId)) {
-        this.slidingSync.useCustomSubscription(roomId, SIDEBAR_ROOM_SUBSCRIPTION_KEY);
       } else if (this.spaceSubscriptions.has(roomId)) {
         this.slidingSync.useCustomSubscription(
           roomId,
@@ -1719,6 +1886,10 @@ export class SlidingSyncManager {
             ? SPACE_IMAGE_PACK_SUBSCRIPTION_KEY
             : SPACE_SUBSCRIPTION_KEY
         );
+      } else if (this.sidebarRoomSubscriptions.has(roomId)) {
+        // Spaces need their child state even when their initial list data also
+        // placed them in the lightweight sidebar subscription.
+        this.slidingSync.useCustomSubscription(roomId, SIDEBAR_ROOM_SUBSCRIPTION_KEY);
       } else {
         this.slidingSync.useCustomSubscription(roomId, IMAGE_PACK_SUBSCRIPTION_KEY);
       }

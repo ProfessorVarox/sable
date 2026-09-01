@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tauri::http::{StatusCode, Uri};
 use tauri_plugin_http::reqwest::Url;
 
-use super::response::sniff_image_content_type;
+use super::response::sniff_media_content_type;
 
 // How the webview spells this protocol: `sable-media://` on iOS/macOS, and
 // `http(s)://sable-media.localhost/` on Windows/Android respectively.
@@ -128,7 +128,7 @@ impl EncryptionStore {
         let content_type = if params.content_type.is_empty()
             || params.content_type == "application/octet-stream"
         {
-            sniff_image_content_type(&plaintext)
+            sniff_media_content_type(&plaintext)
                 .map(str::to_owned)
                 .unwrap_or(params.content_type)
         } else {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import type { Update } from '@tauri-apps/plugin-updater';
-import { isDesktopTauri } from '$utils/platform';
+import { isDesktopTauri, isDesktopUpdaterEnabled } from '$utils/platform';
 import { autoUpdateCheckAtom } from '$state/autoUpdateCheck';
 import { createLogger } from '$utils/debug';
 import { getDebugLogger } from '$utils/debugLogger';
@@ -61,6 +61,7 @@ export function DesktopUpdater() {
   }, []);
 
   useEffect(() => {
+    if (!isDesktopUpdaterEnabled()) return undefined;
     if (!isDesktopTauri()) return undefined;
     if (triggerCount === 0 && !autoUpdateCheck && !fakeDesktopUpdate()) return undefined;
 
@@ -223,6 +224,7 @@ export function DesktopUpdater() {
   }, [setBannerVisible]);
 
   const bannerData = useMemo<GlobalBanner | null>(() => {
+    if (!isDesktopUpdaterEnabled()) return null;
     if (!bannerVisible || !updateInfo || dismissed) return null;
 
     if (isInstalled) {

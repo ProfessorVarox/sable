@@ -16,7 +16,6 @@ import {
   getImageInfo,
   getThumbnailContent,
   getVideoInfo,
-  mxcUrlToHttp,
   uploadContentToServer,
 } from '$utils/matrix';
 import { isImageMimeType, mimeTypeToExt } from '$utils/mimeTypes';
@@ -25,7 +24,7 @@ import type { GifData } from '$components/emoji-board/types';
 import { encodeBlurHashAsync } from '$utils/blurHash';
 import { scaleYDimension } from '$utils/common';
 import { createLogger } from '$utils/debug';
-import { fetchMediaBlob } from '$utils/mediaTransport';
+import { getProxiedGif, isAllowedGifMediaUrl } from '$utils/gifProviders';
 import {
   MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME,
   MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME,
@@ -270,63 +269,45 @@ export const getFileMsgContent = (item: TUploadItem, mxc: string): IContent => {
   return content;
 };
 
-export const getGifMsgContent = async (
-  mx: MatrixClient,
-  gif: GifData,
-  mxcUrl: string,
-  spoiler?: boolean
-): Promise<IContent | undefined> => {
-  if (!mxcUrl.startsWith('mxc://')) return undefined;
+const getGifBlurHash = async (gif: GifData): Promise<string | undefined> => {
+  const source =
+    gif.preview_url && isAllowedGifMediaUrl(gif.preview_url) ? gif.preview_url : gif.mediaUrl;
+  if (!isAllowedGifMediaUrl(source) || !gif.width || !gif.height) return undefined;
 
-  const proxyUrl = mxcUrlToHttp(mx, mxcUrl, true);
-  let imgEl: HTMLImageElement | undefined;
   try {
-    if (proxyUrl) {
-      const blob = await fetchMediaBlob(proxyUrl);
-      const objectUrl = URL.createObjectURL(blob);
-      imgEl = await loadImageElement(objectUrl);
-      URL.revokeObjectURL(objectUrl);
-    } else {
-      imgEl = await loadImageElement(gif.url, 'anonymous');
-    }
+    const imgEl = await loadImageElement(source, 'anonymous');
+    return await encodeBlurHashAsync(imgEl, 32, scaleYDimension(gif.width, 32, gif.height));
   } catch (e) {
-    log.warn('Failed to load image element for blurhash, falling back to basic metadata:', e);
+    log.warn('Failed to load GIF for blurhash:', e);
+    return undefined;
   }
+};
 
-  const mimetype = gif.mimetype ?? 'image/gif';
-  const ext = mimeTypeToExt(mimetype);
+export const getGifMsgContent = async (
+  gif: GifData,
+  options: { proxyUrl?: string; spoiler?: boolean }
+): Promise<IContent | undefined> => {
+  const proxied = gif.mediaUrl.startsWith('mxc://')
+    ? { mxcUrl: gif.mediaUrl, mimetype: gif.mimetype ?? 'image/gif' }
+    : getProxiedGif(gif, options.proxyUrl);
+  if (!proxied) return undefined;
 
-  const content: IContent = {
+  const ext = mimeTypeToExt(proxied.mimetype);
+  const blurHash = await getGifBlurHash(gif);
+
+  return {
     msgtype: MsgType.Image,
     body: gif.title.endsWith(`.${ext}`) ? gif.title : `${gif.title}.${ext}`,
-    url: mxcUrl,
+    url: proxied.mxcUrl,
     info: {
       w: gif.width,
       h: gif.height,
-      mimetype,
+      mimetype: proxied.mimetype,
+      ...(gif.size && proxied.mimetype === (gif.mimetype ?? 'image/gif') ? { size: gif.size } : {}),
+      ...(blurHash ? { [MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME]: blurHash } : {}),
     },
+    ...(options.spoiler ? { [MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME]: true } : {}),
   };
-
-  if (gif.size) {
-    content.info.size = gif.size;
-  }
-
-  if (spoiler) {
-    content[MATRIX_UNSTABLE_SPOILER_PROPERTY_NAME] = true;
-  }
-
-  if (imgEl) {
-    const blurHash = await encodeBlurHashAsync(
-      imgEl,
-      512,
-      scaleYDimension(imgEl.width, 512, imgEl.height)
-    );
-    if (blurHash) {
-      content.info[MATRIX_UNSTABLE_BLUR_HASH_PROPERTY_NAME] = blurHash;
-    }
-  }
-
-  return content;
 };
 
 const swapMsgTypeToItemType = (

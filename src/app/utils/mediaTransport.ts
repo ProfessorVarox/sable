@@ -1,6 +1,7 @@
 import { getCachedSWMediaAuthSupport } from './swMediaAuth';
 import { fetch } from '$utils/fetch';
 import { getFromMediaCache, putInMediaCache } from './mediaCache';
+import { getTauriMediaSourceUrl } from './mediaSourceUrl';
 
 type StoredSession = {
   baseUrl?: string;
@@ -204,6 +205,7 @@ function getRequestKey(
 
 type MatrixMediaInfo = {
   mxcUrl: string;
+  operation: 'download' | 'thumbnail';
   query: string;
 };
 
@@ -216,21 +218,42 @@ function getMatrixMediaInfo(url: string): MatrixMediaInfo | undefined {
   }
 
   const match = parsed.pathname.match(
-    /^\/_matrix\/(?:media\/[^/]+|client\/v1\/media)\/(?:download|thumbnail)\/([^/]+)\/([^/?#]+)/
+    /^\/_matrix\/(?:media\/[^/]+|client\/v1\/media)\/(download|thumbnail)\/([^/]+)\/([^/?#]+)/
   );
   if (!match) return undefined;
 
-  const [, serverName, mediaId] = match;
+  const [, operation, serverName, mediaId] = match;
   return {
     mxcUrl: `mxc://${serverName}/${mediaId}`,
+    operation: operation as MatrixMediaInfo['operation'],
     query: parsed.search,
   };
 }
 
+// Kept in step with MEDIA_RETRY_MARKER in mediaUrl.ts, which cannot be imported back.
+const MEDIA_RETRY_MARKER = '__sable_media_retry';
+
+// A marker in the key would file a successful retry under a key nothing looks up again.
+function stripMediaRetryMarker(url: string): string {
+  if (!url.includes(MEDIA_RETRY_MARKER)) return url;
+
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete(MEDIA_RETRY_MARKER);
+    if (parsed.hash.startsWith(`#${MEDIA_RETRY_MARKER}=`)) {
+      parsed.hash = '';
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function getStableMediaCacheKeyFragment(url: string): string {
-  const info = getMatrixMediaInfo(url);
-  if (info) return `${info.mxcUrl}${info.query}`;
-  return url;
+  const stableUrl = stripMediaRetryMarker(url);
+  const info = getMatrixMediaInfo(stableUrl);
+  if (info) return `${info.mxcUrl}:${info.operation}${info.query}`;
+  return stableUrl;
 }
 
 export { getStableMediaCacheKeyFragment };
@@ -369,9 +392,11 @@ async function fetchMediaBlobInternal(url: string, options?: MediaTransportOptio
 }
 
 export async function fetchMediaBlob(url: string, options?: MediaTransportOptions): Promise<Blob> {
+  // Keeps the webview-only `sable-media` form out of `fetch()`.
+  const target = getTauriMediaSourceUrl(url) ?? url;
   const cacheMode = options?.cache ?? 'default';
   const requestKey = getRequestKey(
-    getScopedMediaCacheKey(url, resolveSessionScope(options)),
+    getScopedMediaCacheKey(target, resolveSessionScope(options)),
     cacheMode,
     options?.forceDirectAuth === true
   );
@@ -379,7 +404,7 @@ export async function fetchMediaBlob(url: string, options?: MediaTransportOption
   const inflight = inflightRequests.get(requestKey);
   if (inflight) return inflight;
 
-  const request = fetchMediaBlobInternal(url, options).finally(() => {
+  const request = fetchMediaBlobInternal(target, options).finally(() => {
     inflightRequests.delete(requestKey);
   });
 

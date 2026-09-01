@@ -7,18 +7,13 @@ import type { MouseEventHandler, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useSetting } from '$state/hooks/settings';
 import { settingsAtom } from '$state/settings';
-import { ReactEditor, useSlate } from 'slate-react';
 import { stopPropagation } from '$utils/keyboard';
 import { floatingToolbar } from '$styles/overrides/Composer.css';
-import {
-  applyMarkdownBlockPrefix,
-  applyMarkdownInline,
-  BLOCK_PREFIXES,
-  INLINE_MARKERS,
-} from './keyboard';
+import { BLOCK_PREFIXES, INLINE_MARKERS } from './keyboard';
 import type { ShortcutId, ShortcutOverrides } from '../../keyboard/shortcuts';
 import { formatShortcut, getShortcutBinding } from '../../keyboard/shortcuts';
 import * as css from './Editor.css';
+import type { ProseMirrorEditorController } from './prosemirrorController';
 import {
   CaretDown,
   Code,
@@ -61,17 +56,16 @@ const shortcutLabel = (id: ShortcutId, overrides: ShortcutOverrides) =>
   formatShortcut(getShortcutBinding(id, overrides));
 
 type MarkdownInlineButtonProps = {
+  actions: MarkdownEditorActions;
   marker: string;
   icon: PhosphorIcon;
   tooltip: ReactNode;
 };
 
-function MarkdownInlineButton({ marker, icon, tooltip }: MarkdownInlineButtonProps) {
-  const editor = useSlate();
-
+function MarkdownInlineButton({ actions, marker, icon, tooltip }: MarkdownInlineButtonProps) {
   const handleClick = () => {
-    applyMarkdownInline(editor, marker);
-    ReactEditor.focus(editor);
+    actions.applyInline(marker);
+    actions.focus();
   };
 
   return (
@@ -92,17 +86,16 @@ function MarkdownInlineButton({ marker, icon, tooltip }: MarkdownInlineButtonPro
 }
 
 type MarkdownBlockButtonProps = {
+  actions: MarkdownEditorActions;
   prefix: string;
   icon: PhosphorIcon;
   tooltip: ReactNode;
 };
 
-function MarkdownBlockButton({ prefix, icon, tooltip }: MarkdownBlockButtonProps) {
-  const editor = useSlate();
-
+function MarkdownBlockButton({ actions, prefix, icon, tooltip }: MarkdownBlockButtonProps) {
   const handleClick = () => {
-    applyMarkdownBlockPrefix(editor, prefix);
-    ReactEditor.focus(editor);
+    actions.applyBlock(prefix);
+    actions.focus();
   };
 
   return (
@@ -122,15 +115,14 @@ function MarkdownBlockButton({ prefix, icon, tooltip }: MarkdownBlockButtonProps
   );
 }
 
-function MarkdownHeadingButton() {
-  const editor = useSlate();
+function MarkdownHeadingButton({ actions }: { actions: MarkdownEditorActions }) {
   const [anchor, setAnchor] = useState<RectCords>();
   const [shortcutOverrides] = useSetting(settingsAtom, 'shortcutOverrides');
 
   const handleMenuSelect = (prefix: string) => {
     setAnchor(undefined);
-    applyMarkdownBlockPrefix(editor, prefix);
-    ReactEditor.focus(editor);
+    actions.applyBlock(prefix);
+    actions.focus();
   };
 
   const handleMenuOpen: MouseEventHandler<HTMLButtonElement> = (evt) => {
@@ -237,7 +229,13 @@ function MarkdownHeadingButton() {
   );
 }
 
-function MarkdownToolbar() {
+type MarkdownEditorActions = {
+  applyBlock: (prefix: string) => void;
+  applyInline: (marker: string) => void;
+  focus: () => void;
+};
+
+function MarkdownToolbar({ actions }: { actions: MarkdownEditorActions }) {
   const [shortcutOverrides] = useSetting(settingsAtom, 'shortcutOverrides');
 
   return (
@@ -246,6 +244,7 @@ function MarkdownToolbar() {
         <Box className={css.EditorToolbar} alignItems="Center" gap="300">
           <Box shrink="No" gap="100">
             <MarkdownInlineButton
+              actions={actions}
               marker={INLINE_MARKERS['composer.bold']}
               icon={TextB}
               tooltip={
@@ -256,6 +255,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownInlineButton
+              actions={actions}
               marker={INLINE_MARKERS['composer.italic']}
               icon={TextItalic}
               tooltip={
@@ -266,6 +266,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownInlineButton
+              actions={actions}
               marker={INLINE_MARKERS['composer.underline']}
               icon={TextUnderline}
               tooltip={
@@ -276,6 +277,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownInlineButton
+              actions={actions}
               marker={INLINE_MARKERS['composer.strikethrough']}
               icon={TextStrikethrough}
               tooltip={
@@ -286,6 +288,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownInlineButton
+              actions={actions}
               marker={INLINE_MARKERS['composer.inlineCode']}
               icon={Code}
               tooltip={
@@ -296,6 +299,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownInlineButton
+              actions={actions}
               marker={INLINE_MARKERS['composer.spoiler']}
               icon={EyeSlash}
               tooltip={
@@ -309,6 +313,7 @@ function MarkdownToolbar() {
           <Line variant="SurfaceVariant" direction="Vertical" style={{ height: toRem(12) }} />
           <Box shrink="No" gap="100">
             <MarkdownBlockButton
+              actions={actions}
               prefix={BLOCK_PREFIXES['composer.blockquote']}
               icon={Quotes}
               tooltip={
@@ -319,6 +324,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownBlockButton
+              actions={actions}
               prefix={BLOCK_PREFIXES['composer.codeBlock']}
               icon={CodeBlock}
               tooltip={
@@ -329,6 +335,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownBlockButton
+              actions={actions}
               prefix={BLOCK_PREFIXES['composer.orderedList']}
               icon={ListNumbers}
               tooltip={
@@ -339,6 +346,7 @@ function MarkdownToolbar() {
               }
             />
             <MarkdownBlockButton
+              actions={actions}
               prefix={BLOCK_PREFIXES['composer.unorderedList']}
               icon={ListBullets}
               tooltip={
@@ -348,7 +356,7 @@ function MarkdownToolbar() {
                 />
               }
             />
-            <MarkdownHeadingButton />
+            <MarkdownHeadingButton actions={actions} />
           </Box>
         </Box>
       </Scroll>
@@ -390,7 +398,11 @@ export function MarkdownFormattingToolbarToggle({
   );
 }
 
-export function MarkdownFormattingToolbarBottom() {
+export function MarkdownFormattingToolbarBottom({
+  controller,
+}: {
+  controller: ProseMirrorEditorController;
+}) {
   const [editorToolbar] = useSetting(settingsAtom, 'editorToolbar');
   const [composerToolbarOpen] = useSetting(settingsAtom, 'composerToolbarOpen');
 
@@ -399,7 +411,13 @@ export function MarkdownFormattingToolbarBottom() {
   return (
     <div>
       <Line variant="SurfaceVariant" size="300" />
-      <MarkdownToolbar />
+      <MarkdownToolbar
+        actions={{
+          applyInline: (marker) => controller.applyMarkdownInline(marker),
+          applyBlock: (prefix) => controller.applyMarkdownBlockPrefix(prefix),
+          focus: () => controller.focus(),
+        }}
+      />
     </div>
   );
 }

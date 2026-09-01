@@ -111,6 +111,9 @@ type ProcessedEventDraft = Omit<
   | 'sendStatus'
 >;
 
+const getTimelineTimestamp = (mEvent: MatrixEvent): number =>
+  Number.isFinite(mEvent.localTimestamp) ? mEvent.localTimestamp : mEvent.getTs();
+
 type TimelineEventEntry = {
   mEvent: MatrixEvent;
   timelineSet: EventTimelineSet;
@@ -258,13 +261,17 @@ const mergeDraftsAndExtras = (
       eventSender: mEvent.getSender() ?? null,
     },
     parentId,
+    timelineTs: getTimelineTimestamp(mEvent),
   }));
+  const indexedExtraDrafts = extraDrafts.filter((extra) => extra.draft.itemIndex >= 0);
+  const fetchedExtraDrafts = extraDrafts
+    .filter((extra) => extra.draft.itemIndex < 0)
+    .toSorted((a, b) => a.timelineTs - b.timelineTs);
 
   const buckets: ProcessedEventDraft[][] = Array.from(
     { length: resultDrafts.length + 1 },
     () => []
   );
-  const indexById = new Map(resultDrafts.map((draft, index) => [draft.id, index]));
   let timelineOrderIndex: { itemIndex: number; bucket: number }[] | undefined;
 
   const bucketByTimelineOrder = (itemIndex: number): number => {
@@ -293,17 +300,31 @@ const mergeDraftsAndExtras = (
     return low === 0 ? 0 : timelineOrderIndex[low - 1]!.bucket;
   };
 
-  for (const extra of extraDrafts) {
-    const parentIdx = indexById.get(extra.parentId);
-    buckets[
-      parentIdx === undefined ? bucketByTimelineOrder(extra.draft.itemIndex) : parentIdx + 1
-    ]!.push(extra.draft);
+  for (const extra of indexedExtraDrafts) {
+    buckets[bucketByTimelineOrder(extra.draft.itemIndex)]!.push(extra.draft);
   }
 
   const mergedDrafts: ProcessedEventDraft[] = [...buckets[0]!];
   for (let i = 0; i < resultDrafts.length; i += 1) {
     mergedDrafts.push(resultDrafts[i]!);
     mergedDrafts.push(...buckets[i + 1]!);
+  }
+
+  for (const extra of fetchedExtraDrafts) {
+    const parentIdx = mergedDrafts.findIndex((draft) => draft.id === extra.parentId);
+    if (parentIdx < 0) {
+      mergedDrafts.push(extra.draft);
+      continue;
+    }
+
+    let insertionIdx = mergedDrafts.length;
+    for (let i = parentIdx + 1; i < mergedDrafts.length; i += 1) {
+      if (getTimelineTimestamp(mergedDrafts[i]!.mEvent) > extra.timelineTs) {
+        insertionIdx = i;
+        break;
+      }
+    }
+    mergedDrafts.splice(insertionIdx, 0, extra.draft);
   }
 
   return mergedDrafts;
@@ -426,6 +447,7 @@ const mergeRelationEdits = (
 type TimelineProcessingState = {
   prevEvent?: MatrixEvent;
   prevIteratedEventId?: string;
+  seenEventIds: Set<string>;
   isPrevRendered: boolean;
   newDivider: boolean;
   dayDivider: boolean;
@@ -438,6 +460,7 @@ type TimelineProcessingOptions = Omit<
   ResolvedHiddenEventSettings;
 
 const emptyProcessingState = (): TimelineProcessingState => ({
+  seenEventIds: new Set(),
   isPrevRendered: false,
   newDivider: false,
   dayDivider: false,
@@ -467,7 +490,7 @@ const processTimelineItems = (
     hideMemberInReadOnly,
     skipThreadFilter,
   } = options;
-  const state = { ...initialState };
+  const state = { ...initialState, seenEventIds: new Set(initialState.seenEventIds) };
   const result: ProcessedEvent[] = [];
 
   for (const item of items) {
@@ -477,6 +500,8 @@ const processTimelineItems = (
     const { threadRootId } = mEvent;
     const mEventId = mEvent.getId();
     if (!mEventId) continue;
+    if (state.seenEventIds.has(mEventId)) continue;
+    state.seenEventIds.add(mEventId);
 
     if (!state.newDivider && readUptoEventId) {
       state.newDivider = state.prevIteratedEventId === readUptoEventId;
@@ -651,7 +676,7 @@ export function useProcessedTimeline({
     hiddenEventReactionRedactionTimeline,
     hiddenEventOther,
   } = hiddenEvents;
-  const cacheRef = useRef<ProcessingCache>();
+  const cacheRef = useRef<ProcessingCache | undefined>(undefined);
 
   return useMemo(() => {
     const timelineEvents = flattenTimelineEvents(linkedTimelines);

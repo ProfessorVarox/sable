@@ -22,11 +22,12 @@ export const useKeyBackupStatus = (crypto: CryptoApi): boolean => {
   const [status, setStatus] = useState(false);
 
   useEffect(() => {
-    crypto.getActiveSessionBackupVersion().then((v) => {
-      if (alive()) {
-        setStatus(typeof v === 'string');
-      }
-    });
+    crypto
+      .getActiveSessionBackupVersion()
+      .then((v) => {
+        if (alive()) setStatus(typeof v === 'string');
+      })
+      .catch(() => undefined);
   }, [crypto, alive]);
 
   useKeyBackupStatusChange(setStatus);
@@ -74,10 +75,35 @@ export const useSessionBackupKeyUsable = (crypto: CryptoApi): boolean | undefine
     Promise.all([crypto.getSessionBackupPrivateKey(), crypto.getActiveSessionBackupVersion()])
       .then(([key, version]) => {
         // A later lookup already answered; this one is stale.
-        if (alive() && request === requestRef.current) setUsable(key !== null && version !== null);
+        if (alive() && request === requestRef.current) {
+          const nextUsable = key !== null && version !== null;
+          setUsable((current) => {
+            if (current === true && !nextUsable) {
+              Sentry.addBreadcrumb({
+                category: 'crypto',
+                message: 'Session backup key became unavailable',
+                level: 'warning',
+              });
+              Sentry.metrics.count('sable.crypto.session_backup_key_lost', 1);
+            }
+            return nextUsable;
+          });
+        }
       })
       .catch(() => {
-        if (alive() && request === requestRef.current) setUsable(undefined);
+        if (alive() && request === requestRef.current) {
+          setUsable((current) => {
+            if (current === true) {
+              Sentry.addBreadcrumb({
+                category: 'crypto',
+                message: 'Session backup key lookup failed',
+                level: 'warning',
+              });
+              Sentry.metrics.count('sable.crypto.session_backup_key_lookup_failed', 1);
+            }
+            return undefined;
+          });
+        }
       });
   }, [crypto, alive]);
 
@@ -128,11 +154,12 @@ export const useKeyBackupInfo = (crypto: CryptoApi): KeyBackupInfo | undefined |
   const [info, setInfo] = useState<KeyBackupInfo | null>();
 
   const fetchInfo = useCallback(() => {
-    crypto.getKeyBackupInfo().then((i) => {
-      if (alive()) {
-        setInfo(i);
-      }
-    });
+    crypto
+      .getKeyBackupInfo()
+      .then((i) => {
+        if (alive()) setInfo(i);
+      })
+      .catch(() => undefined);
   }, [crypto, alive]);
 
   useEffect(() => {
@@ -163,11 +190,12 @@ export const useKeyBackupTrust = (
   const [trust, setTrust] = useState<BackupTrustInfo>();
 
   const fetchTrust = useCallback(() => {
-    crypto.isKeyBackupTrusted(backupInfo).then((t) => {
-      if (alive()) {
-        setTrust(t);
-      }
-    });
+    crypto
+      .isKeyBackupTrusted(backupInfo)
+      .then((t) => {
+        if (alive()) setTrust(t);
+      })
+      .catch(() => undefined);
   }, [crypto, alive, backupInfo]);
 
   useEffect(() => {

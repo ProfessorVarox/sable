@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MatrixClient, MatrixEvent } from '$types/matrix-sdk';
-import { NotificationCountType } from '$types/matrix-sdk';
+import type { MatrixClient, MatrixEvent, Thread } from '$types/matrix-sdk';
+import { NotificationCountType, ReceiptType } from '$types/matrix-sdk';
 import { markAsRead } from './notifications';
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
@@ -14,7 +14,19 @@ const event = (id: string, sending = false): MatrixEvent =>
     isSending: () => sending,
   }) as unknown as MatrixEvent;
 
-const makeMx = (events: MatrixEvent[], readUpTo: string | null) => {
+type ThreadFixture = {
+  id: string;
+  replies: MatrixEvent[];
+  readUpTo?: string | null;
+  total?: number;
+  highlight?: number;
+};
+
+const makeMx = (
+  events: MatrixEvent[],
+  readUpTo: string | null,
+  threadFixtures: ThreadFixture[] = []
+) => {
   const setRoomReadMarkers = vi
     .fn<
       (
@@ -25,11 +37,34 @@ const makeMx = (events: MatrixEvent[], readUpTo: string | null) => {
       ) => Promise<void>
     >()
     .mockResolvedValue();
+  const sendReadReceipt = vi
+    .fn<(event: MatrixEvent, receiptType: ReceiptType) => Promise<void>>()
+    .mockResolvedValue();
   const setUnreadNotificationCount = vi.fn<(type: NotificationCountType, count: number) => void>();
+  const setThreadUnreadNotificationCount =
+    vi.fn<(threadId: string, type: NotificationCountType, count: number) => void>();
+
+  const threads = threadFixtures.map(
+    (fixture) =>
+      ({
+        id: fixture.id,
+        lastReply: (matches: (ev: MatrixEvent) => boolean) =>
+          fixture.replies.findLast(matches) ?? null,
+        getEventReadUpTo: () => fixture.readUpTo ?? null,
+      }) as unknown as Thread
+  );
+
   const room = {
+    roomId,
     getLiveTimeline: () => ({ getEvents: () => events }),
     getEventReadUpTo: () => readUpTo,
     setUnreadNotificationCount,
+    getThreads: () => threads,
+    getThreadUnreadNotificationCount: (threadId: string, type: NotificationCountType) => {
+      const fixture = threadFixtures.find((t) => t.id === threadId);
+      return (type === NotificationCountType.Highlight ? fixture?.highlight : fixture?.total) ?? 0;
+    },
+    setThreadUnreadNotificationCount,
   };
 
   return {
@@ -37,9 +72,12 @@ const makeMx = (events: MatrixEvent[], readUpTo: string | null) => {
       getRoom: (id: string) => (id === roomId ? room : null),
       getUserId: () => userId,
       setRoomReadMarkers,
+      sendReadReceipt,
     } as unknown as MatrixClient,
     setRoomReadMarkers,
+    sendReadReceipt,
     setUnreadNotificationCount,
+    setThreadUnreadNotificationCount,
   };
 };
 
@@ -99,5 +137,105 @@ describe('markAsRead', () => {
 
     expect(setRoomReadMarkers).not.toHaveBeenCalled();
     expect(setUnreadNotificationCount).not.toHaveBeenCalled();
+  });
+
+  it('leaves threads alone by default', async () => {
+    const { mx, sendReadReceipt, setThreadUnreadNotificationCount } = makeMx(
+      [event('$newest')],
+      null,
+      [{ id: '$root', replies: [event('$reply')], total: 1 }]
+    );
+
+    await markAsRead(mx, roomId, false);
+
+    expect(sendReadReceipt).not.toHaveBeenCalled();
+    expect(setThreadUnreadNotificationCount).not.toHaveBeenCalled();
+  });
+
+  it('clears unread threads when asked, even if the main timeline is already read', async () => {
+    const { mx, setRoomReadMarkers, sendReadReceipt, setThreadUnreadNotificationCount } = makeMx(
+      [event('$newest')],
+      '$newest',
+      [{ id: '$root', replies: [event('$reply')], total: 1 }]
+    );
+
+    await markAsRead(mx, roomId, false, true);
+
+    expect(setRoomReadMarkers).not.toHaveBeenCalled();
+    expect(sendReadReceipt).toHaveBeenCalledWith(expect.anything(), ReceiptType.Read);
+    expect(sendReadReceipt.mock.calls[0]?.[0].getId()).toBe('$reply');
+    expect(setThreadUnreadNotificationCount).toHaveBeenCalledWith(
+      '$root',
+      NotificationCountType.Total,
+      0
+    );
+    expect(setThreadUnreadNotificationCount).toHaveBeenCalledWith(
+      '$root',
+      NotificationCountType.Highlight,
+      0
+    );
+  });
+
+  it('skips threads that have no unread count', async () => {
+    const { mx, sendReadReceipt, setThreadUnreadNotificationCount } = makeMx(
+      [event('$newest')],
+      '$newest',
+      [{ id: '$root', replies: [event('$reply')], total: 0, highlight: 0 }]
+    );
+
+    await markAsRead(mx, roomId, false, true);
+
+    expect(sendReadReceipt).not.toHaveBeenCalled();
+    expect(setThreadUnreadNotificationCount).not.toHaveBeenCalled();
+  });
+
+  it('clears a thread already read up to its last reply without resending a receipt', async () => {
+    const { mx, sendReadReceipt, setThreadUnreadNotificationCount } = makeMx(
+      [event('$newest')],
+      '$newest',
+      [{ id: '$root', replies: [event('$reply')], readUpTo: '$reply', highlight: 1 }]
+    );
+
+    await markAsRead(mx, roomId, false, true);
+
+    expect(sendReadReceipt).not.toHaveBeenCalled();
+    expect(setThreadUnreadNotificationCount).toHaveBeenCalledWith(
+      '$root',
+      NotificationCountType.Total,
+      0
+    );
+  });
+
+  it('sends private thread receipts when reads are hidden', async () => {
+    const { mx, sendReadReceipt } = makeMx([event('$newest')], '$newest', [
+      { id: '$root', replies: [event('$reply')], total: 1 },
+    ]);
+
+    await markAsRead(mx, roomId, true, true);
+
+    expect(sendReadReceipt).toHaveBeenCalledWith(expect.anything(), ReceiptType.ReadPrivate);
+  });
+
+  it('ignores thread replies that are still sending', async () => {
+    const { mx, sendReadReceipt } = makeMx([event('$newest')], '$newest', [
+      { id: '$root', replies: [event('$reply'), event('$local', true)], total: 1 },
+    ]);
+
+    await markAsRead(mx, roomId, false, true);
+
+    expect(sendReadReceipt.mock.calls[0]?.[0].getId()).toBe('$reply');
+  });
+
+  it('keeps the thread count when the receipt is rejected', async () => {
+    const { mx, sendReadReceipt, setThreadUnreadNotificationCount } = makeMx(
+      [event('$newest')],
+      '$newest',
+      [{ id: '$root', replies: [event('$reply')], total: 1 }]
+    );
+    sendReadReceipt.mockRejectedValue(new Error('nope'));
+
+    await markAsRead(mx, roomId, false, true);
+
+    expect(setThreadUnreadNotificationCount).not.toHaveBeenCalled();
   });
 });

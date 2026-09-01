@@ -26,6 +26,7 @@ import {
   mxcUrlToHttp,
   rewriteAuthenticatedMediaUrl,
 } from '$utils/matrix';
+import { prepareLoopbackMedia } from '$utils/mediaUrl';
 import { setMediaEncryption } from '$utils/tauriMediaEncryption';
 import { useMediaAuthentication } from '$hooks/useMediaAuthentication';
 import { useCreateObjectURL } from '$hooks/useObjectURL';
@@ -66,12 +67,14 @@ export function AudioContent({
     useCallback(async () => {
       const mediaUrl = mxcUrlToHttp(mx, url, useAuthentication);
       if (!mediaUrl) throw new Error('Invalid media URL');
-      // Native media and service-worker-authenticated browser media can stream with Range requests.
-      if (!encInfo && (isTauri() || hasControllingServiceWorker())) return mediaUrl;
+      // mxcUrlToHttp already returned a `sable-media` URL under Tauri.
+      if (!encInfo && isTauri()) return prepareLoopbackMedia(mediaUrl);
+      // Service-worker-authenticated browser media can stream with Range requests.
+      if (!encInfo && hasControllingServiceWorker()) return mediaUrl;
       if (encInfo) {
         if (isTauri()) {
           await setMediaEncryption(mediaUrl, encInfo, mimeType);
-          return rewriteAuthenticatedMediaUrl(mediaUrl)!;
+          return prepareLoopbackMedia(rewriteAuthenticatedMediaUrl(mediaUrl)!);
         }
         return createObjectURL(
           downloadEncryptedMedia(mediaUrl, (encBuf) => decryptFile(encBuf, mimeType, encInfo))

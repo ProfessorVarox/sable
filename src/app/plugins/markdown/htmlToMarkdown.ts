@@ -67,7 +67,7 @@ function processNodes(nodes: ChildNode[]): string {
   for (let i = 0; i < filtered.length; i += 1) {
     const cur = filtered[i]!;
     const prev = filtered[i - 1];
-    // Adjacent <p> blocks must become \n\n in markdown so the editor gets separate Slate
+    // Adjacent <p> blocks must become \n\n in markdown so the editor gets separate paragraphs.
     // paragraphs and marked emits <p> per block again on send (single \n would collapse).
     if (i > 0 && prev && isTag(prev) && isTag(cur)) {
       const prevTag = prev.name.toLowerCase();

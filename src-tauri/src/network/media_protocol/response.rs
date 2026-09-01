@@ -185,16 +185,26 @@ pub(super) fn range_not_satisfiable(total: u64) -> Response<Vec<u8>> {
     response
 }
 
-/// Sniff the image MIME type from magic bytes of decrypted content.
-/// Restricted to an image allowlist and never returns SVG (which can carry scripts).
-/// Used as a fallback when the registered content type is missing or octet-stream.
-pub(super) fn sniff_image_content_type(bytes: &[u8]) -> Option<&'static str> {
-    const ALLOWED: [&str; 5] = [
+/// Sniff the MIME type from magic bytes when the registered one is missing or octet-stream.
+/// Allowlisted so it can never name a scriptable type such as SVG or HTML.
+pub(super) fn sniff_media_content_type(bytes: &[u8]) -> Option<&'static str> {
+    const ALLOWED: [&str; 16] = [
         "image/png",
         "image/jpeg",
         "image/gif",
         "image/webp",
         "image/avif",
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+        "video/x-m4v",
+        "audio/mpeg",
+        "audio/m4a",
+        "audio/ogg",
+        "audio/opus",
+        "audio/aac",
+        "audio/x-flac",
+        "audio/x-wav",
     ];
     infer::get(bytes)
         .filter(|kind| ALLOWED.contains(&kind.mime_type()))
@@ -219,7 +229,7 @@ pub(super) fn error_response(status: StatusCode) -> Response<Vec<u8>> {
 }
 
 /// The app's own webview origins, which vary by platform and scheme.
-fn is_webview_origin(origin: &str) -> bool {
+pub(super) fn is_webview_origin(origin: &str) -> bool {
     matches!(
         origin,
         "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
@@ -435,18 +445,34 @@ mod tests {
     #[test]
     fn sniff_detects_png() {
         let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert_eq!(sniff_image_content_type(&png_header), Some("image/png"));
+        assert_eq!(sniff_media_content_type(&png_header), Some("image/png"));
     }
 
     #[test]
     fn sniff_rejects_unknown() {
-        assert_eq!(sniff_image_content_type(&[0x00, 0x01, 0x02]), None);
+        assert_eq!(sniff_media_content_type(&[0x00, 0x01, 0x02]), None);
+    }
+
+    #[test]
+    fn sniff_detects_playable_video_and_audio() {
+        // infer scans the first 256 bytes for the EBML DocType, so a stub header is not enough.
+        let mut webm = [0_u8; 300];
+        webm[..4].copy_from_slice(&[0x1A, 0x45, 0xDF, 0xA3]);
+        webm[8..15].copy_from_slice(b"\x42\x82\x84webm");
+        assert_eq!(sniff_media_content_type(&webm), Some("video/webm"));
+
+        let mut mp4 = [0_u8; 12];
+        mp4[4..].copy_from_slice(b"ftypisom");
+        assert_eq!(sniff_media_content_type(&mp4), Some("video/mp4"));
+
+        let flac = b"fLaC\x00\x00\x00\x22";
+        assert_eq!(sniff_media_content_type(flac), Some("audio/x-flac"));
     }
 
     #[test]
     fn sniff_does_not_detect_svg() {
         let svg = b"<svg xmlns='http://www.w3.org/2000/svg'>";
-        assert_eq!(sniff_image_content_type(svg), None);
+        assert_eq!(sniff_media_content_type(svg), None);
     }
 
     #[test]

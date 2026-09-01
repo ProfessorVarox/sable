@@ -3,7 +3,7 @@ import type { RectCords } from 'folds';
 import { Avatar, Box, Chip, Text, Tooltip, as, config, toRem } from 'folds';
 import { TooltipProvider } from '$components/overlay-stack';
 import { PopOut } from '$components/overlay-stack';
-import type { KeyboardEventHandler, MouseEventHandler, MouseEvent, ReactNode } from 'react';
+import type { JSX, KeyboardEventHandler, MouseEventHandler, MouseEvent, ReactNode } from 'react';
 import {
   memo,
   useCallback,
@@ -33,6 +33,8 @@ import {
 import { canEditEvent, getEditedEvent } from '$utils/room/relations';
 import { getMemberAvatarMxc } from '$utils/room/display';
 import { getMxIdLocalPart, mxcUrlToHttp } from '$utils/matrix';
+import { parseExternalGif } from '$utils/externalGif';
+import { parseLegacyKlipyGif } from '$utils/klipy';
 import type { MessageSpacing } from '$state/settings';
 import { getSettings, MessageLayout, settingsAtom } from '$state/settings';
 import { useMatrixClient } from '$hooks/useMatrixClient';
@@ -59,7 +61,6 @@ import { MessageEditor } from './MessageEditor';
 import * as css from './styles.css';
 import { modalAtom, ModalType } from '$state/modal';
 import { OptionQuickMenu } from '$components/message/modals/Options';
-import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
 
 export type ReactionHandler = (keyOrMxc: string, shortcode: string) => void;
 
@@ -356,7 +357,7 @@ function MessageInternal(
   }: MessageProps & { className?: string; children?: ReactNode },
   ref:
     | ((instance: HTMLDivElement | null) => void)
-    | React.RefObject<HTMLDivElement>
+    | React.RefObject<HTMLDivElement | null>
     | null
     | undefined
 ) {
@@ -389,8 +390,12 @@ function MessageInternal(
 
   const isGif = useMemo(() => {
     const content = mEvent.getContent();
+    if (content.msgtype === MsgType.Text) return !!parseExternalGif(content);
     if (content.msgtype !== MsgType.Image) return false;
-    return checkIfGif(content?.info?.url ?? '', content?.info?.mimetype, content?.body);
+    return (
+      !!parseLegacyKlipyGif(content) ||
+      checkIfGif(content?.info?.url ?? '', content?.info?.mimetype, content?.body)
+    );
   }, [mEvent]);
 
   useEffect(() => {
@@ -499,8 +504,6 @@ function MessageInternal(
     return mxc ? mxcUrlToHttp(mx, mxc, useAuthentication, 48, 48, 'crop') : undefined;
   }, [pmp, memberAvatarMxc, profile.avatarUrl, mx, useAuthentication]);
 
-  const cachedAvatar = useRenderableMediaUrl(avatarUrl ?? undefined);
-
   // UI State
   const [isDesktopHover, setIsDesktopHover] = useState(false);
   const { hoverProps } = useHover({
@@ -532,6 +535,7 @@ function MessageInternal(
   const [parsePronouns] = useSetting(settingsAtom, 'parsePronouns');
 
   const [useRightBubbles] = useSetting(settingsAtom, 'useRightBubbles');
+  const [showAllTimestamps] = useSetting(settingsAtom, 'showAllTimestamps');
   const { cleanedDisplayName, inlinePronoun } = useMemo(() => {
     const rawName = pmp?.displayname || resolvedSenderDisplayName || '';
     return getParsedPronouns(rawName, parsePronouns);
@@ -574,6 +578,8 @@ function MessageInternal(
           <Box
             alignItems="Center"
             gap="100"
+            grow="Yes"
+            style={{ minWidth: 0 }}
             direction={
               messageLayout === MessageLayout.Bubble &&
               useRightBubbles &&
@@ -653,7 +659,32 @@ function MessageInternal(
           </Box>
         </Box>
       );
-    return <></>;
+    return showAllTimestamps ? (
+      <Box
+        gap="300"
+        direction={
+          messageLayout === MessageLayout.Compact ||
+          (messageLayout === MessageLayout.Bubble && useRightBubbles && senderId === mx.getUserId())
+            ? 'RowReverse'
+            : 'Row'
+        }
+        justifyContent="SpaceBetween"
+        alignItems="Baseline"
+        grow="Yes"
+      >
+        <Box grow="Yes" style={{ minWidth: 0 }} />
+        <Box shrink="No" gap="100">
+          <Time
+            ts={mEvent.getTs()}
+            compact={messageLayout === MessageLayout.Compact}
+            hour24Clock={hour24Clock}
+            dateFormatString={dateFormatString}
+          />
+        </Box>
+      </Box>
+    ) : (
+      <></>
+    );
   };
 
   const avatarJSX = (collapsed?: boolean) => {
@@ -672,7 +703,7 @@ function MessageInternal(
           >
             <UserAvatar
               userId={senderId}
-              src={cachedAvatar}
+              src={avatarUrl ?? undefined}
               alt={cleanedDisplayName}
               renderFallback={() => userFallbackIcon('md')}
             />
@@ -879,6 +910,7 @@ function MessageInternal(
         canPinEvent: canPinEvent,
         canDelete: canDelete,
         setIsEmoji: setIsEmoji,
+        imagePackRooms: imagePackRooms,
         ActualMessage: (
           <div style={{ width: '100%' }}>
             <WrappedMessage

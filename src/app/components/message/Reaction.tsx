@@ -8,6 +8,7 @@ import { getMemberDisplayName } from '$utils/room/display';
 import { eventWithShortcode, getMxIdLocalPart, mxcUrlToHttp } from '$utils/matrix';
 import { useAtomValue } from 'jotai';
 import { Image as MediaImage } from '$components/media';
+import { useRenderableMediaUrl } from '$hooks/useRenderableMediaUrl';
 import { nicknamesAtom } from '$state/nicknames';
 import * as css from './Reaction.css';
 
@@ -21,6 +22,10 @@ export const Reaction = as<
   }
 >(({ className, mx, count, reaction, useAuthentication, ...props }, ref) => {
   const [imgError, setImgError] = useState(false);
+  const rawReactionUrl = reaction.startsWith('mxc://')
+    ? (mxcUrlToHttp(mx, reaction, useAuthentication) ?? undefined)
+    : undefined;
+  const renderableReactionUrl = useRenderableMediaUrl(rawReactionUrl);
 
   return (
     <Box
@@ -47,7 +52,7 @@ export const Reaction = as<
             return (
               <MediaImage
                 className={css.ReactionImg}
-                src={mxcUrlToHttp(mx, reaction, useAuthentication) ?? undefined}
+                src={renderableReactionUrl}
                 alt={reaction}
                 onError={() => setImgError(true)}
               />
