@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, config, Dialog, Header, IconButton, Spinner, Text } from 'folds';
 import { composerIcon, X } from '$components/icons/phosphor';
 import * as Sentry from '@sentry/react';
+import { showErrorToast } from '$state/toast';
 import {
   useVerificationRequestPhase,
   useVerificationRequestReceived,
@@ -15,6 +16,8 @@ import { useRefreshDeviceVerificationStatus } from '$hooks/useDeviceVerification
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { ContainerColor } from '$styles/ContainerColor.css';
 import { ModalOverlay } from '$components/modal-overlay/ModalOverlay';
+import { useMatrixClient } from '$hooks/useMatrixClient';
+import type { CryptoBackend } from '$types/matrix-sdk';
 import { Button } from '$components/button';
 
 const DialogHeaderStyles: CSSProperties = {
@@ -59,12 +62,16 @@ type VerificationAcceptProps = {
   onAccept: () => Promise<void>;
 };
 function VerificationAccept({ onAccept }: VerificationAcceptProps) {
-  const [acceptState, accept] = useAsyncCallback(onAccept);
+  const [acceptState, accept] = useAsyncCallback<void, Error, []>(onAccept);
 
   const accepting = acceptState.status === AsyncStatus.Loading;
   return (
     <Box direction="Column" gap="400">
-      <Text>Click accept to start the verification process.</Text>
+      <Text>
+        {acceptState.status === AsyncStatus.Error
+          ? acceptState.error.message
+          : 'Click accept to start the verification process.'}
+      </Text>
       <Button
         variant="Primary"
         fill="Solid"
@@ -88,17 +95,30 @@ function VerificationWaitStart() {
   );
 }
 
+const PENDING_REQUEST_POLL_MS = 2000;
+
 type VerificationStartProps = {
   onStart: () => Promise<void>;
 };
 function AutoVerificationStart({ onStart }: VerificationStartProps) {
+  const [error, setError] = useState<Error>();
+
   useEffect(() => {
-    onStart().catch(() => undefined);
+    onStart().catch((reason: unknown) => {
+      const failure = reason instanceof Error ? reason : new Error(String(reason));
+      Sentry.captureException(failure, { tags: { flow: 'device-verification-start' } });
+      showErrorToast(failure.message);
+      setError(failure);
+    });
   }, [onStart]);
 
   return (
     <Box direction="Column" gap="400">
-      <WaitingMessage message="Starting verification using emoji comparison..." />
+      {error ? (
+        <Text size="T200">{error.message}</Text>
+      ) : (
+        <WaitingMessage message="Asking your other devices to start emoji comparison..." />
+      )}
     </Box>
   );
 }
@@ -256,6 +276,7 @@ export function DeviceVerification({ request, onExit }: DeviceVerificationProps)
       requestClose={handleCancel}
       dismissOnClickOutside={false}
       escapeDeactivates={false}
+      deactivateCloses={false}
     >
       <Dialog variant="Surface">
         <Header style={DialogHeaderStyles} variant="Surface" size="500">
@@ -297,9 +318,31 @@ export function DeviceVerification({ request, onExit }: DeviceVerificationProps)
 }
 
 export function ReceiveSelfDeviceVerification() {
+  const mx = useMatrixClient();
   const [request, setRequest] = useState<VerificationRequest>();
 
-  useVerificationRequestReceived(setRequest);
+  useVerificationRequestReceived(
+    useCallback((received: VerificationRequest) => {
+      if (!received.isSelfVerification || received.initiatedByMe || !received.pending) return;
+      setRequest(received);
+    }, [])
+  );
+
+  useEffect(() => {
+    if (request) return undefined;
+    const crypto = mx.getCrypto() as CryptoBackend | undefined;
+    if (!crypto?.getVerificationRequestsToDeviceInProgress) return undefined;
+
+    const adopt = () => {
+      const pending = crypto
+        .getVerificationRequestsToDeviceInProgress(mx.getSafeUserId())
+        .find((candidate) => candidate.isSelfVerification && !candidate.initiatedByMe);
+      if (pending) setRequest(pending);
+    };
+    adopt();
+    const timer = setInterval(adopt, PENDING_REQUEST_POLL_MS);
+    return () => clearInterval(timer);
+  }, [mx, request]);
 
   const handleExit = useCallback(() => {
     setRequest(undefined);

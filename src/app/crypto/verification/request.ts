@@ -44,6 +44,8 @@ export class EngineVerificationRequest
 
   #sasAccepted = false;
 
+  #sasWeStarted = false;
+
   constructor(call: EngineCall, state: EngineVerificationState) {
     super();
     this.#call = call;
@@ -75,8 +77,14 @@ export class EngineVerificationRequest
           : undefined;
 
     const accepted = (verification as SasState).hasBeenAccepted === true;
-    const lostTieBreak = wanted === 'Sas' && current === 'Sas' && this.#sasAccepted && !accepted;
+    const weStarted = (verification as SasState).weStarted === true;
+    const replaced =
+      wanted === 'Sas' &&
+      current === 'Sas' &&
+      ((this.#sasAccepted && !accepted) || (this.#sasWeStarted && !weStarted));
+    const lostTieBreak = replaced;
     this.#sasAccepted = wanted === 'Sas' ? accepted : false;
+    this.#sasWeStarted = wanted === 'Sas' ? weStarted : false;
 
     if (current !== wanted || lostTieBreak) {
       if (wanted === 'Sas') {
@@ -118,7 +126,15 @@ export class EngineVerificationRequest
       'verificationRequest.state',
       this.#flow
     )) as EngineVerificationState | null;
-    if (!next) return;
+    if (!next) {
+      if (this.#state.phase === EnginePhase.Done || this.#state.phase === EnginePhase.Cancelled) {
+        return;
+      }
+      this.#state = { ...this.#state, phase: EnginePhase.Cancelled, isCancelled: true };
+      this.#syncVerifier();
+      this.emit(VerificationRequestEvent.Change);
+      return;
+    }
 
     this.#state = next;
     this.#syncVerifier();
