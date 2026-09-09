@@ -206,6 +206,72 @@ describe('UnifiedPushNotifications', () => {
     expect(matrixClient.getRoom).not.toHaveBeenCalled();
   });
 
+  it('delivers wrapped gateway pushes with the account on the envelope', async () => {
+    await listenAndPush({
+      notification: {
+        type: 'm.room.message',
+        room_id: '!room:example.com',
+        event_id: '$wrapped',
+        content: { body: 'gateway message' },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(notificationsApi.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.stringContaining('gateway message') })
+      )
+    );
+  });
+
+  it('delivers ntfy Matrix gateway pushes whose account is in device default_payload', async () => {
+    await listenForUnifiedPushMessages(() => makeSettings() as never);
+    pushHandler({
+      message: JSON.stringify({
+        notification: {
+          room_id: '!room:example.com',
+          event_id: '$ntfy',
+          type: 'm.room.message',
+          content: { body: 'ntfy message' },
+          devices: [
+            {
+              pushkey: 'https://ntfy.sh/up123?up=1',
+              data: {
+                default_payload: { user_id: '@user:example.com' },
+              },
+            },
+          ],
+        },
+      }),
+    });
+    await vi.waitFor(() =>
+      expect(notificationsApi.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.stringContaining('ntfy message') })
+      )
+    );
+  });
+
+  it.each(['m.room.encrypted', 'm.room.message'])(
+    'uses the cached room name when a %s push omits it',
+    async (type) => {
+      matrixClient.getRoom.mockReturnValue(makeRoom());
+      await listenAndPush(
+        {
+          ...encryptedPush('$room-title'),
+          type,
+          room_name: undefined,
+          sender_display_name: 'Alice',
+        },
+        makeSettings({ showEncryptedMessageContent: false })
+      );
+
+      await vi.waitFor(() =>
+        expect(notificationsApi.sendNotification).toHaveBeenCalledWith(
+          expect.objectContaining({ title: 'Room' })
+        )
+      );
+    }
+  );
+
   it('posts an encrypted baseline before a hanging local decryption completes', async () => {
     matrixClient.getRoom.mockReturnValue(makeRoom());
     let resolveDecryption!: (content: Record<string, unknown>) => void;
@@ -238,7 +304,7 @@ describe('UnifiedPushNotifications', () => {
     await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledTimes(2));
   });
 
-  it('posts message notifications as a conversation on the high-importance channel', async () => {
+  it('keeps the room header for a named two-member conversation', async () => {
     matrixClient.getRoom.mockReturnValue(makeRoom());
 
     await listenAndPush({
@@ -254,9 +320,66 @@ describe('UnifiedPushNotifications', () => {
     await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
     expect(notificationsApi.sendNotification.mock.calls[0]?.[0]).toMatchObject({
       channelId: 'messages.v2',
-      groupConversation: false,
+      groupConversation: true,
       messages: [{ body: 'hello', senderName: 'Alice', senderKey: '@alice:example.com' }],
     });
+  });
+
+  it('keeps the sender identity when a rich push omits its display name', async () => {
+    matrixClient.getRoom.mockReturnValue(makeRoom());
+    await listenAndPush(
+      {
+        ...encryptedPush('$sender'),
+        sender: '@alice:example.com',
+      },
+      makeSettings({ showEncryptedMessageContent: false })
+    );
+
+    await vi.waitFor(() =>
+      expect(notificationsApi.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Room',
+          body: 'alice: Encrypted message',
+          extra: {
+            user_id: '@user:example.com',
+            room_id: '!room:example.com',
+            event_id: '$sender',
+          },
+          messages: [
+            expect.objectContaining({ senderName: 'alice', senderKey: '@alice:example.com' }),
+          ],
+        })
+      )
+    );
+  });
+
+  it('keeps room and sender data from an event-ID payload', async () => {
+    await listenAndPush(
+      {
+        room_id: '!minimal:example.com',
+        event_id: '$minimal',
+        room_name: 'Project',
+        sender_display_name: 'Alice',
+        sender: '@alice:example.com',
+      },
+      makeSettings({ showMessageContent: false })
+    );
+
+    await vi.waitFor(() =>
+      expect(notificationsApi.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Project',
+          messages: [
+            expect.objectContaining({ senderName: 'Alice', senderKey: '@alice:example.com' }),
+          ],
+          extra: {
+            user_id: '@user:example.com',
+            room_id: '!minimal:example.com',
+            event_id: '$minimal',
+          },
+        })
+      )
+    );
   });
 
   it('posts invitations on their own channel', async () => {
@@ -312,6 +435,41 @@ describe('UnifiedPushNotifications', () => {
       silent: true,
       id: (baseline as Record<string, unknown>).id,
     });
+  });
+
+  it('retries an immediate missing-room-key failure until the key arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      matrixClient.getRoom.mockReturnValue(makeRoom());
+      let attempts = 0;
+      matrixClient.getCrypto.mockReturnValue({
+        decryptEvent: vi
+          .fn<() => Promise<Record<string, unknown>>>()
+          .mockImplementation(async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error('MissingRoomKey');
+            return {
+              clearEvent: {
+                type: 'm.room.message',
+                content: { body: 'retried message' },
+              },
+            };
+          }),
+      });
+
+      await listenAndPush(encryptedPush('$missing-key-retry:example.com'));
+      await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledOnce());
+      expect(attempts).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(notificationsApi.sendNotification).toHaveBeenCalledTimes(2));
+      expect(notificationsApi.sendNotification.mock.calls[1]?.[0]).toMatchObject({
+        body: 'You: retried message',
+        silent: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('deduplicates rich encrypted pushes before decryption', async () => {
@@ -765,6 +923,27 @@ describe('UnifiedPushNotifications', () => {
     vi.unstubAllGlobals();
   });
 
+  it('finishes registration even when gateway discovery never answers', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {}))
+    );
+    try {
+      let result: unknown;
+      void tryEnableUnifiedPush(matrixClient as never).then((value) => {
+        result = value;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(result).toMatchObject({
+        status: 'registered',
+        gatewayUrl: 'https://matrix.gateway.unifiedpush.org/_matrix/push/v1/notify',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the gateway webpush pusher when the homeserver does not support MSC4174', async () => {
     unifiedPushTransport.registerUnifiedPushTransport.mockResolvedValue({
       status: 'registered',
@@ -828,7 +1007,7 @@ describe('UnifiedPushNotifications', () => {
     await vi.waitFor(() => expect(acknowledgeWebPushPusher).toHaveBeenCalledOnce());
   });
 
-  it('clears the UnifiedPush registration timeout after successful registration', async () => {
+  it('clears the gateway discovery timeout after successful registration', async () => {
     vi.useFakeTimers();
 
     try {
@@ -837,6 +1016,42 @@ describe('UnifiedPushNotifications', () => {
       });
 
       expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for the plugin registration deadline instead of racing it', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveRegistration!: (result: {
+        status: 'registered';
+        permissionState: 'granted';
+        endpoint: string;
+        distributor: string;
+      }) => void;
+      unifiedPushTransport.registerUnifiedPushTransport.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRegistration = resolve;
+        })
+      );
+
+      let result: unknown;
+      const registration = tryEnableUnifiedPush(matrixClient as never).then((value) => {
+        result = value;
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(result).toBeUndefined();
+
+      resolveRegistration({
+        status: 'registered',
+        permissionState: 'granted',
+        endpoint: 'https://up.example/device',
+        distributor: 'org.unifiedpush.distributor.ntfy',
+      });
+      await registration;
+      expect(result).toMatchObject({ status: 'registered' });
     } finally {
       vi.useRealTimers();
     }

@@ -45,7 +45,7 @@ import {
   type EngineVerificationState,
 } from '../verification/state';
 import { engineInvoke, type EngineIdentity } from '../olmMachine/engineInvoke';
-import { sendOutgoingRequest, type OutgoingRequest } from './outgoing';
+import { RequestType, sendOutgoingRequest, type OutgoingRequest } from './outgoing';
 import { createCoalescedRunner } from './coalescedRunner';
 import type {
   BackupDecryptor,
@@ -358,7 +358,11 @@ export class EngineCrypto
 
   #claimChain: Promise<unknown> = Promise.resolve();
 
+  #keyQueryChain: Promise<unknown> = Promise.resolve();
+
   readonly #encryptionChains = new Map<string, Promise<unknown>>();
+
+  readonly #roomKeyInvalidations = new Map<string, Promise<unknown>>();
 
   readonly #backupUpload = createCoalescedRunner(
     () =>
@@ -373,8 +377,6 @@ export class EngineCrypto
   #serverBackupInfo: KeyBackupInfo | null | undefined;
 
   #deviceCreationTimeMs: number | null | undefined;
-
-  #hasBackupDecryptionKey: boolean | undefined;
 
   readonly #eventsPendingKey = new Map<string, Set<MatrixEvent>>();
 
@@ -721,7 +723,9 @@ export class EngineCrypto
       event.getStateKey() !== this.#identity.userId &&
       event.getContent().membership !== KnownMembership.Join
     ) {
-      void this.forceDiscardSession(event.getRoomId() ?? '');
+      void this.forceDiscardSession(event.getRoomId() ?? '').catch((error: unknown) =>
+        engineCryptoLog.warn('general', 'Could not invalidate room session', error)
+      );
     }
   }
 
@@ -756,13 +760,20 @@ export class EngineCrypto
 
   async #sendTracked(request: unknown): Promise<void> {
     if (!isOutgoingRequest(request)) return;
-    const response = await sendOutgoingRequest(this.#mx, request);
-    if (typeof request.id !== 'string') return;
-    await this.#call('markRequestAsSent', {
-      requestId: request.id,
-      requestType: request.type,
-      response,
-    });
+    const send = async () => {
+      const response = await sendOutgoingRequest(this.#mx, request);
+      if (typeof request.id !== 'string') return;
+      await this.#call('markRequestAsSent', {
+        requestId: request.id,
+        requestType: request.type,
+        response,
+      });
+    };
+    if (request.type !== RequestType.KeysQuery) return send();
+
+    const next = this.#keyQueryChain.catch(() => undefined).then(send);
+    this.#keyQueryChain = next;
+    await next;
   }
 
   async onIncomingKeyVerificationRequest(sender: string, transactionId: string): Promise<boolean> {
@@ -834,13 +845,7 @@ export class EngineCrypto
         // Sequential: the engine's queue is ordered and later requests can depend on
         // earlier ones having landed.
         // eslint-disable-next-line no-await-in-loop
-        const response = await sendOutgoingRequest(this.#mx, request);
-        // eslint-disable-next-line no-await-in-loop
-        await this.#call('markRequestAsSent', {
-          requestId: request.id,
-          requestType: request.type,
-          response,
-        });
+        await this.#sendTracked(request);
         sent += 1;
       } catch (error) {
         // Loud: a request the engine never marks sent is retried on every sync forever.
@@ -1024,6 +1029,7 @@ export class EngineCrypto
     this.#eventsPendingKey.clear();
     this.#roomsWithTrackedMembers.clear();
     this.#encryptionChains.clear();
+    this.#roomKeyInvalidations.clear();
     this.#claimChain = Promise.resolve();
     this.#backupDownloader.stop();
   }
@@ -1091,18 +1097,17 @@ export class EngineCrypto
     return this.#serializeForRoom(room.roomId, () => this.#encryptEventInner(event, room));
   }
 
-  async #encryptEventInner(event: MatrixEvent, room: Room): Promise<void> {
-    // The megolm session has to reach every device in the room before the event does.
+  async #prepareRoomForEncryption(room: Room): Promise<void> {
     const members = await room.getEncryptionTargetMembers();
     const users = members.map((member) => member.userId);
 
-    if (this.#roomsWithTrackedMembers.has(room.roomId)) {
-      void this.#flushOutgoingRequests();
-    } else {
+    if (!this.#roomsWithTrackedMembers.has(room.roomId)) {
       await this.#trackUsers(users);
-      await this.#flushOutgoingRequests();
+      await this.#sendTracked(await this.#call('queryKeysForUsers', { users }));
       this.#roomsWithTrackedMembers.add(room.roomId);
     }
+
+    void this.#flushOutgoingRequests();
 
     await this.#ensureSessionsForUsers(users);
 
@@ -1115,20 +1120,33 @@ export class EngineCrypto
       // eslint-disable-next-line no-await-in-loop
       await this.#sendTracked(request);
     }
+  }
 
-    const encrypted = (await this.#call('encryptRoomEvent', {
-      roomId: room.roomId,
-      eventType: event.getType(),
-      content: JSON.stringify(event.getContent()),
-    })) as string;
+  async #encryptEventInner(event: MatrixEvent, room: Room): Promise<void> {
+    while (true) {
+      const invalidation = this.#roomKeyInvalidations.get(room.roomId);
+      if (invalidation) await invalidation;
 
-    const own = await this.getOwnDeviceKeys();
-    event.makeEncrypted(
-      'm.room.encrypted',
-      JSON.parse(encrypted) as Record<string, unknown>,
-      own.curve25519,
-      own.ed25519
-    );
+      await this.#prepareRoomForEncryption(room);
+      if (this.#roomKeyInvalidations.get(room.roomId) !== invalidation) continue;
+
+      const encrypted = (await this.#call('encryptRoomEvent', {
+        roomId: room.roomId,
+        eventType: event.getType(),
+        content: JSON.stringify(event.getContent()),
+      })) as string;
+
+      const own = await this.getOwnDeviceKeys();
+      if (this.#roomKeyInvalidations.get(room.roomId) !== invalidation) continue;
+
+      event.makeEncrypted(
+        'm.room.encrypted',
+        JSON.parse(encrypted) as Record<string, unknown>,
+        own.curve25519,
+        own.ed25519
+      );
+      return;
+    }
   }
 
   async decryptEvent(event: MatrixEvent): Promise<EventDecryptionResult> {
@@ -1243,11 +1261,13 @@ export class EngineCrypto
     return this.#deviceCreationTimeMs;
   }
 
-  async #hasSessionBackupKey(): Promise<boolean> {
-    if (this.#hasBackupDecryptionKey === undefined) {
-      this.#hasBackupDecryptionKey = (await this.getSessionBackupPrivateKey()) !== null;
-    }
-    return this.#hasBackupDecryptionKey;
+  async #hasSessionBackupKey(backupInfo: KeyBackupInfo): Promise<boolean> {
+    const keys = (await this.#call('getBackupKeys')) as EngineBackupKeys | null;
+    return (
+      !!keys?.decryptionKeyBase64 &&
+      keys.backupVersion === backupInfo.version &&
+      EngineCrypto.#keyMatchesBackup(keys.decryptionKeyBase64, backupInfo)
+    );
   }
 
   async #throwIfHistorical(event: MatrixEvent, details: Record<string, string>): Promise<void> {
@@ -1263,7 +1283,7 @@ export class EngineCrypto
       );
     }
 
-    const usable = await this.#hasSessionBackupKey();
+    const usable = await this.#hasSessionBackupKey(backupInfo);
     throw new DecryptionError(
       usable
         ? DecryptionFailureCode.HISTORICAL_MESSAGE_WORKING_BACKUP
@@ -1493,16 +1513,18 @@ export class EngineCrypto
 
   prepareToEncrypt(room: Room): void {
     void this.#serializeForRoom(room.roomId, async () => {
-      const members = await room.getEncryptionTargetMembers();
-      const users = members.map((member) => member.userId);
-      await this.#trackUsers(users);
-      await this.#ensureSessionsForUsers(users);
-      await this.#flushOutgoingRequests();
+      const invalidation = this.#roomKeyInvalidations.get(room.roomId);
+      if (invalidation) await invalidation;
+      await this.#prepareRoomForEncryption(room);
     }).catch((error: unknown) => engineCryptoLog.warn('general', 'prepareToEncrypt failed', error));
   }
 
   async forceDiscardSession(roomId: string): Promise<void> {
-    await this.#call('invalidateGroupSession', { roomId });
+    const invalidation = (this.#roomKeyInvalidations.get(roomId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.#call('invalidateGroupSession', { roomId }));
+    this.#roomKeyInvalidations.set(roomId, invalidation);
+    await invalidation;
   }
 
   async getEncryptionInfoForEvent(event: MatrixEvent): Promise<EventEncryptionInfo | null> {
@@ -2082,7 +2104,6 @@ export class EngineCrypto
 
   async storeSessionBackupPrivateKey(key: Uint8Array, version: string): Promise<void> {
     await this.#call('saveBackupDecryptionKey', { decryptionKey: encodeBase64(key), version });
-    this.#hasBackupDecryptionKey = true;
     this.emit(CryptoEvent.KeyBackupDecryptionKeyCached, version);
   }
 
@@ -2272,7 +2293,6 @@ export class EngineCrypto
 
   async #disableKeyBackup(): Promise<void> {
     await this.#call('disableBackup');
-    this.#hasBackupDecryptionKey = undefined;
     this.emit(CryptoEvent.KeyBackupStatus, false);
   }
 

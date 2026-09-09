@@ -2,12 +2,11 @@ import type { RectCords } from 'folds';
 import { Box, Button, config, Dialog, IconButton, Menu, MenuItem, Spinner, Text } from 'folds';
 import { PopOut } from '$components/overlay-stack';
 import type { MatrixClient } from '$types/matrix-sdk';
-import { HttpApiEvent } from '$types/matrix-sdk';
 import FocusTrap from 'focus-trap-react';
 import type { MouseEventHandler, ReactNode } from 'react';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import * as Sentry from '@sentry/react';
-import { matchPath, useLocation, useNavigate } from 'react-router';
+import { Link, matchPath, useLocation, useNavigate } from 'react-router';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   clearCacheAndReload,
@@ -29,13 +28,12 @@ import { MatrixClientProvider } from '$hooks/useMatrixClient';
 import { AsyncStatus, useAsyncCallback } from '$hooks/useAsyncCallback';
 import { useSyncState } from '$hooks/useSyncState';
 import { useCrossSigningResetDetect } from '$hooks/useCrossSigningResetDetect';
-import { useMatrixEvent } from '$hooks/useMatrixEvent';
+import { useSessionLogout } from '$hooks/useSessionLogout';
 import { stopPropagation } from '$utils/keyboard';
 import { AuthMetadataProvider, getSessionAuthMetadata } from '$hooks/useAuthMetadata';
 import {
   sessionsAtom,
   activeSessionIdAtom,
-  getSessionStoreName,
   type Session,
   type SessionsAction,
 } from '$state/sessions';
@@ -47,7 +45,7 @@ import { useLoopbackMediaRecovery } from '$hooks/useLoopbackMediaRecovery';
 import { useSyncOrchestrator } from '$hooks/useSyncOrchestrator';
 import { usePushDiagnosticsReport } from '$hooks/usePushDiagnosticsReport';
 import { composerIcon, DotsThreeOutlineVerticalIcon } from '$components/icons/phosphor';
-import { getHomePath } from '$pages/pathUtils';
+import { getHomePath, getLoginPath, withSearchParam } from '$pages/pathUtils';
 import { DIRECT_ROOM_PATH, HOME_ROOM_PATH, SPACE_ROOM_PATH } from '$pages/paths';
 import { getCanonicalAliasRoomId, isRoomAlias, isRoomId } from '$utils/matrix';
 import { pushPersistedSessionToSW, pushSessionToSW } from '../../../sw-session';
@@ -225,25 +223,6 @@ function ClientRootOptions({ mx, onLogout }: ClientRootOptionsProps) {
   );
 }
 
-const useLogoutListener = (mx?: MatrixClient, session?: Session) => {
-  const handleLogout = useCallback(async () => {
-    Sentry.addBreadcrumb({
-      category: 'auth',
-      message: 'Session forcibly logged out by server',
-      level: 'warning',
-    });
-    Sentry.metrics.count('sable.auth.forced_logout', 1);
-    if (mx) stopClient(mx);
-    await mx?.clearStores(
-      session ? { cryptoDatabasePrefix: getSessionStoreName(session).rustCryptoPrefix } : undefined
-    );
-    window.localStorage.clear();
-    window.location.reload();
-  }, [mx, session]);
-
-  useMatrixEvent(mx, HttpApiEvent.SessionLoggedOut, handleLogout);
-};
-
 type ClientRootProps = {
   children: ReactNode;
 };
@@ -289,7 +268,9 @@ export function ClientRoot({ children }: ClientRootProps) {
     }, [activeSession, activeSessionId, setActiveSessionId])
   );
 
-  const mx = loadState.status === AsyncStatus.Success ? loadState.data : undefined;
+  const loadedClient = loadState.status === AsyncStatus.Success ? loadState.data : undefined;
+  const sessionExpired = useSessionLogout(loadedClient);
+  const mx = sessionExpired ? undefined : loadedClient;
 
   const legacyCryptoError =
     loadState.status === AsyncStatus.Error && isLegacyWasmCryptoStoreError(loadState.error)
@@ -371,23 +352,12 @@ export function ClientRoot({ children }: ClientRootProps) {
   );
 
   useSyncNicknames(mx);
-  useLogoutListener(mx, activeSession);
   useAppVisibility(mx);
   useNetworkRecovery(mx);
   useSyncOrchestrator(startState.status === AsyncStatus.Success ? mx : undefined);
   usePushDiagnosticsReport();
   useLoopbackMediaRecovery();
   useCrossSigningResetDetect(mx);
-
-  useEffect(
-    () => () => {
-      if (mx) {
-        log.log('ClientRoot unmounting — stopping client', mx.getUserId());
-        stopClient(mx);
-      }
-    },
-    [mx]
-  );
 
   useEffect(() => {
     if (loadState.status === AsyncStatus.Idle) {
@@ -487,6 +457,37 @@ export function ClientRoot({ children }: ClientRootProps) {
       Sentry.captureException(startState.error, { tags: { phase: 'start' } });
     }
   }, [startState]);
+
+  if (sessionExpired && activeSession) {
+    return (
+      <SplashScreen>
+        <Box direction="Column" grow="Yes" alignItems="Center" justifyContent="Center" gap="400">
+          <Text>Sign in again as {activeSession.userId}.</Text>
+          <Button
+            as={Link}
+            reloadDocument
+            to={withSearchParam(getLoginPath(activeSession.baseUrl), {
+              addAccount: '1',
+              username: activeSession.userId,
+            })}
+          >
+            <Text as="span" size="B400">
+              Sign in again
+            </Text>
+          </Button>
+          {sessions
+            .filter((session) => session.userId !== activeSession.userId)
+            .map((session) => (
+              <Button key={session.userId} onClick={() => setActiveSessionId(session.userId)}>
+                <Text as="span" size="B400">
+                  Switch to {session.userId}
+                </Text>
+              </Button>
+            ))}
+        </Box>
+      </SplashScreen>
+    );
+  }
 
   return (
     <AutoDiscovery userId={userId ?? ''} baseUrl={baseUrl ?? ''}>

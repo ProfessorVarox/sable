@@ -422,6 +422,53 @@ type ClientInitializationResult =
   | { ok: true; mx: MatrixClient }
   | { ok: false; error: unknown; phase: 'sync_store' | 'rust_crypto' };
 
+export const startupSyncStore = async (mx: MatrixClient, dbName: string): Promise<void> => {
+  try {
+    await mx.store.startup();
+    return;
+  } catch (error) {
+    await mx.store.destroy();
+    if (!(error instanceof Error) || error.message !== 'selectQuery failed for sync') throw error;
+    debugLog.warn('sync', 'Rebuilding unreadable sync snapshot', { error });
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const request = global.indexedDB.open(`matrix-js-sdk:${dbName}`);
+    request.addEventListener('error', () => reject(request.error));
+    request.addEventListener('upgradeneeded', () => request.transaction?.abort());
+    request.addEventListener('success', () => {
+      const db = request.result;
+      try {
+        const transaction = db.transaction('sync', 'readwrite');
+        transaction.addEventListener('complete', () => {
+          db.close();
+          resolve();
+        });
+        transaction.addEventListener('abort', () => {
+          db.close();
+          reject(transaction.error ?? new Error('Failed to clear sync snapshot'));
+        });
+        transaction.objectStore('sync').clear();
+      } catch (error) {
+        db.close();
+        reject(error);
+      }
+    });
+  });
+
+  mx.store = new IndexedDBStore({
+    indexedDB: global.indexedDB,
+    localStorage: global.localStorage,
+    dbName,
+  });
+  try {
+    await mx.store.startup();
+  } catch (error) {
+    await mx.store.destroy();
+    throw error;
+  }
+};
+
 const initializeClient = async (
   session: Session,
   cryptoDatabasePrefix: string
@@ -432,14 +479,16 @@ const initializeClient = async (
   } catch (error) {
     return { ok: false, error, phase: 'sync_store' };
   }
-  const { mx, indexedDBStore } = builtClient;
+  const { mx } = builtClient;
 
   void primeVersionsFromCache(mx, session.baseUrl, session.userId).then((primed) => {
     if (primed) void revalidateVersionsCache(mx, session.baseUrl, session.userId);
     else void cacheVersionsFromClient(mx, session.baseUrl, session.userId);
   });
 
-  const syncStorePromise = measureStartupPhase('sync_store', () => indexedDBStore.startup());
+  const syncStorePromise = measureStartupPhase('sync_store', () =>
+    startupSyncStore(mx, getSessionStoreName(session).sync)
+  );
   const cryptoPromise = measureStartupPhase('rust_crypto', async () => {
     let nativeEngine: boolean;
     try {

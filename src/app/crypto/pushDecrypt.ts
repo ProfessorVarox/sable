@@ -4,6 +4,7 @@ import type { IContent } from '$types/matrix-sdk';
 import { createDebugLogger } from '$utils/debugLogger';
 
 const pushDecryptLog = createDebugLogger('push-decrypt');
+const NATIVE_DECRYPT_TIMEOUT_MS = 2_000;
 
 export type DecryptedPushEvent = {
   eventType: string;
@@ -30,10 +31,11 @@ export const decryptPushEventNatively = async (
 ): Promise<DecryptedPushEvent | null> => {
   if (!userId || !deviceId) return null;
 
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     if (!isTauri()) return null;
 
-    const decrypted = await engineDecryptPush({
+    const nativeDecryption = engineDecryptPush({
       userId,
       deviceId,
       roomId: event.roomId,
@@ -47,6 +49,13 @@ export const decryptPushEventNatively = async (
       }),
       passphrase: null,
     });
+    const decrypted = await Promise.race([
+      nativeDecryption,
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), NATIVE_DECRYPT_TIMEOUT_MS);
+      }),
+    ]);
+    if (!decrypted) return null;
 
     // `engine_decrypt_push` reports snake_case, and hands the clear event over as JSON text.
     const clearEvent = JSON.parse(decrypted.clear_event) as { content?: IContent };
@@ -65,5 +74,7 @@ export const decryptPushEventNatively = async (
       { reason: error instanceof Error ? error.message : String(error) }
     );
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 };

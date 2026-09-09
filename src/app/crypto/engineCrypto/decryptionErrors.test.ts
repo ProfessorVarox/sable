@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as RustSdkCryptoJs from '@matrix-org/matrix-sdk-crypto-wasm';
 import { DecryptionFailureCode } from 'matrix-js-sdk/lib/crypto-api';
 import { KnownMembership } from '$types/matrix-sdk';
 import type { MatrixClient, MatrixEvent } from '$types/matrix-sdk';
@@ -11,25 +12,30 @@ vi.mock('../olmMachine/engineInvoke', () => ({
 
 const mockInvoke = vi.mocked(engineInvoke);
 
-const BACKUP_INFO = {
+let backupDecryptionKeyBase64: string;
+let publicKey: string;
+
+const backupInfo = () => ({
   version: '7',
   algorithm: 'm.megolm_backup.v1.curve25519-aes-sha2',
-  auth_data: { public_key: 'cHVibGlj' },
-};
+  auth_data: { public_key: publicKey },
+});
 
 type EngineState = {
   code: number;
   maybeWithheld?: string | null;
   deviceCreationTimeMs?: number;
   decryptionKeyBase64?: string | null;
+  backupVersion?: string | null;
 };
 
-const client = (backupInfo: unknown = BACKUP_INFO) =>
+const client = (serverBackupInfo: unknown = backupInfo()) =>
   ({
     http: {
       authedRequest: vi.fn<(...args: never[]) => Promise<unknown>>(async () => {
-        if (backupInfo === null) throw Object.assign(new Error('nope'), { errcode: 'M_NOT_FOUND' });
-        return backupInfo;
+        if (serverBackupInfo === null)
+          throw Object.assign(new Error('nope'), { errcode: 'M_NOT_FOUND' });
+        return serverBackupInfo;
       }),
     },
   }) as unknown as MatrixClient;
@@ -39,13 +45,14 @@ const engine = ({
   maybeWithheld = null,
   deviceCreationTimeMs = 0,
   decryptionKeyBase64 = null,
+  backupVersion = '7',
 }: EngineState) => {
   mockInvoke.mockImplementation(async (_identity, method) => {
     if (method === 'decryptRoomEvent') {
       return { className: 'DecryptionError', code, description: 'engine says no', maybeWithheld };
     }
     if (method === 'deviceCreationTimeMs') return deviceCreationTimeMs;
-    if (method === 'getBackupKeys') return { backupVersion: '7', decryptionKeyBase64 };
+    if (method === 'getBackupKeys') return { backupVersion, decryptionKeyBase64 };
     if (method === 'backupVersion') return null;
     return null;
   });
@@ -74,6 +81,14 @@ const codeOf = async (promise: Promise<unknown>) => {
 };
 
 describe('decryption failures', () => {
+  beforeEach(async () => {
+    await RustSdkCryptoJs.initAsync();
+    const key = RustSdkCryptoJs.BackupDecryptionKey.createRandomKey();
+    backupDecryptionKeyBase64 = key.toBase64();
+    publicKey = key.megolmV1PublicKey.publicKeyBase64;
+    key.free();
+  });
+
   beforeEach(() => mockInvoke.mockReset());
 
   it('reports a missing room key rather than a bare unknown error', async () => {
@@ -133,8 +148,52 @@ describe('decryption failures', () => {
     );
   });
 
+  it('does not promise history recovery for a key without a backup version', async () => {
+    engine({
+      code: 0,
+      deviceCreationTimeMs: 5000,
+      decryptionKeyBase64: 'AAAA',
+      backupVersion: null,
+    });
+
+    expect(await codeOf(decrypt(eventAt(100)))).toBe(
+      DecryptionFailureCode.HISTORICAL_MESSAGE_BACKUP_UNCONFIGURED
+    );
+  });
+
+  it('does not promise history recovery for a key from another backup version', async () => {
+    engine({
+      code: 0,
+      deviceCreationTimeMs: 5000,
+      decryptionKeyBase64: 'AAAA',
+      backupVersion: '6',
+    });
+
+    expect(await codeOf(decrypt(eventAt(100)))).toBe(
+      DecryptionFailureCode.HISTORICAL_MESSAGE_BACKUP_UNCONFIGURED
+    );
+  });
+
+  it('does not promise history recovery for a key that cannot open the backup', async () => {
+    const other = RustSdkCryptoJs.BackupDecryptionKey.createRandomKey();
+    const mx = client({
+      ...backupInfo(),
+      auth_data: { public_key: other.megolmV1PublicKey.publicKeyBase64 },
+    });
+    other.free();
+    engine({ code: 0, deviceCreationTimeMs: 5000, decryptionKeyBase64: backupDecryptionKeyBase64 });
+
+    expect(await codeOf(decrypt(eventAt(100), mx))).toBe(
+      DecryptionFailureCode.HISTORICAL_MESSAGE_BACKUP_UNCONFIGURED
+    );
+  });
+
   it('reports history a working backup should eventually supply', async () => {
-    engine({ code: 0, deviceCreationTimeMs: 5000, decryptionKeyBase64: 'AAAA' });
+    engine({
+      code: 0,
+      deviceCreationTimeMs: 5000,
+      decryptionKeyBase64: backupDecryptionKeyBase64,
+    });
 
     expect(await codeOf(decrypt(eventAt(100)))).toBe(
       DecryptionFailureCode.HISTORICAL_MESSAGE_WORKING_BACKUP

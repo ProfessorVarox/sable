@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type DecryptPushParams = {
   userId: string;
@@ -26,6 +26,7 @@ const event = {
 };
 
 describe('decryptPushEventNatively', () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     vi.clearAllMocks();
     isTauri.mockReturnValue(true);
@@ -81,6 +82,18 @@ describe('decryptPushEventNatively', () => {
     );
 
     await expect(decryptPushEventNatively('@me:example.org', 'DEVICE', event)).resolves.toBeNull();
+  });
+
+  it('lets SDK key recovery proceed when native decryption stalls', async () => {
+    vi.useFakeTimers();
+    engineDecryptPush.mockReturnValue(new Promise(() => {}));
+    let result: unknown = 'pending';
+    void decryptPushEventNatively('@me:example.org', 'DEVICE', event).then((value) => {
+      result = value;
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(result).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('returns null rather than throwing when isTauri itself throws', async () => {

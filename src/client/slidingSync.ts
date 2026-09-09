@@ -32,6 +32,7 @@ import { createDebugLogger } from '$utils/debugLogger';
 import { CustomStateEvent } from '$types/matrix/room';
 import * as Sentry from '@sentry/react';
 import { SlidingSyncSidebarCache } from './slidingSyncSidebarCache';
+import { forwardTimelineStickyEvents, StickyEventsExtension } from './stickyEvents';
 import { markPreprocessingSlidingSyncTimelineReset } from './slidingSyncTimelineReset';
 
 const log = createLogger('slidingSync');
@@ -612,6 +613,8 @@ export class SlidingSyncManager {
 
   private hydratingSidebarCache = false;
 
+  private detachStickyEvents: (() => void) | undefined;
+
   private readonly onCacheRoomData: (roomId: string, data: MSC3575RoomData) => void;
 
   private readonly onCacheAccountData: (event: MatrixEvent) => void;
@@ -772,6 +775,8 @@ export class SlidingSyncManager {
       SPACE_IMAGE_PACK_SUBSCRIPTION_KEY,
       buildSpaceImagePackSubscription()
     );
+
+    this.slidingSync.registerExtension(new StickyEventsExtension(mx));
 
     this.onLifecycle = (state, resp, err) => {
       debugLog.info('sync', `Sliding sync lifecycle: ${state}`, {
@@ -994,6 +999,7 @@ export class SlidingSyncManager {
     this.slidingSync.on(SlidingSyncEvent.RoomData, this.onCacheRoomData);
     this.mx.on(RoomMemberEvent.Membership, this.onMembershipLeave);
     this.mx.on(ClientEvent.AccountData, this.onCacheAccountData);
+    this.detachStickyEvents = forwardTimelineStickyEvents(this.mx);
 
     this.armPollWatchdog();
 
@@ -1167,6 +1173,8 @@ export class SlidingSyncManager {
     this.cacheHydrationResolve = undefined;
     this.mx.removeListener(RoomMemberEvent.Membership, this.onMembershipLeave);
     this.mx.removeListener(ClientEvent.AccountData, this.onCacheAccountData);
+    this.detachStickyEvents?.();
+    this.detachStickyEvents = undefined;
     this.sidebarCache.dispose();
 
     debugLog.info('sync', 'Sliding sync disposed successfully', {
